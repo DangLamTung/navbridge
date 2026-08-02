@@ -22,6 +22,8 @@ import 'ble_clock.dart';
 import 'device_picker.dart';
 import 'nav_engine.dart';
 import 'nav_protocol.dart';
+import 'offline_screen.dart';
+import 'offline_tiles.dart';
 import 'osm_api.dart';
 import 'osrm.dart';
 import 'overpass.dart';
@@ -80,6 +82,11 @@ class _NavigationPageState extends State<NavigationPage> {
   // --- trip logging (Google Takeout) ---
   TripLogger? _trip;
 
+  // --- offline mode ---
+  final OfflineTileProvider _tileProvider = OfflineTileProvider();
+  bool _offline = false;
+  StreamSubscription<bool>? _connSub;
+
   @override
   void initState() {
     super.initState();
@@ -97,6 +104,13 @@ class _NavigationPageState extends State<NavigationPage> {
       await _requestPermission();
       _startGps();
     });
+    _connSub = onlineStream().listen((online) {
+      if (!mounted) return;
+      setState(() => _offline = !online);
+    });
+    isOnline().then((on) {
+      if (mounted) setState(() => _offline = !on);
+    });
   }
 
   @override
@@ -106,6 +120,7 @@ class _NavigationPageState extends State<NavigationPage> {
     _searchFocus.dispose();
     _gpsSub?.cancel();
     _simTimer?.cancel();
+    _connSub?.cancel();
     // If a trip is still recording when the page is closed, save it.
     final t = _trip;
     if (t != null && t.hasEnoughData) {
@@ -463,6 +478,12 @@ class _NavigationPageState extends State<NavigationPage> {
     );
   }
 
+  Future<void> _openOffline() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const OfflineScreen()),
+    );
+  }
+
   // ---- UI composition --------------------------------------------------
 
   @override
@@ -486,11 +507,41 @@ class _NavigationPageState extends State<NavigationPage> {
                     right: 0,
                     child: _navigating ? _navTopBar() : _topBar(),
                   ),
+                  if (_offline)
+                    Positioned(
+                      top: 58,
+                      left: 12,
+                      right: 12,
+                      child: Material(
+                        elevation: 4,
+                        shadowColor: Colors.black26,
+                        borderRadius: BorderRadius.circular(10),
+                        color: const Color(0xFF5F6368),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          child: Row(
+                            children: const [
+                              Icon(Icons.cloud_off,
+                                  size: 16, color: Colors.white),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Đang ngoại tuyến — bản đồ & lộ trình đã tải vẫn hoạt động',
+                                  style: TextStyle(
+                                      color: Colors.white, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   if (!_navigating && _suggestions.isNotEmpty)
                     Positioned(
                       left: 12,
                       right: 66,
-                      top: 70,
+                      top: _offline ? 104 : 70,
                       child: SuggestionList(
                         suggestions: _suggestions,
                         onSelected: _selectSuggestion,
@@ -524,6 +575,12 @@ class _NavigationPageState extends State<NavigationPage> {
                               _simulating ? Colors.orange : const Color(0xFF34A853),
                           onTap: _toggleSimulation,
                         ),
+                        const SizedBox(height: 8),
+                        RoundActionButton(
+                          icon: Icons.download_for_offline_outlined,
+                          color: kAppBlue,
+                          onTap: _openOffline,
+                        ),
                       ],
                     ),
                   ),
@@ -556,6 +613,7 @@ class _NavigationPageState extends State<NavigationPage> {
         TileLayer(
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.navbridge.app',
+          tileProvider: _tileProvider,
         ),
         if (route != null)
           PolylineLayer(polylines: [

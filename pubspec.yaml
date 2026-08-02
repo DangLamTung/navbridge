@@ -22,6 +22,8 @@ dependencies:
   # Trip logging (Google Takeout Records.json) + share/export
   path_provider: ^2.1.5
   share_plus: ^10.1.4
+  # Online/offline detection (offline mode)
+  connectivity_plus: ^6.1.0
   cupertino_icons: ^1.0.8
 
 dev_dependencies:
