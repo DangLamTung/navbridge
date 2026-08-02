@@ -44,7 +44,7 @@ class NavigationCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(20),
       color: Colors.white,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 16, 18, 10),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -52,17 +52,17 @@ class NavigationCard extends StatelessWidget {
             Row(
               children: [
                 Container(
-                  width: 56,
-                  height: 56,
+                  width: 44,
+                  height: 44,
                   decoration:
                       const BoxDecoration(color: kAppBlue, shape: BoxShape.circle),
                   child: Icon(
                     nav == null ? Icons.navigation : _iconFor(nav.iconCode),
                     color: Colors.white,
-                    size: 32,
+                    size: 26,
                   ),
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -70,21 +70,20 @@ class NavigationCard extends StatelessWidget {
                       Text(
                         nav == null ? 'Đang khởi động…' : formatDistance(nav.meter),
                         style: const TextStyle(
-                            fontSize: 22, fontWeight: FontWeight.w800),
+                            fontSize: 18, fontWeight: FontWeight.w800),
                       ),
                       Text(
                         nav?.text ?? '',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style:
-                            TextStyle(fontSize: 13, color: Colors.grey[600]),
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                       ),
                     ],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -98,26 +97,24 @@ class NavigationCard extends StatelessWidget {
                       ? '--'
                       : '${(nav.speedMps * 3.6).round()} km/h',
                 ),
-                StatChip(
-                  icon: Icons.navigation,
-                  label: nav == null ? '--' : formatDistance(nav.meter),
-                ),
               ],
             ),
-            const SizedBox(height: 10),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFEA4335),
-                foregroundColor: Colors.white,
-                minimumSize: const Size.fromHeight(48),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
-              onPressed: onStop,
-              icon: const Icon(Icons.stop_circle),
-              label: const Text(
-                'Kết thúc chỉ đường',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 40,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFEA4335),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: onStop,
+                icon: const Icon(Icons.stop_circle, size: 18),
+                label: const Text(
+                  'Kết thúc chỉ đường',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                ),
               ),
             ),
           ],

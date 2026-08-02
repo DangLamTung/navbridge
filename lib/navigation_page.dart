@@ -478,15 +478,19 @@ class _NavigationPageState extends State<NavigationPage> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (_navigating)
-                    _navTopBar()
-                  else
-                    _topBar(),
+                  // Pin the top bar to the top — a plain (non-positioned)
+                  // child here would be stretched and vertically centered.
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: _navigating ? _navTopBar() : _topBar(),
+                  ),
                   if (!_navigating && _suggestions.isNotEmpty)
                     Positioned(
                       left: 12,
                       right: 66,
-                      top: 64,
+                      top: 70,
                       child: SuggestionList(
                         suggestions: _suggestions,
                         onSelected: _selectSuggestion,

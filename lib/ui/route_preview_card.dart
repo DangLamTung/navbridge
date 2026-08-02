@@ -35,15 +35,15 @@ class RoutePreviewCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(20),
       color: Colors.white,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 16, 18, 10),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
-                const Icon(Icons.directions, color: kAppBlue, size: 30),
-                const SizedBox(width: 12),
+                const Icon(Icons.directions, color: kAppBlue, size: 26),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -51,41 +51,42 @@ class RoutePreviewCard extends StatelessWidget {
                       Text(
                         '$etaText • $distanceText',
                         style: const TextStyle(
-                            fontSize: 17, fontWeight: FontWeight.w700),
+                            fontSize: 16, fontWeight: FontWeight.w700),
                       ),
                       Text(
                         destination,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style:
-                            TextStyle(fontSize: 12.5, color: Colors.grey[600]),
+                            TextStyle(fontSize: 12, color: Colors.grey[600]),
                       ),
                     ],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 14),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: kAppBlue,
-                foregroundColor: Colors.white,
-                minimumSize: const Size.fromHeight(52),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
-              onPressed: onStart,
-              icon: const Icon(Icons.navigation),
-              label: const Text(
-                'Bắt đầu chỉ đường',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 44,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: kAppBlue,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: onStart,
+                icon: const Icon(Icons.navigation, size: 20),
+                label: const Text(
+                  'Bắt đầu chỉ đường',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
               ),
             ),
-            const SizedBox(height: 2),
             TextButton.icon(
               onPressed: onClear,
-              icon: const Icon(Icons.close, size: 18),
-              label: const Text('Xoá lộ trình'),
+              icon: const Icon(Icons.close, size: 16),
+              label: const Text('Xoá lộ trình', style: TextStyle(fontSize: 13)),
             ),
           ],
         ),

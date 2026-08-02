@@ -22,19 +22,19 @@ class RoadInfoChip extends StatelessWidget {
       borderRadius: BorderRadius.circular(16),
       color: Colors.white,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             // Speed-limit sign.
             Container(
-              width: 40,
-              height: 40,
+              width: 32,
+              height: 32,
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: Colors.white,
-                border: Border.all(color: const Color(0xFFD93025), width: 4),
+                border: Border.all(color: const Color(0xFFD93025), width: 3),
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -42,21 +42,21 @@ class RoadInfoChip extends StatelessWidget {
                   Text(
                     i == null ? '--' : '${i.speedLimit}',
                     style: const TextStyle(
-                        fontSize: 14,
+                        fontSize: 11,
                         fontWeight: FontWeight.w800,
                         height: 1.0),
                   ),
                   const Text(
                     'km/h',
                     style: TextStyle(
-                        fontSize: 7,
+                        fontSize: 6,
                         fontWeight: FontWeight.w600,
-                        height: 1.1),
+                        height: 1.0),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -64,7 +64,7 @@ class RoadInfoChip extends StatelessWidget {
                 Text(
                   i?.label ?? (loading ? 'Đang tải…' : 'Ngoài đường'),
                   style: const TextStyle(
-                      fontSize: 11,
+                      fontSize: 10.5,
                       fontWeight: FontWeight.w700,
                       color: kAppBlue),
                 ),
@@ -72,7 +72,7 @@ class RoadInfoChip extends StatelessWidget {
                   (i != null && i.name.isNotEmpty) ? i.name : (i?.highway ?? ''),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                  style: TextStyle(fontSize: 10.5, color: Colors.grey[700]),
                 ),
               ],
             ),
