@@ -12,12 +12,16 @@ class NavigationCard extends StatelessWidget {
     super.key,
     required this.progress,
     required this.onStop,
+    this.stopLabel = '',
   });
 
   /// Latest navigation progress (null while starting up).
   final NavProgress? progress;
 
   final VoidCallback onStop;
+
+  /// e.g. "Điểm 2/3" for multi-stop trips (empty for single-destination).
+  final String stopLabel;
 
   IconData _iconFor(int code) => switch (code) {
         iconTurnLeft => Icons.turn_left,
@@ -97,6 +101,8 @@ class NavigationCard extends StatelessWidget {
                       ? '--'
                       : '${(nav.speedMps * 3.6).round()} km/h',
                 ),
+                if (stopLabel.isNotEmpty)
+                  StatChip(icon: Icons.flag, label: stopLabel),
               ],
             ),
             const SizedBox(height: 8),

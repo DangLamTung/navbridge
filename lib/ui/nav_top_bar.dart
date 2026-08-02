@@ -15,6 +15,7 @@ class NavTopBar extends StatelessWidget {
     required this.onExit,
     this.recording = false,
     this.clockConnected = false,
+    this.stopLabel = '',
   });
 
   /// Destination display name.
@@ -29,6 +30,9 @@ class NavTopBar extends StatelessWidget {
   final bool recording;
 
   final bool clockConnected;
+
+  /// e.g. "Điểm 2/3" for multi-stop trips.
+  final String stopLabel;
 
   String _etaText(NavProgress nav) =>
       '${nav.etaHour.toString().padLeft(2, '0')}:'
@@ -70,7 +74,8 @@ class NavTopBar extends StatelessWidget {
                     Text(
                       nav == null
                           ? 'Đang khởi động…'
-                          : 'Đến lúc ${_etaText(nav)}',
+                          : 'Đến lúc ${_etaText(nav)}'
+                              '${stopLabel.isNotEmpty ? ' • $stopLabel' : ''}',
                       style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                     ),
                   ],

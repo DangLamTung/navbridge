@@ -117,6 +117,16 @@ class _OfflineScreenState extends State<OfflineScreen> {
     if (!mounted) {
       return;
     }
+    if (_dl!.blocked) {
+      setState(() {
+        _downloading = false;
+        _dl = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'OSM đã giới hạn tải (429). Thử lại sau hoặc giảm độ chi tiết.')));
+      return;
+    }
     // Only remember the region if it actually got tiles.
     final downloaded = [..._regions, region];
     await saveRegions(downloaded);
@@ -256,8 +266,11 @@ class _OfflineScreenState extends State<OfflineScreen> {
                     LinearProgressIndicator(value: _total == 0 ? 0 : _done / _total),
                     const SizedBox(height: 6),
                     Row(children: [
-                      Text('$_done / $_total ô',
-                          style: const TextStyle(fontSize: 12)),
+                      Text(
+                        '$_done / $_total ô • ~'
+                        '${(((_total - _done) * 1.05 / 60).ceil()).clamp(1, 999)} ph',
+                        style: const TextStyle(fontSize: 12),
+                      ),
                       const Spacer(),
                       TextButton(
                         onPressed: () => _dl?.cancel(),

@@ -13,6 +13,7 @@ class RoutePreviewCard extends StatelessWidget {
     required this.destination,
     required this.onStart,
     required this.onClear,
+    this.stopCount = 0,
   });
 
   /// e.g. "12 ph"
@@ -26,6 +27,9 @@ class RoutePreviewCard extends StatelessWidget {
 
   final VoidCallback onStart;
   final VoidCallback onClear;
+
+  /// Number of planned stops (multi-stop trip). Shown when > 1.
+  final int stopCount;
 
   @override
   Widget build(BuildContext context) {
@@ -49,7 +53,8 @@ class RoutePreviewCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '$etaText • $distanceText',
+                        '$etaText • $distanceText'
+                        '${stopCount > 1 ? ' • $stopCount điểm dừng' : ''}',
                         style: const TextStyle(
                             fontSize: 16, fontWeight: FontWeight.w700),
                       ),

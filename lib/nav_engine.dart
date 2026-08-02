@@ -15,6 +15,9 @@ class NavProgress {
   final int etaMinute;
   final String text; // road name / instruction
   final double speedMps;
+  final int stopIndex; // 0-based stop we're approaching (0 when none)
+  final int totalStops; // number of stops incl. the final destination
+  final String stopName; // name of the approaching stop ('' when none)
 
   NavProgress({
     required this.meter,
@@ -23,18 +26,25 @@ class NavProgress {
     required this.etaMinute,
     required this.text,
     required this.speedMps,
+    this.stopIndex = 0,
+    this.totalStops = 0,
+    this.stopName = '',
   });
 }
 
 class TurnByTurnEngine {
   final OsrmRoute route;
+  final List<String> stopNames; // names of the stops (intermediate + final)
 
   final List<double> _cum = []; // cumulative meters along the full polyline
   final List<double> _stepCum = []; // cumulative meters at each step maneuver
+  final List<double> _stopCum; // cumulative meters at each stop
   int _curIdx = 0; // last snapped polyline index (optimization window)
   int _nextStep = 0; // index of the upcoming maneuver step
 
-  TurnByTurnEngine(this.route) {
+  TurnByTurnEngine(this.route, {List<String>? stopNames})
+      : stopNames = stopNames ?? const [],
+        _stopCum = List.of(route.stopCumulative) {
     var c = 0.0;
     _cum.add(0);
     for (var i = 1; i < route.geometry.length; i++) {
@@ -101,6 +111,15 @@ class TurnByTurnEngine {
 
     final text = step.name.isNotEmpty ? step.name : 'Tiến lên';
 
+    // Which stop are we heading to?
+    var passed = 0;
+    while (passed < _stopCum.length && _stopCum[passed] < cum) {
+      passed++;
+    }
+    final stopIndex =
+        _stopCum.isEmpty ? 0 : passed.clamp(0, _stopCum.length - 1);
+    final stopName = stopIndex < stopNames.length ? stopNames[stopIndex] : '';
+
     return NavProgress(
       meter: meter,
       iconCode: icon,
@@ -108,6 +127,9 @@ class TurnByTurnEngine {
       etaMinute: eta.minute,
       text: text,
       speedMps: speedMps,
+      stopIndex: stopIndex,
+      totalStops: _stopCum.length,
+      stopName: stopName,
     );
   }
 

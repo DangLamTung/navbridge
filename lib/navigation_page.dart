@@ -28,6 +28,7 @@ import 'osm_api.dart';
 import 'osrm.dart';
 import 'overpass.dart';
 import 'trip_logger.dart';
+import 'trip_plan.dart';
 import 'trips_screen.dart';
 import 'ui/clock_button.dart';
 import 'ui/map_controls.dart';
@@ -36,6 +37,7 @@ import 'ui/navigation_card.dart';
 import 'ui/road_info_chip.dart';
 import 'ui/route_preview_card.dart';
 import 'ui/search_pill.dart';
+import 'ui/stops_panel.dart';
 import 'ui/suggestions_list.dart';
 import 'ui/widgets.dart';
 
@@ -86,6 +88,9 @@ class _NavigationPageState extends State<NavigationPage> {
   final OfflineTileProvider _tileProvider = OfflineTileProvider();
   bool _offline = false;
   StreamSubscription<bool>? _connSub;
+
+  // --- multi-stop plan ---
+  final List<TripStop> _stops = [];
 
   @override
   void initState() {
@@ -239,11 +244,11 @@ class _NavigationPageState extends State<NavigationPage> {
     final dest = _destination;
     if (dest == null) return;
     try {
-      final route = await fetchOsrmRoute(from, dest);
+      final route = await fetchOsrmRoute([from, dest]);
       if (!mounted || _destination == null) return;
       setState(() {
         _route = route;
-        _engine = TurnByTurnEngine(route);
+        _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
       });
     } catch (_) {
       // keep the old route on failure
@@ -328,9 +333,12 @@ class _NavigationPageState extends State<NavigationPage> {
       _suggestions = [];
       _building = true;
       _searchCtrl.text = s.display;
+      _stops.add(TripStop(name: s.display, lat: s.lat, lng: s.lng));
+      _destination = LatLng(s.lat, s.lng);
+      _searchCtrl.clear();
     });
     try {
-      await _buildRoute(s.lat, s.lng);
+      await _buildPlanRoute();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -342,8 +350,9 @@ class _NavigationPageState extends State<NavigationPage> {
     }
   }
 
-  Future<void> _buildRoute(double lat, double lng) async {
-    final dest = LatLng(lat, lng);
+  /// Route through all planned stops (origin → stop1 → … → last stop).
+  Future<void> _buildPlanRoute() async {
+    if (_stops.isEmpty) return;
     final origin = await _resolveOrigin();
     if (origin == null) {
       if (mounted) {
@@ -355,20 +364,70 @@ class _NavigationPageState extends State<NavigationPage> {
     }
     _origin = origin;
     _current ??= origin;
-    final route = await fetchOsrmRoute(_origin!, dest);
-    debugPrint('SIM: BUILD route ok, dist=${route.distance}m steps=${route.steps.length}');
+    final points = [origin, for (final s in _stops) s.pos];
+    final route = await fetchOsrmRoute(points);
+    debugPrint('PLAN: BUILD ok pts=${points.length} '
+        'dist=${route.distance}m stops=${route.stopCumulative.length}');
     if (!mounted) return;
     setState(() {
       _route = route;
-      _engine = TurnByTurnEngine(route);
-      _destination = dest;
+      _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
+      _destination = _stops.last.pos;
       _navigating = false;
       _progress = null;
     });
     _map.fitCamera(CameraFit.bounds(
-      bounds: LatLngBounds.fromPoints([_origin!, dest]),
+      bounds: LatLngBounds.fromPoints(points),
       padding: const EdgeInsets.all(60),
     ));
+  }
+
+  List<String> _engineStopNames(OsrmRoute route) =>
+      route.stopCumulative.length == _stops.length
+          ? [for (final s in _stops) s.name]
+          : const [];
+
+  void _moveStop(int index, int delta) {
+    final i = index + delta;
+    if (i < 0 || i >= _stops.length) return;
+    setState(() {
+      final s = _stops.removeAt(index);
+      _stops.insert(i, s);
+    });
+    _buildPlanRoute();
+  }
+
+  void _removeStop(int index) {
+    setState(() => _stops.removeAt(index));
+    if (_stops.isEmpty) {
+      setState(() {
+        _route = null;
+        _engine = null;
+        _destination = null;
+        _progress = null;
+      });
+      return;
+    }
+    _buildPlanRoute();
+  }
+
+  Future<void> _savePlan() async {
+    if (_stops.isEmpty) return;
+    final plans = await loadPlans();
+    final plan = TripPlan(
+      name: _stops.length == 1
+          ? _stops.first.name
+          : 'Chuyến ${_stops.length} điểm',
+      createdAt: DateTime.now(),
+      stops: List.of(_stops),
+    );
+    plans.insert(0, plan);
+    await savePlans(plans);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đã lưu kế hoạch chuyến đi.')),
+      );
+    }
   }
 
   /// Best-effort start position: live fix, last known, or the app default.
@@ -417,6 +476,7 @@ class _NavigationPageState extends State<NavigationPage> {
       _destination = null;
       _progress = null;
       _roadInfo = null;
+      _stops.clear();
     });
     await _finishTrip(); // save the recorded trip
   }
@@ -468,14 +528,22 @@ class _NavigationPageState extends State<NavigationPage> {
   // ---- trips history ---------------------------------------------------
 
   String get _destinationName {
+    if (_stops.isNotEmpty) return _stops.last.name;
     final t = _searchCtrl.text.trim();
     return t.isEmpty ? 'Điểm đến' : t;
   }
 
   Future<void> _openTrips() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const TripsScreen()),
+    final plan = await Navigator.of(context).push<TripPlan>(
+      MaterialPageRoute(builder: (_) => const TripsScreen()),
     );
+    if (plan != null && mounted) {
+      setState(() {
+        _stops..clear()..addAll(plan.stops);
+        _destination = plan.stops.isEmpty ? null : plan.stops.last.pos;
+      });
+      _buildPlanRoute();
+    }
   }
 
   Future<void> _openOffline() async {
@@ -537,15 +605,29 @@ class _NavigationPageState extends State<NavigationPage> {
                         ),
                       ),
                     ),
-                  if (!_navigating && _suggestions.isNotEmpty)
+                  if (!_navigating)
                     Positioned(
                       left: 12,
                       right: 66,
                       top: _offline ? 104 : 70,
-                      child: SuggestionList(
-                        suggestions: _suggestions,
-                        onSelected: _selectSuggestion,
-                      ),
+                      child: _suggestions.isNotEmpty
+                          ? SuggestionList(
+                              suggestions: _suggestions,
+                              onSelected: _selectSuggestion,
+                            )
+                          : (_stops.isNotEmpty
+                              ? StopsPanel(
+                                  stops: _stops,
+                                  onAdd: () {
+                                    _searchCtrl.clear();
+                                    _searchFocus.requestFocus();
+                                  },
+                                  onMoveUp: (i) => _moveStop(i, -1),
+                                  onMoveDown: (i) => _moveStop(i, 1),
+                                  onRemove: _removeStop,
+                                  onSave: _savePlan,
+                                )
+                              : const SizedBox.shrink()),
                     ),
                   if (_navigating)
                     Positioned(
@@ -629,6 +711,27 @@ class _NavigationPageState extends State<NavigationPage> {
               height: 30,
               child: const OriginMarker(),
             ),
+          // numbered markers for intermediate stops (the last stop is the
+          // red destination pin below)
+          for (var i = 0; i < _stops.length - 1; i++)
+            Marker(
+              point: _stops[i].pos,
+              width: 28,
+              height: 28,
+              child: Container(
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: kAppBlue,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                ),
+                child: Text('${i + 1}',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700)),
+              ),
+            ),
           if (_destination != null)
             Marker(
               point: _destination!,
@@ -684,26 +787,36 @@ class _NavigationPageState extends State<NavigationPage> {
 
   /// Compact header shown while navigating (replaces the search bar).
   Widget _navTopBar() {
+    final nav = _progress;
     return NavTopBar(
       destination: _destinationName,
-      progress: _progress,
+      progress: nav,
       recording: _trip != null,
       clockConnected: _clock.isConnected,
+      stopLabel: (nav?.totalStops ?? 0) > 1
+          ? 'Điểm ${(nav!.stopIndex + 1)}/${nav.totalStops}'
+          : '',
       onExit: _exitNavigation,
     );
   }
 
   Widget _bottomArea() {
     final route = _route;
+    final nav = _progress;
     final card = _navigating
-        ? NavigationCard(progress: _progress, onStop: _exitNavigation)
+        ? NavigationCard(
+            progress: _progress,
+            onStop: _exitNavigation,
+            stopLabel: (nav?.totalStops ?? 0) > 1
+                ? 'Điểm ${(nav!.stopIndex + 1)}/${nav.totalStops}'
+                : '',
+          )
         : (route != null
             ? RoutePreviewCard(
                 etaText: '${(route.duration / 60).round()} ph',
                 distanceText: formatDistance(route.distance),
-                destination: _searchCtrl.text.trim().isEmpty
-                    ? 'Điểm đến'
-                    : _searchCtrl.text.trim(),
+                destination: _destinationName,
+                stopCount: _stops.length,
                 onStart: _startNavigation,
                 onClear: _exitNavigation,
               )

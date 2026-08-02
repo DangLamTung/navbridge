@@ -41,12 +41,14 @@ class OsrmRoute {
   final double duration; // seconds
   final List<LatLng> geometry; // full route polyline (decoded)
   final List<OsrmStep> steps;
+  final List<double> stopCumulative; // meters along the polyline at each stop
 
   OsrmRoute({
     required this.distance,
     required this.duration,
     required this.geometry,
     required this.steps,
+    this.stopCumulative = const [],
   });
 }
 
@@ -79,17 +81,22 @@ List<LatLng> decodePolyline(String encoded) {
   return points;
 }
 
-/// Fetch a driving route with full geometry + steps.
+/// Fetch a driving route through [points] (2+ waypoints) with full geometry
+/// and turn-by-turn steps. The route is one polyline; each intermediate stop
+/// is reported via `stopCumulative` (meters along the polyline where that
+/// waypoint is reached).
 /// `baseUrl` — OSRM server root (defaults to the public demo server).
 Future<OsrmRoute> fetchOsrmRoute(
-  LatLng from,
-  LatLng to, {
+  List<LatLng> points, {
   String? baseUrl,
   bool steps = true,
 }) async {
+  if (points.length < 2) {
+    throw Exception('Cần ít nhất 2 điểm để định tuyến');
+  }
+  final coords = points.map((p) => '${p.longitude},${p.latitude}').join(';');
   final url = '${baseUrl ?? osrmPublic}/route/v1/driving/'
-      '${from.longitude},${from.latitude};${to.longitude},${to.latitude}'
-      '?overview=full&geometries=polyline&steps=$steps';
+      '$coords?overview=full&geometries=polyline&steps=$steps';
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
       .timeout(const Duration(seconds: 20));
@@ -104,9 +111,12 @@ Future<OsrmRoute> fetchOsrmRoute(
   final r = routes.first as Map<String, dynamic>;
 
   final stepList = <OsrmStep>[];
+  final stopCum = <double>[];
+  var cum = 0.0;
   final legs = (r['legs'] as List? ?? []).cast<Map<String, dynamic>>();
   for (final leg in legs) {
-    for (final s in (leg['steps'] as List? ?? []).cast<Map<String, dynamic>>()) {
+    for (final s
+        in (leg['steps'] as List? ?? []).cast<Map<String, dynamic>>()) {
       final m = (s['maneuver'] as Map<String, dynamic>? ?? {});
       final loc = (m['location'] as List?)?.cast<num>() ?? [];
       stepList.add(OsrmStep(
@@ -117,9 +127,11 @@ Future<OsrmRoute> fetchOsrmRoute(
         modifier: m['modifier'] as String?,
         maneuver: loc.length >= 2
             ? LatLng(loc[1].toDouble(), loc[0].toDouble())
-            : to,
+            : points.last,
       ));
     }
+    cum += ((leg['distance'] ?? 0) as num).toDouble();
+    stopCum.add(cum);
   }
 
   return OsrmRoute(
@@ -127,6 +139,7 @@ Future<OsrmRoute> fetchOsrmRoute(
     duration: ((r['duration'] ?? 0) as num).toDouble(),
     geometry: decodePolyline((r['geometry'] ?? '') as String),
     steps: stepList,
+    stopCumulative: stopCum,
   );
 }
 

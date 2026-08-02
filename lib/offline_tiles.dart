@@ -180,12 +180,18 @@ Future<void> saveRegions(List<OfflineRegion> rs) async {
 // ---- downloader --------------------------------------------------------
 
 /// Downloads all tiles of a region with progress + cancel support.
+///
+/// Rate-limited to ~1 tile/second (single thread) to respect the
+/// tile.openstreetmap.org usage policy (max 2 threads, avg 1 tile/s,
+/// no bulk bursts) — otherwise the server 403/429s or IP-bans us.
 class RegionDownloader {
   final OfflineRegion region;
   int done = 0;
   int get total => region.tileCount;
   bool _cancel = false;
   int failed = 0;
+  bool _blocked = false;
+  bool get blocked => _blocked;
 
   RegionDownloader(this.region);
 
@@ -194,7 +200,10 @@ class RegionDownloader {
   Future<void> download(void Function(int done, int total) onProgress) async {
     done = 0;
     failed = 0;
+    _blocked = false;
     final b = region.bounds;
+    var lastRequest = DateTime.now();
+    const minGap = Duration(milliseconds: 1050); // ~1 tile/s, policy-safe
     for (var z = region.minZoom; z <= region.maxZoom; z++) {
       if (_cancel) return;
       final x0 = lonToTileX(b.west, z);
@@ -209,11 +218,21 @@ class RegionDownloader {
             done++;
             continue;
           }
+          // Respect OSM's ~1 tile/s policy.
+          final wait = minGap - DateTime.now().difference(lastRequest);
+          if (wait > Duration.zero) {
+            await Future<void>.delayed(wait);
+          }
+          lastRequest = DateTime.now();
           try {
             final res = await http
                 .get(Uri.parse('https://tile.openstreetmap.org/$z/$x/$y.png'),
                     headers: {'User-Agent': _ua})
                 .timeout(const Duration(seconds: 10));
+            if (res.statusCode == 429 || res.statusCode == 403) {
+              _blocked = true; // stop before we get IP-banned
+              return;
+            }
             if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
               f.createSync(recursive: true);
               f.writeAsBytesSync(res.bodyBytes);
