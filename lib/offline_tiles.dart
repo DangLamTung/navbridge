@@ -19,7 +19,11 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
-const String _ua = 'navbridge/1.0 (BLE portable navigation; offline tiles)';
+/// User-Agent sent with every tile request. The OSM tile policy REQUIRES a
+/// distinct, stable User-Agent that names the app (library defaults are
+/// blocked).
+const String _ua =
+    'NavBridge/1.0 (Android; BLE portable navigation; online map display)';
 
 // ---- OSM-compliant tile fetching ---------------------------------------
 //
@@ -40,11 +44,9 @@ const Duration _minTileGap = Duration(milliseconds: 1000);
 /// How long to pause ALL fetches when every server has blocked us.
 const Duration _blockBackoff = Duration(minutes: 5);
 
-/// Free OSM-based fallback tile servers (no API key, attribution required),
-/// used automatically when the primary (tile.openstreetmap.org) blocks us.
-/// `{s}` is substituted with a/b/c for providers that use subdomains.
-/// (Verified reachable 2026-08-03; OpenFreeMap was dropped — wrong tile
-/// format, 404s.)
+/// Fallback OSM-based tile servers (no API key, attribution required), used
+/// when the primary (tile.openstreetmap.org) fails. `{s}` is substituted
+/// with a/b/c for providers that use subdomains.
 const List<String> _fallbackTileTemplates = [
   'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
   'https://tile.opentopomap.org/{z}/{x}/{y}.png',
@@ -136,9 +138,29 @@ Future<http.Response?> _fetchTile(int z, int x, int y, String primary) async {
         _failedTiles.add(key); // don't re-request the same missing tile
         return null;
       }
+      // tile.openstreetmap.org serves its "access blocked" placeholder with
+      // HTTP 200 (not 403) when the client's IP is banned. Treat it like a
+      // block: never cache it AND fail over to the next server so the map
+      // keeps rendering.
+      //
+      // IMPORTANT: only apply this heuristic to OSM. Other providers never
+      // serve placeholders (they use real 403/429), and their real tiles can
+      // legitimately be small and near-uniform (e.g. rural land at low zoom)
+      // — flagging those would blank out whole areas.
+      if (_tileHost(template).contains('openstreetmap.org') &&
+          await _looksLikeBlockPlaceholder(res.bodyBytes)) {
+        _blockedTileServers.add(template);
+        debugPrint('TILE: ${_tileHost(template)} served a block placeholder '
+            'for $key — switching server');
+        _serverIndex = (_serverIndex + 1) % _serverList.length;
+        tried++;
+        continue;
+      }
       return res;
-    } catch (_) {
+    } catch (e) {
       _failedTiles.add(key);
+      debugPrint('TILE: fetch failed $key from '
+          '${_tileHost(template)}: $e');
       return null;
     } finally {
       _tileInFlight--;
@@ -146,6 +168,43 @@ Future<http.Response?> _fetchTile(int z, int x, int y, String primary) async {
     }
   }
   return null; // every server failed for this tile
+}
+
+/// Heuristic for OSM-style "access blocked" placeholder tiles: a small PNG
+/// whose pixels are nearly all one colour. Real map tiles are never uniform.
+/// Only small payloads are decoded, so normal tiles skip this check.
+Future<bool> _looksLikeBlockPlaceholder(Uint8List bytes) async {
+  if (bytes.length > 3000) return false; // normal tiles are bigger
+  try {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final img = frame.image;
+    final data = await img.toByteData();
+    img.dispose();
+    codec.dispose();
+    if (data == null) return false;
+    final px = data.buffer.asUint8List();
+    final w = img.width;
+    final h = img.height;
+    if (w == 0 || h == 0) return false;
+    final r0 = px[0], g0 = px[1], b0 = px[2];
+    var same = 0, total = 0;
+    for (var y = 0; y < h; y += 16) {
+      for (var x = 0; x < w; x += 16) {
+        final i = (y * w + x) * 4;
+        if (i + 2 < px.length &&
+            px[i] == r0 &&
+            px[i + 1] == g0 &&
+            px[i + 2] == b0) {
+          same++;
+        }
+        total++;
+      }
+    }
+    return total > 0 && same / total > 0.85;
+  } catch (_) {
+    return false; // can't decode — treat as a normal tile
+  }
 }
 
 /// Base URL for bulk region tile downloads.
@@ -170,12 +229,25 @@ int _avgTileBytes(int z) => _avgBytes[z] ?? 30000;
 // ---- online / offline --------------------------------------------------
 
 /// True when the device has any connectivity.
+///
+/// NOTE: connectivity_plus misreports `none` on some ROMs (e.g. itel) even
+/// when the network is up, which would make the map permanently blank. As a
+/// fallback we simply TRY the fetch — a failed fetch is harmless (transparent
+/// tile + failure-cache), but a false "offline" is a blank map forever.
 Future<bool> isOnline() async {
   try {
-    final r = await Connectivity().checkConnectivity();
-    return r.isNotEmpty && !r.contains(ConnectivityResult.none);
-  } catch (_) {
-    return true; // assume online when the plugin is unavailable
+    final r = await Connectivity()
+        .checkConnectivity()
+        .timeout(const Duration(seconds: 4));
+    final ok = r.isNotEmpty && !r.contains(ConnectivityResult.none);
+    if (!ok) {
+      debugPrint('TILE: connectivity_plus reported none — will still try '
+          'the fetch');
+    }
+    return true; // always try; only a real HTTP result tells the truth
+  } catch (e) {
+    debugPrint('TILE: connectivity check failed: $e — will still try');
+    return true;
   }
 }
 
@@ -464,6 +536,7 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
         // corrupt tile — fall through to re-download
       }
     }
+    debugPrint('TILE: loading $z/$x/$y (no cache)');
     if (await isOnline()) {
       // Rate-limited + serialized so we stay under the OSM tile policy,
       // with automatic failover to other free OSM tile servers when one

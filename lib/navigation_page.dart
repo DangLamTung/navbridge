@@ -699,6 +699,10 @@ class _NavigationPageState extends State<NavigationPage> {
       ),
       children: [
         TileLayer(
+          // Primary = tile.openstreetmap.org with an app-specific User-Agent
+          // (see offline_tiles.dart). Requests are throttled to the OSM tile
+          // policy and auto-fail over to CARTO/OpenTopoMap on 403/429; OSM
+          // "access blocked" placeholder responses are never cached.
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.navbridge.app',
           tileProvider: _tileProvider,
