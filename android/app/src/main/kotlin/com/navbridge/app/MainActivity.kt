@@ -24,6 +24,13 @@ class MainActivity : FlutterActivity() {
                         routing.route(points, result)
                     }
                     "isLoaded" -> result.success(routing.isLoaded())
+                    "roadInfo" -> {
+                        routing.roadInfo(
+                            call.argument<Double>("lat") ?: 0.0,
+                            call.argument<Double>("lng") ?: 0.0,
+                            result,
+                        )
+                    }
                     else -> result.notImplemented()
                 }
             }

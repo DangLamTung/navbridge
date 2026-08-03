@@ -25,6 +25,7 @@ dependencies:
   # Online/offline detection (offline mode)
   connectivity_plus: ^6.1.0
   cupertino_icons: ^1.0.8
+  maplibre_gl: ^0.26.2
 
 dev_dependencies:
   flutter_test:
@@ -33,3 +34,16 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # Offline vector navigation map (style + fonts + sprite + tiles; the
+    # .pmtiles / fonts / sprite are copied into app storage at first use so
+    # MapLibre can read them from file:// paths).
+    # NOTE: Flutter does NOT recurse into subdirectories — each dir that
+    # contains files must be listed.
+    - assets/offline_map/
+    - assets/offline_map/icons/
+    - assets/offline_map/sprite/
+    - assets/offline_map/fonts/
+    - assets/offline_map/fonts/Roboto Regular/
+    - assets/offline_map/fonts/Roboto Medium/
+    - assets/offline_map/fonts/Roboto Condensed Italic/

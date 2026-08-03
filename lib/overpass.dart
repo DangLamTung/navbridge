@@ -42,6 +42,10 @@ const List<String> _endpoints = [
 
 const String _ua = 'navbridge/1.0 (BLE portable navigation; road info)';
 
+/// Vietnamese label + statutory default limit (km/h) per OSM/GraphHopper
+/// highway class value. Used when the way has no `maxspeed` tag.
+(String, int) classInfo(String highway) => _classInfo(highway);
+
 /// Vietnamese label + statutory default limit (km/h) per OSM highway class.
 /// Used when the way has no `maxspeed` tag.
 (String, int) _classInfo(String highway) => switch (highway) {

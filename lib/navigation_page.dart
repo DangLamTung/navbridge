@@ -31,6 +31,7 @@ import 'overpass.dart';
 import 'trip_logger.dart';
 import 'trip_plan.dart';
 import 'trips_screen.dart';
+import 'vector_nav_map.dart';
 import 'ui/clock_button.dart';
 import 'ui/map_controls.dart';
 import 'ui/nav_top_bar.dart';
@@ -67,6 +68,9 @@ class _NavigationPageState extends State<NavigationPage> {
   LatLng? _origin;
   LatLng? _destination;
   LatLng? _current;
+  double? _heading;
+  bool _headingUp = true; // rotate map so travel direction points up
+  String _carIcon = 'arrow';
   NavProgress? _progress;
   StreamSubscription<Position>? _gpsSub;
   bool _navigating = false;
@@ -160,6 +164,7 @@ class _NavigationPageState extends State<NavigationPage> {
     ).listen((p) {
       final pos = LatLng(p.latitude, p.longitude);
       _current = pos;
+      _heading = p.heading.isNaN ? null : p.heading;
       if (_engine == null || !_navigating) return;
       // Off the route? Re-route to the destination (re-navigation).
       if (_engine!.offRouteDistance(pos) > 45) {
@@ -183,16 +188,28 @@ class _NavigationPageState extends State<NavigationPage> {
     if (mounted) setState(() {});
   }
 
-  /// Look up the current road (type + speed limit) from OSM, throttled to
-  /// one network query every 8 s (Overpass limit ~1 req/s).
+  /// Look up the current road (type + speed limit). Prefers the on-device
+  /// GraphHopper graph (instant + offline); falls back to Overpass.
   Future<void> _refreshRoad(LatLng pos) async {
-    if (_roadLoading) return;
     final now = DateTime.now();
     final last = _lastRoadQuery;
-    if (last != null && now.difference(last) < const Duration(seconds: 8)) {
+    if (last != null && now.difference(last) < const Duration(seconds: 2)) {
       return;
     }
     _lastRoadQuery = now;
+    // On-device graph: no network, no server latency.
+    if (OfflineRouter.instance.isLoaded) {
+      try {
+        final r = await _roadInfoFromGraph(pos);
+        if (r != null && mounted) {
+          setState(() => _roadInfo = r);
+          return;
+        }
+      } catch (_) {
+        // fall through to Overpass
+      }
+    }
+    if (_roadLoading) return;
     setState(() => _roadLoading = true);
     try {
       final r = await fetchRoadInfo(pos);
@@ -203,6 +220,24 @@ class _NavigationPageState extends State<NavigationPage> {
     } finally {
       if (mounted) setState(() => _roadLoading = false);
     }
+  }
+
+  /// Road info straight from the on-device graph (nearest edge), with the
+  /// same Vietnamese statutory defaults as the Overpass path.
+  Future<RoadInfo?> _roadInfoFromGraph(LatLng pos) async {
+    final g = await OfflineRouter.instance.roadInfo(pos);
+    if (g == null) return null;
+    final highway = (g['highway'] ?? '') as String;
+    if (highway.isEmpty) return null;
+    final (label, fallback) = classInfo(highway);
+    final ms = (g['maxspeed'] as num?)?.toInt();
+    return RoadInfo(
+      name: (g['name'] ?? '') as String,
+      highway: highway,
+      maxspeed: ms == null ? null : '$ms',
+      label: label,
+      speedLimit: ms ?? fallback,
+    );
   }
 
   /// Feed the active trip logger (real GPS or simulated fixes).
@@ -526,6 +561,12 @@ class _NavigationPageState extends State<NavigationPage> {
   void _zoomBy(double delta) =>
       _map.move(_map.camera.center, _map.camera.zoom + delta);
 
+  /// Cycle the car marker icon (arrow → fun emojis).
+  void _cycleCarIcon() {
+    final i = kCarIcons.indexOf(_carIcon);
+    setState(() => _carIcon = kCarIcons[(i + 1) % kCarIcons.length]);
+  }
+
   void _locateMe() {
     final c = _current;
     if (c != null) _map.move(c, 17);
@@ -567,7 +608,18 @@ class _NavigationPageState extends State<NavigationPage> {
     return Scaffold(
       body: Stack(
         children: [
-          _buildMap(route, current),
+          // Navigation mode renders a Google-Maps-style offline VECTOR map
+          // (MapLibre + bundled HCMC PMTiles); browsing/search keeps the
+          // raster map.
+          _navigating
+              ? VectorNavMap(
+                  routeGeometry: route?.geometry ?? const [],
+                  current: current,
+                  heading: _heading,
+                  headingUp: _headingUp,
+                  carIcon: _carIcon,
+                )
+              : _buildMap(route, current),
           Positioned.fill(
             child: SafeArea(
               child: Stack(
@@ -644,7 +696,38 @@ class _NavigationPageState extends State<NavigationPage> {
                         loading: _roadLoading,
                       ),
                     ),
-                  Positioned(
+                  // Navigation-mode controls: heading-up toggle + fun car
+                  // icon cycler (Google-Maps-style rotate + custom marker).
+                  if (_navigating)
+                    Positioned(
+                      right: 10,
+                      top: 64,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          RoundActionButton(
+                            icon: _headingUp
+                                ? Icons.explore
+                                : Icons.navigation,
+                            color: _headingUp
+                                ? kAppBlue
+                                : const Color(0xFF5F6368),
+                            onTap: () =>
+                                setState(() => _headingUp = !_headingUp),
+                          ),
+                          const SizedBox(height: 8),
+                          RoundActionButton(
+                            icon: Icons.emoji_emotions_outlined,
+                            color: const Color(0xFFF4B400),
+                            onTap: _cycleCarIcon,
+                          ),
+                        ],
+                      ),
+                    ),
+                  // Raster-only controls (zoom/locate target the raster map
+                  // controller) — hide during vector navigation mode.
+                  if (!_navigating)
+                    Positioned(
                     right: 10,
                     top: 64,
                     child: Column(

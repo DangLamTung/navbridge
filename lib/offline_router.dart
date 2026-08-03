@@ -49,6 +49,21 @@ class OfflineRouter {
     return _loaded;
   }
 
+  /// Road info (name / road class / maxspeed) at [pos] straight from the
+  /// on-device graph — instant and offline. Returns null when unavailable.
+  Future<Map<String, dynamic>?> roadInfo(LatLng pos) async {
+    if (!_loaded) return null;
+    try {
+      final raw = await _channel.invokeMethod<Object?>(
+          'roadInfo', {'lat': pos.latitude, 'lng': pos.longitude});
+      if (raw == null) return null;
+      return Map<String, dynamic>.from(raw as Map);
+    } catch (e) {
+      debugPrint('ROUTER: roadInfo error: $e');
+      return null;
+    }
+  }
+
   /// Compute a route through [points] (2+) entirely on-device.
   Future<OsrmRoute?> route(List<LatLng> points) async {
     if (points.length < 2 || !_loaded) return null;

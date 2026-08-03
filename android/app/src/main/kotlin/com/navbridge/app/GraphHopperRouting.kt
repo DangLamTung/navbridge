@@ -5,6 +5,10 @@ import com.graphhopper.GraphHopper
 import com.graphhopper.GraphHopperConfig
 import com.graphhopper.ResponsePath
 import com.graphhopper.config.Profile
+import com.graphhopper.routing.ev.EnumEncodedValue
+import com.graphhopper.routing.ev.IntEncodedValue
+import com.graphhopper.routing.ev.RoadClass
+import com.graphhopper.routing.util.EdgeFilter
 import com.graphhopper.util.shapes.GHPoint
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
@@ -80,6 +84,39 @@ class GraphHopperRouting {
                 result.success(toMap(rsp.best))
             } catch (e: Throwable) {
                 result.error("route_error", e.message ?: "route failed", null)
+            }
+        }
+    }
+
+    /** Road info (name / road class / maxspeed) at [lat],[lng] from the
+     *  on-device graph — instant and offline (no Overpass round-trip).
+     *  maxspeed is 0/absent when not tagged (Vietnam rarely tags it; the
+     *  Dart side applies statutory defaults per road class). */
+    fun roadInfo(lat: Double, lng: Double, result: MethodChannel.Result) {
+        executor.execute {
+            try {
+                val gh = hopper
+                    ?: throw IllegalStateException("Chưa tải bộ dữ liệu")
+                val em = gh.encodingManager
+                @Suppress("UNCHECKED_CAST")
+                val roadClass = em.getEncodedValue(
+                    "road_class", EnumEncodedValue::class.java
+                ) as EnumEncodedValue<RoadClass>
+                val maxSpeed = em.getIntEncodedValue("max_speed")
+                val snap = gh.locationIndex.findClosest(lat, lng, EdgeFilter.ALL_EDGES)
+                if (snap == null || !snap.isValid) {
+                    result.success(null)
+                    return@execute
+                }
+                val edge = snap.closestEdge
+                val ms = edge.get(maxSpeed)
+                val out = HashMap<String, Any?>()
+                out["name"] = edge.name ?: ""
+                out["highway"] = edge.get(roadClass)?.name?.lowercase() ?: ""
+                out["maxspeed"] = if (ms > 0) ms else null
+                result.success(out)
+            } catch (e: Throwable) {
+                result.error("road_info_error", e.message ?: "road info failed", null)
             }
         }
     }
