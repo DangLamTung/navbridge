@@ -23,18 +23,6 @@ class NavigationCard extends StatelessWidget {
   /// e.g. "Điểm 2/3" for multi-stop trips (empty for single-destination).
   final String stopLabel;
 
-  IconData _iconFor(int code) => switch (code) {
-        iconTurnLeft => Icons.turn_left,
-        iconTurnRight => Icons.turn_right,
-        iconSlightLeft => Icons.turn_slight_left,
-        iconSlightRight => Icons.turn_slight_right,
-        iconUturnLeft => Icons.u_turn_left,
-        iconUturnRight => Icons.u_turn_right,
-        iconRoundabout => Icons.roundabout_left,
-        iconArrive => Icons.flag,
-        _ => Icons.straight,
-      };
-
   String _etaText(NavProgress nav) =>
       '${nav.etaHour.toString().padLeft(2, '0')}:'
       '${nav.etaMinute.toString().padLeft(2, '0')}';
@@ -61,7 +49,7 @@ class NavigationCard extends StatelessWidget {
                   decoration:
                       const BoxDecoration(color: kAppBlue, shape: BoxShape.circle),
                   child: Icon(
-                    nav == null ? Icons.navigation : _iconFor(nav.iconCode),
+                    nav == null ? Icons.navigation : maneuverIcon(nav.iconCode),
                     color: Colors.white,
                     size: 26,
                   ),

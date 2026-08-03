@@ -18,6 +18,8 @@ import 'package:latlong2/latlong.dart' as ll;
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'osrm.dart';
+
 /// Built-in car marker icons (see assets/offline_map/icons/).
 const List<String> kCarIcons = [
   'arrow',
@@ -37,6 +39,7 @@ class VectorNavMap extends StatefulWidget {
   const VectorNavMap({
     super.key,
     this.routeGeometry = const [],
+    this.routeSteps = const [],
     this.current,
     this.heading,
     this.headingUp = true,
@@ -45,6 +48,10 @@ class VectorNavMap extends StatefulWidget {
 
   /// Route polyline to draw (latlong2 points).
   final List<ll.LatLng> routeGeometry;
+
+  /// Route steps (maneuvers) — used for the traffic-colored route and the
+  /// intersection (traffic-light) dots.
+  final List<OsrmStep> routeSteps;
 
   /// Live position to follow.
   final ll.LatLng? current;
@@ -68,6 +75,8 @@ class _VectorNavMapState extends State<VectorNavMap> {
   String? _styleError;
   Line? _casing;
   Line? _routeLine;
+  final List<Line> _trafficLines = [];
+  final List<Circle> _trafficLights = [];
   Symbol? _carMarker;
   Circle? _carCone;
   bool _hasPosition = false;
@@ -108,6 +117,17 @@ class _VectorNavMapState extends State<VectorNavMap> {
             .load('assets/offline_map/${manifest['pmtiles']}');
         await pmtilesFile
             .writeAsBytes(data.buffer.asUint8List(), flush: true);
+      }
+      // Drop any tileset from an older build that is no longer the active
+      // one (e.g. the old z14 archive) so device storage isn't wasted.
+      for (final old in ['saigon.pmtiles']) {
+        final stale = File('${dir.path}/$old');
+        if (old != manifest['pmtiles'] && stale.existsSync()) {
+          try {
+            stale.deleteSync();
+            debugPrint('VECTORMAP: removed stale $old');
+          } catch (_) {}
+        }
       }
 
       final spriteDir = Directory('${dir.path}/sprite');
@@ -171,17 +191,100 @@ class _VectorNavMapState extends State<VectorNavMap> {
         .map((p) => LatLng(p.latitude, p.longitude))
         .toList();
     if (pts.length < 2) return;
+    // White casing under the whole route (Google look).
     _casing = await ctrl.addLine(LineOptions(
       geometry: pts,
       lineColor: '#ffffff',
-      lineWidth: 9.0,
+      lineWidth: 9.5,
     ));
-    _routeLine = await ctrl.addLine(LineOptions(
-      geometry: pts,
-      lineColor: '#4285F4',
-      lineWidth: 6.0,
-    ));
+    final steps = widget.routeSteps;
+    if (steps.length >= 2) {
+      // Google-Maps-style traffic overlay: split the route at each maneuver
+      // and color every segment green/yellow/red by its implied speed.
+      final segs = _splitAtSteps(pts, steps);
+      for (var i = 0; i < segs.length; i++) {
+        final lvl = _trafficLevel(steps[(i + 1).clamp(0, steps.length - 1)]);
+        _trafficLines.add(await ctrl.addLine(LineOptions(
+          geometry: segs[i],
+          lineColor: _trafficColors[lvl],
+          lineWidth: 6.5,
+        )));
+      }
+      // Traffic-light dots at each intersection (skip start/end maneuvers).
+      for (var i = 1; i < steps.length - 1; i++) {
+        final m = steps[i].maneuver;
+        final lvl = _trafficLevel(steps[i]);
+        _trafficLights.add(await ctrl.addCircle(CircleOptions(
+          geometry: LatLng(m.latitude, m.longitude),
+          circleColor: _trafficColors[lvl],
+          circleRadius: 5.0,
+          circleStrokeColor: '#202124',
+          circleStrokeWidth: 2.0,
+          circleOpacity: 0.95,
+        )));
+      }
+    } else {
+      // No maneuver data → plain blue route line.
+      _routeLine = await ctrl.addLine(LineOptions(
+        geometry: pts,
+        lineColor: '#4285F4',
+        lineWidth: 6.0,
+      ));
+    }
     _lastRouteSig = _routeSignature(widget.routeGeometry);
+  }
+
+  /// Traffic level 0 (green) / 1 (yellow) / 2 (red) from a step's implied
+  /// speed — an offline stand-in for live traffic data.
+  static int _trafficLevel(OsrmStep s) {
+    if (s.type == 'arrive' || s.type == 'depart' || s.duration <= 0) {
+      return 0;
+    }
+    final kmh = s.distance / s.duration * 3.6;
+    if (kmh >= 35) return 0; // free flow
+    if (kmh >= 20) return 1; // slow
+    return 2; // congested
+  }
+
+  static const List<String> _trafficColors = [
+    '#34A853', // green
+    '#FBBC05', // yellow
+    '#EA4335', // red
+  ];
+
+  /// Split the route polyline at each step-maneuver point so every segment
+  /// can be colored independently.
+  List<List<LatLng>> _splitAtSteps(List<LatLng> pts, List<OsrmStep> steps) {
+    final cuts = <int>[0];
+    for (var i = 1; i < steps.length - 1; i++) {
+      final idx = _nearestIndex(pts, steps[i].maneuver);
+      if (idx > cuts.last && idx < pts.length - 1) cuts.add(idx);
+    }
+    if (cuts.last < pts.length - 1) cuts.add(pts.length - 1);
+    final out = <List<LatLng>>[];
+    for (var i = 0; i < cuts.length - 1; i++) {
+      out.add(pts.sublist(cuts[i], cuts[i + 1] + 1));
+    }
+    return out;
+  }
+
+  int _nearestIndex(List<LatLng> pts, ll.LatLng p) {
+    var best = 0;
+    var bd = double.infinity;
+    for (var i = 0; i < pts.length; i++) {
+      final d = _dist2(pts[i], p);
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  double _dist2(LatLng a, ll.LatLng b) {
+    final dLat = a.latitude - b.latitude;
+    final dLng = a.longitude - b.longitude;
+    return dLat * dLat + dLng * dLng;
   }
 
   ll.LatLng? _routeSignature(List<ll.LatLng> pts) {
@@ -193,15 +296,24 @@ class _VectorNavMapState extends State<VectorNavMap> {
     final ctrl = _controller;
     if (ctrl == null) return;
     if (_lastRouteSig != _routeSignature(widget.routeGeometry)) {
-      final pts = widget.routeGeometry
-          .map((p) => LatLng(p.latitude, p.longitude))
-          .toList();
-      if (pts.length >= 2) {
-        ctrl.updateLine(_casing!,
-            LineOptions(geometry: pts, lineColor: '#ffffff', lineWidth: 9.0));
-        ctrl.updateLine(_routeLine!,
-            LineOptions(geometry: pts, lineColor: '#4285F4', lineWidth: 6.0));
+      // Drop the old overlays and rebuild (route change = new geometry).
+      for (final l in _trafficLines) {
+        ctrl.removeLine(l);
       }
+      _trafficLines.clear();
+      for (final c in _trafficLights) {
+        ctrl.removeCircle(c);
+      }
+      _trafficLights.clear();
+      if (_casing != null) {
+        ctrl.removeLine(_casing!);
+        _casing = null;
+      }
+      if (_routeLine != null) {
+        ctrl.removeLine(_routeLine!);
+        _routeLine = null;
+      }
+      _addRoute();
       _lastRouteSig = _routeSignature(widget.routeGeometry);
     }
   }

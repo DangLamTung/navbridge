@@ -717,6 +717,7 @@ class _NavigationPageState extends State<NavigationPage> {
           _navigating
               ? VectorNavMap(
                   routeGeometry: route?.geometry ?? const [],
+                  routeSteps: route?.steps ?? const [],
                   current: current,
                   heading: _heading,
                   headingUp: _headingUp,

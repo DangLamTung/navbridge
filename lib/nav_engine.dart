@@ -11,6 +11,8 @@ import 'osrm.dart';
 class NavProgress {
   final int meter; // distance to the next maneuver
   final int iconCode;
+  final int nextIconCode; // maneuver right after the current one (0 = none)
+  final String nextText; // road name for the next maneuver
   final int etaHour;
   final int etaMinute;
   final String text; // road name / instruction
@@ -26,6 +28,8 @@ class NavProgress {
     required this.etaMinute,
     required this.text,
     required this.speedMps,
+    this.nextIconCode = 0,
+    this.nextText = '',
     this.stopIndex = 0,
     this.totalStops = 0,
     this.stopName = '',
@@ -100,6 +104,8 @@ class TurnByTurnEngine {
       _nextStep++;
     }
     final step = route.steps[_nextStep];
+    final nextIdx = _nextStep + 1;
+    final next = nextIdx < route.steps.length ? route.steps[nextIdx] : null;
 
     final meter = (_stepCum[_nextStep] - cum).clamp(0, route.distance).round();
     final icon = iconForManeuver(step.type, step.modifier);
@@ -123,6 +129,9 @@ class TurnByTurnEngine {
     return NavProgress(
       meter: meter,
       iconCode: icon,
+      nextIconCode:
+          next == null ? 0 : iconForManeuver(next.type, next.modifier),
+      nextText: next?.name ?? '',
       etaHour: eta.hour,
       etaMinute: eta.minute,
       text: text,

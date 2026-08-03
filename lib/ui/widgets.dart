@@ -3,8 +3,23 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../nav_protocol.dart';
+
 /// Google blue used across the app.
 const Color kAppBlue = Color(0xFF4285F4);
+
+/// Material icon for a nav-protocol maneuver code (shared by the nav UI).
+IconData maneuverIcon(int code) => switch (code) {
+      iconTurnLeft => Icons.turn_left,
+      iconTurnRight => Icons.turn_right,
+      iconSlightLeft => Icons.turn_slight_left,
+      iconSlightRight => Icons.turn_slight_right,
+      iconUturnLeft => Icons.u_turn_left,
+      iconUturnRight => Icons.u_turn_right,
+      iconRoundabout => Icons.roundabout_left,
+      iconArrive => Icons.flag,
+      _ => Icons.straight,
+    };
 
 /// A round, white, elevated action button (zoom, locate, clock…).
 class RoundActionButton extends StatelessWidget {

@@ -1,5 +1,5 @@
 {
- "pmtiles": "saigon.pmtiles",
+ "pmtiles": "saigon_z16.pmtiles",
  "sprite": [
   "sprite/osm-liberty.png",
   "sprite/osm-liberty.json",
