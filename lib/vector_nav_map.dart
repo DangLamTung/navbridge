@@ -11,6 +11,7 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -86,6 +87,7 @@ class _VectorNavMapState extends State<VectorNavMap> {
   double? _lastIconRotate;
   String? _lastIconName;
   double? _lastBearing;
+  ll.LatLng? _lastTarget; // last anchored camera target (for move detection)
 
   /// scale per icon so each renders ~44px on screen.
   double _iconSize(String name) =>
@@ -331,30 +333,62 @@ class _VectorNavMapState extends State<VectorNavMap> {
     final c = widget.current;
     if (ctrl == null || c == null) return;
     final bearing = _bearing();
+    final car = ll.LatLng(c.latitude, c.longitude);
+    // Google-style framing: shift the camera ahead of the travel direction so
+    // the car sits ~1/3 from the bottom and the road ahead is visible.
+    final ahead = _followTarget(car, bearing > 0 ? bearing : 0, _zoom);
+    final pos = CameraPosition(
+      target: LatLng(ahead.latitude, ahead.longitude),
+      zoom: _zoom,
+      bearing: bearing,
+      tilt: _tilt,
+    );
     if (!_hasPosition) {
-      ctrl.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(
-        target: LatLng(c.latitude, c.longitude),
-        zoom: 18,
-        bearing: bearing,
-        tilt: _tilt,
-      )));
+      ctrl.moveCamera(CameraUpdate.newCameraPosition(pos));
       _hasPosition = true;
       _lastBearing = bearing;
-    } else if (bearing != _lastBearing) {
-      // Rotate the map to the new heading (heading-up mode), keep the 3D tilt.
-      ctrl.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(
-        target: LatLng(c.latitude, c.longitude),
-        zoom: _zoom,
-        bearing: bearing,
-        tilt: _tilt,
-      )));
-      _lastBearing = bearing;
+      _lastTarget = ahead;
     } else {
-      // Just recentre on the exact position, keep zoom + bearing + tilt.
-      ctrl.moveCamera(
-          CameraUpdate.newLatLng(LatLng(c.latitude, c.longitude)));
+      final turned =
+          ((bearing - (_lastBearing ?? bearing)) % 360).abs() > 1.0;
+      final moved =
+          _lastTarget == null || _distMeters(_lastTarget!, ahead) > 5.0;
+      if (turned || moved) {
+        // Smooth animated glide (the Google feel) — a new animation cancels
+        // the previous one, so 1 Hz fixes merge into continuous motion.
+        ctrl.animateCamera(CameraUpdate.newCameraPosition(pos),
+            duration: const Duration(milliseconds: 450));
+        _lastBearing = bearing;
+        _lastTarget = ahead;
+      }
     }
     _updateCarMarker();
+  }
+
+  /// Camera target: the car position shifted ahead of the travel direction so
+  /// it sits ~1/3 from the bottom of the screen (more road ahead, Google-like).
+  ll.LatLng _followTarget(ll.LatLng car, double bearingDeg, double zoom) {
+    // Approx ground meters per pixel at this zoom (Web Mercator).
+    final mpp = 156543.03392 *
+        math.cos(car.latitude * math.pi / 180) /
+        math.pow(2, zoom);
+    // Visible vertical ground extent: viewport px × m/px × 3D-tilt extension
+    // (tilted camera looks further ahead).
+    final visible = 1100.0 * mpp * 1.8;
+    final offset = 0.13 * visible;
+    final rad = bearingDeg * math.pi / 180;
+    final dLat = offset * math.cos(rad) / 111320.0;
+    final dLng = offset * math.sin(rad) /
+        (111320.0 * math.cos(car.latitude * math.pi / 180));
+    return ll.LatLng(car.latitude + dLat, car.longitude + dLng);
+  }
+
+  /// Approximate ground distance in meters between two points.
+  double _distMeters(ll.LatLng a, ll.LatLng b) {
+    final dLat = (b.latitude - a.latitude) * 111320.0;
+    final dLng = (b.longitude - a.longitude) * 111320.0 *
+        math.cos(a.latitude * math.pi / 180);
+    return math.sqrt(dLat * dLat + dLng * dLng);
   }
 
   /// Soft halo under the car (Google-style location cone).
