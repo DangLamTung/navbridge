@@ -80,7 +80,7 @@ class _VectorNavMapState extends State<VectorNavMap> {
   Symbol? _carMarker;
   Circle? _carCone;
   bool _hasPosition = false;
-  double _zoom = 17;
+  double _zoom = 18; // follow zoom (overzooms the z16 tiles, Google-style)
   ll.LatLng? _lastRouteSig;
   ll.LatLng? _lastCarPos;
   double? _lastIconRotate;
@@ -334,7 +334,7 @@ class _VectorNavMapState extends State<VectorNavMap> {
     if (!_hasPosition) {
       ctrl.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(
         target: LatLng(c.latitude, c.longitude),
-        zoom: 17,
+        zoom: 18,
         bearing: bearing,
         tilt: _tilt,
       )));
@@ -445,7 +445,7 @@ class _VectorNavMapState extends State<VectorNavMap> {
         zoom: 15,
       ),
       minMaxZoomPreference:
-          const MinMaxZoomPreference(3, 17), // cap at 17 (user's max)
+          const MinMaxZoomPreference(3, 19), // pinch up to z19 (overzoom)
       compassEnabled: true,
       onMapCreated: (ctrl) => _controller = ctrl,
       onStyleLoadedCallback: () async {
