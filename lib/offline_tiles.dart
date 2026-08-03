@@ -27,8 +27,9 @@ const String _ua = 'navbridge/1.0 (BLE portable navigation; offline tiles)';
 // threads and ~1 tile per second. flutter_map normally fires a burst of
 // concurrent requests while panning/zooming → 403/429 blocks (and can get
 // the IP banned). This coordinator serializes every tile fetch so the app
-// stays under the limit, backs off when the server blocks us, and never
-// re-requests a tile that already failed this session.
+// stays under the limit, and automatically fails over to other free
+// OSM-based tile servers when one blocks us (an IP ban on
+// tile.openstreetmap.org does NOT affect other providers).
 
 /// Max concurrent tile HTTP fetches (OSM policy: <= 2 threads).
 const int _maxTileConcurrency = 2;
@@ -36,60 +37,115 @@ const int _maxTileConcurrency = 2;
 /// Minimum gap between tile requests (OSM policy: ~1 tile/s).
 const Duration _minTileGap = Duration(milliseconds: 1000);
 
-/// How long to pause all tile fetches after a 403/429 (avoid IP bans).
-const Duration _blockBackoff = Duration(minutes: 2);
+/// How long to pause ALL fetches when every server has blocked us.
+const Duration _blockBackoff = Duration(minutes: 5);
+
+/// Free OSM-based fallback tile servers (no API key, attribution required),
+/// used automatically when the primary (tile.openstreetmap.org) blocks us.
+/// `{s}` is substituted with a/b/c for providers that use subdomains.
+/// (Verified reachable 2026-08-03; OpenFreeMap was dropped — wrong tile
+/// format, 404s.)
+const List<String> _fallbackTileTemplates = [
+  'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+  'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+];
 
 DateTime _lastTileRequest = DateTime.fromMillisecondsSinceEpoch(0);
 DateTime _tileBlockedUntil = DateTime.fromMillisecondsSinceEpoch(0);
 int _tileInFlight = 0;
 final Set<String> _inFlightTiles = {};
 final Set<String> _failedTiles = {};
+final Set<String> _blockedTileServers = {};
+List<String> _serverList = [];
+int _serverIndex = 0;
 
-/// Fetches one tile respecting the OSM tile policy. Returns null when the
-/// tile is unavailable (server blocked, rate-limited, HTTP error, or it
-/// already failed this session) — callers fall back to a transparent tile.
-Future<http.Response?> _fetchTile(int z, int x, int y, String url) async {
+String _tileUrl(String template, int z, int x, int y) {
+  var url = template
+      .replaceAll('{z}', '$z')
+      .replaceAll('{x}', '$x')
+      .replaceAll('{y}', '$y');
+  // Some providers balance across a/b/c subdomains.
+  const subs = ['a', 'b', 'c'];
+  url = url.replaceAll('{s}', subs[(x + y) % subs.length]);
+  return url;
+}
+
+String _tileHost(String template) {
+  try {
+    final h = Uri.parse(template).host;
+    return h.isEmpty ? template : h;
+  } catch (_) {
+    return template;
+  }
+}
+
+/// Fetches one tile respecting the OSM tile policy, with automatic failover
+/// across the primary + fallback tile servers. Returns null when every
+/// server failed — callers fall back to a transparent tile.
+Future<http.Response?> _fetchTile(int z, int x, int y, String primary) async {
   final key = '$z/$x/$y';
-  if (_tileBlockedUntil.isAfter(DateTime.now())) return null; // backoff
+  if (_tileBlockedUntil.isAfter(DateTime.now())) return null; // all blocked
   if (_failedTiles.contains(key) || _inFlightTiles.contains(key)) return null;
 
-  // Wait for a concurrency slot.
-  while (_tileInFlight >= _maxTileConcurrency) {
-    await Future<void>.delayed(const Duration(milliseconds: 120));
-  }
-  // Respect the ~1 tile/s minimum spacing.
-  final wait = _minTileGap - DateTime.now().difference(_lastTileRequest);
-  if (wait > Duration.zero) {
-    await Future<void>.delayed(wait);
+  if (_serverList.isEmpty) _serverList = [primary, ..._fallbackTileTemplates];
+
+  // Every server has blocked us this session → pause, then start fresh.
+  if (_blockedTileServers.containsAll(_serverList)) {
+    _tileBlockedUntil = DateTime.now().add(_blockBackoff);
+    _blockedTileServers.clear();
+    _serverIndex = 0;
+    debugPrint('TILE: all tile servers blocked — pausing '
+        '${_blockBackoff.inMinutes} min');
+    return null;
   }
 
-  _tileInFlight++;
-  _inFlightTiles.add(key);
-  _lastTileRequest = DateTime.now();
-  try {
-    final res = await http
-        .get(Uri.parse(url), headers: {'User-Agent': _ua})
-        .timeout(const Duration(seconds: 8));
-    if (res.statusCode == 403 || res.statusCode == 429) {
-      // The server is telling us to stop — pause ALL tile fetches.
-      _tileBlockedUntil = DateTime.now().add(_blockBackoff);
+  // Try servers in rotation until one serves this tile.
+  var tried = 0;
+  while (tried < _serverList.length) {
+    while (_blockedTileServers.contains(_serverList[_serverIndex])) {
+      _serverIndex = (_serverIndex + 1) % _serverList.length;
+    }
+    final template = _serverList[_serverIndex];
+
+    // Wait for a concurrency slot.
+    while (_tileInFlight >= _maxTileConcurrency) {
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+    // Respect the ~1 tile/s minimum spacing.
+    final wait = _minTileGap - DateTime.now().difference(_lastTileRequest);
+    if (wait > Duration.zero) await Future<void>.delayed(wait);
+
+    _tileInFlight++;
+    _inFlightTiles.add(key);
+    _lastTileRequest = DateTime.now();
+    try {
+      final res = await http
+          .get(Uri.parse(_tileUrl(template, z, x, y)),
+              headers: {'User-Agent': _ua})
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode == 403 || res.statusCode == 429) {
+        // This provider blocked us — remember it and try the next one.
+        _blockedTileServers.add(template);
+        debugPrint('TILE: ${_tileHost(template)} blocked '
+            '(${res.statusCode}) — switching server');
+        _serverIndex = (_serverIndex + 1) % _serverList.length;
+        tried++;
+        continue;
+      }
+      if (res.statusCode != 200 || res.bodyBytes.isEmpty) {
+        _failedTiles.add(key); // don't re-request the same missing tile
+        return null;
+      }
+      return res;
+    } catch (_) {
       _failedTiles.add(key);
-      debugPrint('TILE: server blocked tile (${res.statusCode}) — '
-          'pausing fetches for ${_blockBackoff.inMinutes} min');
       return null;
+    } finally {
+      _tileInFlight--;
+      _inFlightTiles.remove(key);
     }
-    if (res.statusCode != 200 || res.bodyBytes.isEmpty) {
-      _failedTiles.add(key); // don't re-request the same missing tile
-      return null;
-    }
-    return res;
-  } catch (_) {
-    _failedTiles.add(key);
-    return null;
-  } finally {
-    _tileInFlight--;
-    _inFlightTiles.remove(key);
   }
+  return null; // every server failed for this tile
 }
 
 /// Base URL for bulk region tile downloads.
@@ -409,14 +465,11 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
       }
     }
     if (await isOnline()) {
-      final url = (options.urlTemplate ?? '')
-          .replaceAll('{z}', '$z')
-          .replaceAll('{x}', '$x')
-          .replaceAll('{y}', '$y');
-      // Rate-limited + serialized so we stay under the OSM tile policy
-      // (never a burst, no repeated requests for failed tiles, backoff on
-      // 403/429).
-      final res = await _fetchTile(z, x, y, url);
+      // Rate-limited + serialized so we stay under the OSM tile policy,
+      // with automatic failover to other free OSM tile servers when one
+      // blocks us (403/429 — e.g. an IP ban).
+      final res =
+          await _fetchTile(z, x, y, options.urlTemplate ?? '');
       if (res != null && res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
         file.createSync(recursive: true);
         file.writeAsBytesSync(res.bodyBytes);
