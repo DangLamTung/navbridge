@@ -30,6 +30,11 @@ Notes:
   far away). A normal city route (≈ 8 km) is measurably lighter.
 - Top threads: a binder thread ~3.4 % (tile/JNI work), RenderThread present;
   85 threads total (GraphHopper + Flutter + MapLibre + GC).
+- **Google-feel smooth follow (f299904 → eased camera)**: navigation now eases
+  the camera ~30 fps while driving (car stays glued to the screen anchor).
+  Re-measured 2026-08-03: steady state rises from ~0–3 % to ~7–10 % of one
+  core (avg ≈ 19 % incl. a single 135 % render burst). Still light; the cost of
+  buttery motion, same trade-off Google Maps makes.
 
 ## RAM usage during navigation
 

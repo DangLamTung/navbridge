@@ -9,6 +9,7 @@
 /// position like a normal car navigation map.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -86,8 +87,14 @@ class _VectorNavMapState extends State<VectorNavMap> {
   ll.LatLng? _lastCarPos;
   double? _lastIconRotate;
   String? _lastIconName;
-  double? _lastBearing;
-  ll.LatLng? _lastTarget; // last anchored camera target (for move detection)
+  // Per-frame camera easing (Google feel): the camera AND the car icon glide
+  // together toward the target so the icon stays locked to its screen anchor
+  // instead of the camera lagging behind a jumping icon.
+  ll.LatLng? _camPos; // current (eased) camera target
+  double _camBearing = 0;
+  ll.LatLng? _wantPos; // desired camera target (car + anchor offset)
+  double _wantBearing = 0;
+  Timer? _camTimer;
 
   /// scale per icon so each renders ~44px on screen.
   double _iconSize(String name) =>
@@ -337,32 +344,87 @@ class _VectorNavMapState extends State<VectorNavMap> {
     // Google-style framing: shift the camera ahead of the travel direction so
     // the car sits ~1/3 from the bottom and the road ahead is visible.
     final ahead = _followTarget(car, bearing > 0 ? bearing : 0, _zoom);
-    final pos = CameraPosition(
-      target: LatLng(ahead.latitude, ahead.longitude),
-      zoom: _zoom,
-      bearing: bearing,
-      tilt: _tilt,
-    );
     if (!_hasPosition) {
-      ctrl.moveCamera(CameraUpdate.newCameraPosition(pos));
+      _camPos = ahead;
+      _camBearing = bearing;
+      ctrl.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(
+        target: LatLng(ahead.latitude, ahead.longitude),
+        zoom: _zoom,
+        bearing: bearing,
+        tilt: _tilt,
+      )));
       _hasPosition = true;
-      _lastBearing = bearing;
-      _lastTarget = ahead;
     } else {
-      final turned =
-          ((bearing - (_lastBearing ?? bearing)) % 360).abs() > 1.0;
-      final moved =
-          _lastTarget == null || _distMeters(_lastTarget!, ahead) > 5.0;
+      final turned = ((bearing - _camBearing) % 360).abs() > 1.0;
+      final moved = _camPos == null || _distMeters(_camPos!, ahead) > 2.0;
       if (turned || moved) {
-        // Smooth animated glide (the Google feel) — a new animation cancels
-        // the previous one, so 1 Hz fixes merge into continuous motion.
-        ctrl.animateCamera(CameraUpdate.newCameraPosition(pos),
-            duration: const Duration(milliseconds: 450));
-        _lastBearing = bearing;
-        _lastTarget = ahead;
+        _wantPos = ahead;
+        _wantBearing = bearing;
+        _camTimer ??= Timer.periodic(
+            const Duration(milliseconds: 33), _tickCamera);
       }
     }
     _updateCarMarker();
+  }
+
+  /// One easing step toward the desired camera target. The camera AND the car
+  /// icon glide together, so the icon stays locked to its screen anchor
+  /// (Google feel) instead of the camera lagging behind a jumping icon.
+  void _tickCamera(Timer t) {
+    if (!mounted) {
+      _stopCameraEase();
+      return;
+    }
+    final ctrl = _controller;
+    final want = _wantPos;
+    final cur = _camPos;
+    if (ctrl == null || want == null || cur == null) {
+      _stopCameraEase();
+      return;
+    }
+    const k = 0.20; // per-tick ease factor (~30fps → converges in ~300ms)
+    if (_distMeters(cur, want) < 0.5) {
+      // Settled on the target.
+      ctrl.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(
+        target: LatLng(want.latitude, want.longitude),
+        zoom: _zoom,
+        bearing: _wantBearing,
+        tilt: _tilt,
+      )));
+      _camPos = want;
+      _camBearing = _wantBearing;
+      _stopCameraEase();
+      return;
+    }
+    final lat = cur.latitude + (want.latitude - cur.latitude) * k;
+    final lng = cur.longitude + (want.longitude - cur.longitude) * k;
+    final bearing = _lerpBearing(_camBearing, _wantBearing, k);
+    _camPos = ll.LatLng(lat, lng);
+    _camBearing = bearing;
+    ctrl.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(
+      target: LatLng(lat, lng),
+      zoom: _zoom,
+      bearing: bearing,
+      tilt: _tilt,
+    )));
+    // Glide the icon with the camera: it sits offset BEHIND the camera
+    // target, so place it at the eased position to keep it glued to the
+    // anchor (no visible lag between camera and icon).
+    final carPos = _followTarget(_camPos!, _wantBearing + 180, _zoom);
+    _paintCar(carPos, bearing);
+  }
+
+  void _stopCameraEase() {
+    _camTimer?.cancel();
+    _camTimer = null;
+  }
+
+  /// Shortest-path bearing interpolation (350→10 goes through 0, not 340°).
+  double _lerpBearing(double a, double b, double k) {
+    var diff = (b - a) % 360;
+    if (diff > 180) diff -= 360;
+    if (diff < -180) diff += 360;
+    return a + diff * k;
   }
 
   /// Camera target: the car position shifted ahead of the travel direction so
@@ -425,26 +487,34 @@ class _VectorNavMapState extends State<VectorNavMap> {
   }
 
   void _updateCarMarker() {
-    final ctrl = _controller;
     final c = widget.current;
-    if (ctrl == null || c == null || _carMarker == null) return;
-    final h = widget.heading ?? 0;
+    if (c == null) return;
+    _paintCar(ll.LatLng(c.latitude, c.longitude), widget.heading ?? 0);
+  }
+
+  /// Place the car icon + halo at [pos], rotated to [heading]. Called both on
+  /// new GPS fixes and each camera-ease frame (to keep the icon glued to the
+  /// screen anchor while the camera glides).
+  void _paintCar(ll.LatLng pos, double heading) {
+    final ctrl = _controller;
+    if (ctrl == null || _carMarker == null) return;
     final iconChanged = widget.carIcon != _lastIconName;
-    final posChanged = _lastCarPos != c;
-    final rotChanged = (h - (_lastIconRotate ?? 0)).abs() > 0.5;
+    final posChanged =
+        _lastCarPos == null || _distMeters(_lastCarPos!, pos) > 0.3;
+    final rotChanged = (heading - (_lastIconRotate ?? 0)).abs() > 0.5;
     if (!posChanged && !rotChanged && !iconChanged) return;
-    _lastCarPos = c;
-    _lastIconRotate = h;
+    _lastCarPos = pos;
+    _lastIconRotate = heading;
     _lastIconName = widget.carIcon;
     ctrl.updateSymbol(_carMarker!, SymbolOptions(
-      geometry: LatLng(c.latitude, c.longitude),
+      geometry: LatLng(pos.latitude, pos.longitude),
       iconImage: widget.carIcon,
       iconSize: _iconSize(widget.carIcon),
-      iconRotate: h,
+      iconRotate: heading,
       iconAnchor: 'center',
     ));
     ctrl.updateCircle(_carCone!, CircleOptions(
-      geometry: LatLng(c.latitude, c.longitude),
+      geometry: LatLng(pos.latitude, pos.longitude),
     ));
   }
 
@@ -453,7 +523,9 @@ class _VectorNavMapState extends State<VectorNavMap> {
     super.didUpdateWidget(old);
     if (old.headingUp != widget.headingUp) {
       // Force a re-follow with the new north/heading-up bearing.
-      _lastBearing = null;
+      _camBearing = 0;
+      _camPos = null;
+      _wantPos = null;
     }
     _followPosition();
     _updateRoute();
@@ -493,6 +565,7 @@ class _VectorNavMapState extends State<VectorNavMap> {
 
   @override
   void dispose() {
+    _camTimer?.cancel();
     _controller?.dispose();
     super.dispose();
   }
