@@ -16,6 +16,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'offline_tiles.dart' show forceOffline, isOnline;
 import 'osrm.dart';
+import 'route_profile.dart';
 
 const MethodChannel _channel = MethodChannel('navbridge/routing');
 
@@ -200,15 +201,24 @@ Future<bool> downloadToFile(
 /// Best route source: on-device GraphHopper when loaded, OSRM otherwise.
 /// In forced-offline mode only the on-device graph is used (never OSRM).
 /// Throws when no source is available (fully offline without a graph).
-Future<OsrmRoute> fetchAnyRoute(List<LatLng> points) async {
-  if (OfflineRouter.instance.isLoaded) {
+///
+/// [profile] selects the road type (car / motorbike / bicycle / walking).
+/// The on-device graph is car-only: car routes use it; other profiles always
+/// route online (OSRM) so the path matches the chosen mode of transport.
+Future<OsrmRoute> fetchAnyRoute(
+  List<LatLng> points, {
+  RouteProfile profile = RouteProfile.car,
+}) async {
+  if (profile == RouteProfile.car && OfflineRouter.instance.isLoaded) {
     final local = await OfflineRouter.instance.route(points);
     if (local != null) return local;
   }
   if (forceOffline) {
-    throw StateError('Ngoại tuyến: chưa tải bộ dữ liệu chỉ đường');
+    throw StateError(profile == RouteProfile.car
+        ? 'Ngoại tuyến: chưa tải bộ dữ liệu chỉ đường'
+        : 'Ngoại tuyến: bộ dữ liệu chỉ hỗ trợ ô tô');
   }
-  return fetchOsrmRoute(points);
+  return fetchOsrmRoute(points, profile: profile.osrm);
 }
 
 /// True when on-device routing could be used right now (loaded graph).

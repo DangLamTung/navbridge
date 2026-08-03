@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../route_profile.dart';
 import 'widgets.dart';
 
 class RoutePreviewCard extends StatelessWidget {
@@ -13,6 +14,8 @@ class RoutePreviewCard extends StatelessWidget {
     required this.destination,
     required this.onStart,
     required this.onClear,
+    required this.profile,
+    required this.onProfile,
     this.stopCount = 0,
   });
 
@@ -31,6 +34,10 @@ class RoutePreviewCard extends StatelessWidget {
   /// Number of planned stops (multi-stop trip). Shown when > 1.
   final int stopCount;
 
+  /// Active route/road type (car / motorbike / bicycle / walking).
+  final RouteProfile profile;
+  final ValueChanged<RouteProfile> onProfile;
+
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -46,7 +53,7 @@ class RoutePreviewCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Icon(Icons.directions, color: kAppBlue, size: 26),
+                Icon(profile.icon, color: kAppBlue, size: 26),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -71,6 +78,22 @@ class RoutePreviewCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
+            // Route / road type selector: Ô tô · Xe máy · Xe đạp · Đi bộ.
+            Row(
+              children: [
+                for (final p in kRouteProfiles) ...[
+                  Expanded(
+                    child: _ProfileChip(
+                      profile: p,
+                      selected: p == profile,
+                      onTap: () => onProfile(p),
+                    ),
+                  ),
+                  if (p != kRouteProfiles.last) const SizedBox(width: 6),
+                ],
+              ],
+            ),
+            const SizedBox(height: 10),
             SizedBox(
               height: 44,
               child: ElevatedButton.icon(
@@ -92,6 +115,50 @@ class RoutePreviewCard extends StatelessWidget {
               onPressed: onClear,
               icon: const Icon(Icons.close, size: 16),
               label: const Text('Xoá lộ trình', style: TextStyle(fontSize: 13)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One selectable road-type chip (icon + label).
+class _ProfileChip extends StatelessWidget {
+  const _ProfileChip({
+    required this.profile,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final RouteProfile profile;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = selected ? Colors.white : Colors.grey[700];
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? kAppBlue : const Color(0xFFF1F3F4),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(profile.icon, size: 18, color: fg),
+            const SizedBox(height: 2),
+            Text(
+              profile.label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: fg,
+              ),
             ),
           ],
         ),

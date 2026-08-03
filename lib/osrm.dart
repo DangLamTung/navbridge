@@ -86,16 +86,18 @@ List<LatLng> decodePolyline(String encoded) {
 /// is reported via `stopCumulative` (meters along the polyline where that
 /// waypoint is reached).
 /// `baseUrl` — OSRM server root (defaults to the public demo server).
+/// `profile` — OSRM routing profile: driving / cycling / walking.
 Future<OsrmRoute> fetchOsrmRoute(
   List<LatLng> points, {
   String? baseUrl,
   bool steps = true,
+  String profile = 'driving',
 }) async {
   if (points.length < 2) {
     throw Exception('Cần ít nhất 2 điểm để định tuyến');
   }
   final coords = points.map((p) => '${p.longitude},${p.latitude}').join(';');
-  final url = '${baseUrl ?? osrmPublic}/route/v1/driving/'
+  final url = '${baseUrl ?? osrmPublic}/route/v1/$profile/'
       '$coords?overview=full&geometries=polyline&steps=$steps';
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})

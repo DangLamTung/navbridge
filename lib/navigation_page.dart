@@ -26,6 +26,7 @@ import 'nav_protocol.dart';
 import 'offline_screen.dart';
 import 'offline_router.dart';
 import 'offline_tiles.dart';
+import 'route_profile.dart';
 import 'settings.dart';
 import 'osm_api.dart';
 import 'osrm.dart';
@@ -79,6 +80,7 @@ class _NavigationPageState extends State<NavigationPage> {
   double? _heading;
   bool _headingUp = true; // rotate map so travel direction points up
   String _carIcon = 'arrow';
+  RouteProfile _routeProfile = RouteProfile.car; // road type for routing
   NavProgress? _progress;
   StreamSubscription<Position>? _gpsSub;
   bool _navigating = false;
@@ -334,7 +336,7 @@ class _NavigationPageState extends State<NavigationPage> {
     final dest = _destination;
     if (dest == null) return;
     try {
-      final route = await fetchAnyRoute([from, dest]);
+      final route = await fetchAnyRoute([from, dest], profile: _routeProfile);
       if (!mounted || _destination == null) return;
       setState(() {
         _route = route;
@@ -508,15 +510,17 @@ class _NavigationPageState extends State<NavigationPage> {
     final points = [origin, for (final s in _stops) s.pos];
     OsrmRoute route;
     try {
-      route = await fetchAnyRoute(points);
+      route = await fetchAnyRoute(points, profile: _routeProfile);
     } catch (_) {
-      // Offline and no offline graph for this route → offer to go online
-      // instead of just failing (the user wants to choose if needed).
+      // Offline and no matching offline data → offer to go online instead
+      // of just failing (the user wants to choose if needed).
       if (!forceOffline) rethrow;
-      final goOnline = await _confirmGoOnline(
-          'Chưa có bộ dữ liệu chỉ đường ngoại tuyến cho tuyến này.');
+      final msg = _routeProfile == RouteProfile.car
+          ? 'Chưa có bộ dữ liệu chỉ đường ngoại tuyến cho tuyến này.'
+          : 'Bộ dữ liệu ngoại tuyến chỉ hỗ trợ ô tô — cần trực tuyến cho ${_routeProfile.label.toLowerCase()}. ';
+      final goOnline = await _confirmGoOnline(msg);
       if (!goOnline || !mounted) return;
-      route = await fetchOsrmRoute(points);
+      route = await fetchOsrmRoute(points, profile: _routeProfile.osrm);
     }
     debugPrint('PLAN: BUILD ok pts=${points.length} '
         'dist=${route.distance}m stops=${route.stopCumulative.length}');
@@ -538,6 +542,15 @@ class _NavigationPageState extends State<NavigationPage> {
       route.stopCumulative.length == _stops.length
           ? [for (final s in _stops) s.name]
           : const [];
+
+  /// Switch the road type (ô tô / xe máy / xe đạp / đi bộ) and re-plan.
+  void _setRouteProfile(RouteProfile p) {
+    if (p == _routeProfile) return;
+    setState(() => _routeProfile = p);
+    if (_stops.isNotEmpty) {
+      _buildPlanRoute(); // re-route with the new mode of transport
+    }
+  }
 
   void _moveStop(int index, int delta) {
     final i = index + delta;
@@ -1196,6 +1209,8 @@ class _NavigationPageState extends State<NavigationPage> {
                 distanceText: formatDistance(route.distance),
                 destination: _destinationName,
                 stopCount: _stops.length,
+                profile: _routeProfile,
+                onProfile: _setRouteProfile,
                 onStart: _startNavigation,
                 onClear: _exitNavigation,
               )
