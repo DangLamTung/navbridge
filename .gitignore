@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# GraphHopper build artifacts (large; rebuild via tools/build_graph.sh)
+tools/data/*.osm.pbf
+tools/data/*.ghz
+tools/data/*_graph/
+tools/data/extract_test/
