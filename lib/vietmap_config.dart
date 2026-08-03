@@ -3,15 +3,15 @@
 library;
 
 class VietmapConfig {
-  /// Vietmap API key — autocomplete / place / routing (NOT tiles).
-  static const String apiKey = String.fromEnvironment(
-      'VIETMAP_API_KEY',
-      defaultValue: 'REDACTED_VIETMAP_API_KEY');
+  /// Vietmap API key — autocomplete / place / routing.
+  ///
+  /// Provided at BUILD TIME via --dart-define. NEVER put a real key in this
+  /// file (the original committed key was exposed via git history and must be
+  /// rotated in the Vietmap console).
+  static const String apiKey = String.fromEnvironment('VIETMAP_API_KEY');
 
-  /// Vietmap TILE key — map tiles / style.
-  static const String tileKey = String.fromEnvironment(
-      'VIETMAP_TILE_KEY',
-      defaultValue: 'REDACTED_VIETMAP_TILE_KEY');
+  /// Vietmap TILE key — map tiles / style (also --dart-define only).
+  static const String tileKey = String.fromEnvironment('VIETMAP_TILE_KEY');
 
   static const String autocomplete =
       'https://maps.vietmap.vn/api/autocomplete/v4';
