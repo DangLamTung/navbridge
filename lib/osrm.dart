@@ -40,6 +40,26 @@ class OsrmStep {
   });
 }
 
+/// One toll station on a route (Vietmap `tolls[]`).
+class TollInfo {
+  final String name;
+  final String address;
+  final String type; // 'entry' | 'exit'
+  final int price; // VND charged at this station
+  final String? roadName; // address/road the station is on
+
+  const TollInfo({
+    required this.name,
+    required this.address,
+    required this.type,
+    required this.price,
+    this.roadName,
+  });
+
+  /// Total toll for this route in VND (0 = no data).
+  int get tollVnd => price;
+}
+
 /// A full OSRM route.
 class OsrmRoute {
   final double distance; // meters
@@ -48,12 +68,21 @@ class OsrmRoute {
   final List<OsrmStep> steps;
   final List<double> stopCumulative; // meters along the polyline at each stop
 
+  /// Total toll cost in VND (Vietmap only; null when the backend didn't
+  /// provide toll data).
+  final int? tollCost;
+
+  /// Toll stations along the route (Vietmap only; empty otherwise).
+  final List<TollInfo> tolls;
+
   OsrmRoute({
     required this.distance,
     required this.duration,
     required this.geometry,
     required this.steps,
     this.stopCumulative = const [],
+    this.tollCost,
+    this.tolls = const [],
   });
 }
 

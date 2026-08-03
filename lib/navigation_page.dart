@@ -34,6 +34,7 @@ import 'overpass.dart';
 import 'trip_logger.dart';
 import 'trip_plan.dart';
 import 'trips_screen.dart';
+import 'ui/arrival_card.dart';
 import 'vector_nav_map.dart';
 import 'vietmap_api.dart';
 import 'vietmap_config.dart';
@@ -87,6 +88,12 @@ class _NavigationPageState extends State<NavigationPage> {
   StreamSubscription<Position>? _gpsSub;
   bool _navigating = false;
   String _clockStatus = 'off';
+
+  // --- Google-style extras: step list, alternative routes ----------------
+  bool _showSteps = false; // expanded turn-banner step list
+  List<OsrmRoute> _alternativeRoutes = []; // Vietmap alternative routes
+  int _selectedRoute = 0; // index into [_alternativeRoutes]
+  List<LatLng> _planPoints = []; // route points for re-fitting the camera
 
   // --- simulated drive (test mode) ---
   Timer? _simTimer;
@@ -350,6 +357,9 @@ class _NavigationPageState extends State<NavigationPage> {
       if (!mounted || _destination == null) return;
       setState(() {
         _route = route;
+        _alternativeRoutes = [];
+        _selectedRoute = 0;
+        _showSteps = false;
         _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
       });
     } catch (_) {
@@ -535,8 +545,12 @@ class _NavigationPageState extends State<NavigationPage> {
     _current ??= origin;
     final points = [origin, for (final s in _stops) s.pos];
     OsrmRoute route;
+    List<OsrmRoute> alternatives = [];
     try {
-      route = await fetchAnyRoute(points, profile: _routeProfile);
+      // Vietmap can return up to 3 route options (best first).
+      final routes = await fetchAnyRoutes(points, profile: _routeProfile);
+      route = routes.first;
+      alternatives = routes.length > 1 ? routes : [];
     } catch (_) {
       // Offline and no matching offline data → offer to go online instead
       // of just failing (the user wants to choose if needed).
@@ -549,10 +563,14 @@ class _NavigationPageState extends State<NavigationPage> {
       route = await fetchOsrmRoute(points, profile: _routeProfile.osrm);
     }
     debugPrint('PLAN: BUILD ok pts=${points.length} '
-        'dist=${route.distance}m stops=${route.stopCumulative.length}');
+        'dist=${route.distance}m stops=${route.stopCumulative.length} '
+        'alts=${alternatives.length}');
     if (!mounted) return;
     setState(() {
       _route = route;
+      _alternativeRoutes = alternatives;
+      _selectedRoute = 0;
+      _planPoints = points;
       _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
       _destination = _stops.last.pos;
       _navigating = false;
@@ -562,6 +580,25 @@ class _NavigationPageState extends State<NavigationPage> {
       bounds: LatLngBounds.fromPoints(points),
       padding: const EdgeInsets.all(60),
     ));
+  }
+
+  /// Switch to alternative route [i] (Google's tap-to-choose preview).
+  void _selectAlternative(int i) {
+    if (i < 0 || i >= _alternativeRoutes.length || i == _selectedRoute) return;
+    final route = _alternativeRoutes[i];
+    debugPrint('PLAN: alternative $i selected '
+        'dist=${route.distance}m');
+    setState(() {
+      _selectedRoute = i;
+      _route = route;
+      _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
+    });
+    if (_planPoints.length >= 2) {
+      _map.fitCamera(CameraFit.bounds(
+        bounds: LatLngBounds.fromPoints(_planPoints),
+        padding: const EdgeInsets.all(60),
+      ));
+    }
   }
 
   List<String> _engineStopNames(OsrmRoute route) =>
@@ -596,6 +633,10 @@ class _NavigationPageState extends State<NavigationPage> {
         _engine = null;
         _destination = null;
         _progress = null;
+        _alternativeRoutes = [];
+        _selectedRoute = 0;
+        _planPoints = [];
+        _showSteps = false;
       });
       return;
     }
@@ -672,6 +713,10 @@ class _NavigationPageState extends State<NavigationPage> {
       _progress = null;
       _roadInfo = null;
       _stops.clear();
+      _showSteps = false;
+      _alternativeRoutes = [];
+      _selectedRoute = 0;
+      _planPoints = [];
     });
     await _finishTrip(); // save the recorded trip
   }
@@ -993,6 +1038,7 @@ class _NavigationPageState extends State<NavigationPage> {
                       child: RoadInfoChip(
                         info: _roadInfo,
                         loading: _roadLoading,
+                        speedMps: _progress?.speedMps,
                       ),
                     ),
                   // Navigation-mode controls: heading-up toggle + fun car
@@ -1115,6 +1161,14 @@ class _NavigationPageState extends State<NavigationPage> {
         ),
         if (route != null)
           PolylineLayer(polylines: [
+            // Alternative routes drawn dimmed (Google's tap-to-compare).
+            for (var i = 0; i < _alternativeRoutes.length; i++)
+              if (i != _selectedRoute)
+                Polyline(
+                  points: _alternativeRoutes[i].geometry,
+                  color: const Color(0xFF9BB2E8),
+                  strokeWidth: 5,
+                ),
             // white casing under the blue route (Google look)
             Polyline(points: route.geometry, color: Colors.white, strokeWidth: 9),
             Polyline(points: route.geometry, color: kAppBlue, strokeWidth: 6),
@@ -1219,6 +1273,10 @@ class _NavigationPageState extends State<NavigationPage> {
       stopLabel: (nav?.totalStops ?? 0) > 1
           ? 'Điểm ${(nav!.stopIndex + 1)}/${nav.totalStops}'
           : '',
+      tripProgress: nav?.progress ?? 0,
+      steps: _route?.steps ?? const [],
+      expanded: _showSteps,
+      onToggle: () => setState(() => _showSteps = !_showSteps),
       onExit: _exitNavigation,
     );
   }
@@ -1226,26 +1284,46 @@ class _NavigationPageState extends State<NavigationPage> {
   Widget _bottomArea() {
     final route = _route;
     final nav = _progress;
-    final card = _navigating
-        ? NavigationCard(
-            progress: _progress,
-            onStop: _exitNavigation,
-            stopLabel: (nav?.totalStops ?? 0) > 1
-                ? 'Điểm ${(nav!.stopIndex + 1)}/${nav.totalStops}'
-                : '',
-          )
-        : (route != null
-            ? RoutePreviewCard(
-                etaText: '${(route.duration / 60).round()} ph',
-                distanceText: formatDistance(route.distance),
-                destination: _destinationName,
-                stopCount: _stops.length,
-                profile: _routeProfile,
-                onProfile: _setRouteProfile,
-                onStart: _startNavigation,
-                onClear: _exitNavigation,
-              )
-            : null);
+    final stopLabel = (nav?.totalStops ?? 0) > 1
+        ? 'Điểm ${(nav!.stopIndex + 1)}/${nav.totalStops}'
+        : '';
+    final Widget? card;
+    if (_navigating) {
+      // Google-style arrival card when the destination is reached.
+      if (nav != null && nav.iconCode == iconArrive) {
+        card = ArrivalCard(
+          progress: nav,
+          onStop: _exitNavigation,
+          stopLabel: stopLabel,
+        );
+      } else {
+        card = NavigationCard(
+          progress: _progress,
+          onStop: _exitNavigation,
+          stopLabel: stopLabel,
+        );
+      }
+    } else if (route != null) {
+      card = RoutePreviewCard(
+        etaText: '${(route.duration / 60).round()} ph',
+        distanceText: formatDistance(route.distance),
+        destination: _destinationName,
+        stopCount: _stops.length,
+        profile: _routeProfile,
+        onProfile: _setRouteProfile,
+        onStart: _startNavigation,
+        onClear: _exitNavigation,
+        tollCost: route.tollCost,
+        alternativeLabels: [
+          for (final r in _alternativeRoutes)
+            '${(r.duration / 60).round()} ph • ${formatDistance(r.distance)}',
+        ],
+        selectedAlternative: _selectedRoute,
+        onAlternative: _selectAlternative,
+      );
+    } else {
+      card = null;
+    }
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [

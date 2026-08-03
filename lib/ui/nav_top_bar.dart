@@ -6,6 +6,8 @@ library;
 import 'package:flutter/material.dart';
 
 import '../nav_engine.dart';
+import '../nav_protocol.dart';
+import '../osrm.dart';
 import 'widgets.dart';
 
 class NavTopBar extends StatelessWidget {
@@ -17,6 +19,10 @@ class NavTopBar extends StatelessWidget {
     this.recording = false,
     this.clockConnected = false,
     this.stopLabel = '',
+    this.tripProgress = 0,
+    this.steps = const [],
+    this.expanded = false,
+    this.onToggle,
   });
 
   /// Destination display name.
@@ -35,6 +41,18 @@ class NavTopBar extends StatelessWidget {
   /// e.g. "Điểm 2/3" for multi-stop trips.
   final String stopLabel;
 
+  /// Fraction of the route completed (0..1) — drives the top progress bar.
+  final double tripProgress;
+
+  /// Upcoming maneuvers (shown when [expanded]).
+  final List<OsrmStep> steps;
+
+  /// Whether the step list is expanded.
+  final bool expanded;
+
+  /// Called when the banner is tapped (toggle the step list).
+  final VoidCallback? onToggle;
+
   String _etaText(NavProgress nav) =>
       '${nav.etaHour.toString().padLeft(2, '0')}:'
       '${nav.etaMinute.toString().padLeft(2, '0')}';
@@ -42,18 +60,32 @@ class NavTopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final nav = progress;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-      child: Material(
-        elevation: 6,
-        shadowColor: Colors.black38,
-        borderRadius: BorderRadius.circular(18),
-        color: kAppBlue,
+    return Material(
+      elevation: 6,
+      shadowColor: Colors.black38,
+      borderRadius: BorderRadius.circular(18),
+      color: kAppBlue,
+      child: InkWell(
+        customBorder: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        onTap: onToggle,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+          padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Google-style trip progress bar (thin line at the very top).
+              ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  value: tripProgress.clamp(0.0, 1.0),
+                  minHeight: 4,
+                  backgroundColor: Colors.white24,
+                  valueColor: const AlwaysStoppedAnimation(Colors.white),
+                ),
+              ),
+              const SizedBox(height: 8),
               Row(
                 children: [
                   if (recording) ...[
@@ -170,6 +202,89 @@ class NavTopBar extends StatelessWidget {
                         Text(stopLabel,
                             style: const TextStyle(
                                 fontSize: 12, color: Colors.white70)),
+                    ],
+                  ),
+                ),
+              ],
+              // Expandable full step list (Google's tap-the-banner list).
+              if (expanded && steps.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  constraints: const BoxConstraints(maxHeight: 300),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Text(
+                            'Các bước tiếp theo',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                color: kAppBlue),
+                          ),
+                          const Spacer(),
+                          Icon(Icons.keyboard_arrow_up,
+                              size: 16, color: Colors.grey[500]),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Flexible(
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: steps.length,
+                          itemBuilder: (context, i) {
+                            final s = steps[i];
+                            return Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 3),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 26,
+                                    height: 26,
+                                    decoration: BoxDecoration(
+                                      color: kAppBlue,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      maneuverIcon(iconForManeuver(
+                                          s.type, s.modifier)),
+                                      color: Colors.white,
+                                      size: 14,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      s.name.isEmpty ? 'Đi tiếp' : s.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    formatDistance(s.distance),
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.grey[600]),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
                     ],
                   ),
                 ),

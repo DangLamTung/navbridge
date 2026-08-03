@@ -21,13 +21,27 @@ Future<OsrmRoute> fetchVietmapRoute(
   List<LatLng> points, {
   String vehicle = 'car',
 }) async {
+  final routes = await fetchVietmapRoutes(points, vehicle: vehicle);
+  if (routes.isEmpty) throw Exception('Không tìm thấy tuyến đường');
+  return routes.first;
+}
+
+/// Fetch up to [maxAlternatives] route options (Vietmap `alternative=true`).
+/// The best route is first; the rest are alternatives for the preview UI.
+/// Each route carries its own toll data (`annotations=congestion,toll`).
+Future<List<OsrmRoute>> fetchVietmapRoutes(
+  List<LatLng> points, {
+  String vehicle = 'car',
+  int maxAlternatives = 3,
+}) async {
   if (points.length < 2) throw Exception('Cần ít nhất 2 điểm để định tuyến');
   final pts = points.map((p) => 'point=${p.latitude},${p.longitude}').join('&');
   final url = '${VietmapConfig.route}?apikey=${VietmapConfig.apiKey}'
-      '&$pts&vehicle=$vehicle&points_encoded=false&annotations=congestion';
+      '&$pts&vehicle=$vehicle&points_encoded=false'
+      '&annotations=congestion,toll&alternative=true';
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': _ua})
-      .timeout(const Duration(seconds: 25));
+      .timeout(const Duration(seconds: 30));
   if (res.statusCode != 200) throw Exception('Vietmap HTTP ${res.statusCode}');
   final data = jsonDecode(utf8.decode(res.bodyBytes));
   final paths =
@@ -35,8 +49,15 @@ Future<OsrmRoute> fetchVietmapRoute(
   if (paths == null || paths.isEmpty) {
     throw Exception('Không tìm thấy tuyến đường');
   }
-  final r = paths.first as Map<String, dynamic>;
+  return [
+    for (final p in paths)
+      if (p is Map) _parsePath(Map<String, dynamic>.from(p))
+  ].take(maxAlternatives).toList();
+}
 
+/// Parse one Vietmap `paths[]` entry into an [OsrmRoute] (geometry, steps,
+/// congestion, tolls).
+OsrmRoute _parsePath(Map<String, dynamic> r) {
   // Geometry: GeoJSON LineString → [[lon, lat], ...].
   final coords = (((r['points'] as Map?)?['coordinates'] as List?) ?? const [])
       .cast<dynamic>()
@@ -73,12 +94,33 @@ Future<OsrmRoute> fetchVietmapRoute(
   }
   if (stopCum.isEmpty && cum > 0) stopCum.add(cum);
 
+  // Toll data (Vietmap `annotations=congestion,toll`).
+  final tollCost = (r['toll_cost'] as num?)?.toInt();
+  final tolls = <TollInfo>[];
+  final rawTolls = r['tolls'];
+  if (rawTolls is List) {
+    for (final t in rawTolls) {
+      if (t is! Map) continue;
+      final name = '${t['name'] ?? ''}'.trim();
+      final addr = '${t['address'] ?? ''}'.trim();
+      if (name.isEmpty && addr.isEmpty) continue;
+      tolls.add(TollInfo(
+        name: name,
+        address: addr,
+        type: '${t['type'] ?? ''}',
+        price: ((t['price'] ?? 0) as num).toInt(),
+      ));
+    }
+  }
+
   return OsrmRoute(
     distance: ((r['distance'] ?? 0) as num).toDouble(),
     duration: ((r['time'] ?? 0) as num).toDouble() / 1000.0,
     geometry: coords,
     steps: steps,
     stopCumulative: stopCum,
+    tollCost: tollCost,
+    tolls: tolls,
   );
 }
 

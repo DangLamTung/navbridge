@@ -213,13 +213,26 @@ Future<OsrmRoute> fetchAnyRoute(
   List<LatLng> points, {
   RouteProfile profile = RouteProfile.car,
 }) async {
+  final routes = await fetchAnyRoutes(points, profile: profile);
+  return routes.first;
+}
+
+/// Like [fetchAnyRoute] but returns up to [maxAlternatives] route options
+/// (best first) when the active source can produce alternatives (Vietmap
+/// `alternative=true`). Non-Vietmap sources return a single-element list.
+Future<List<OsrmRoute>> fetchAnyRoutes(
+  List<LatLng> points, {
+  RouteProfile profile = RouteProfile.car,
+  int maxAlternatives = 3,
+}) async {
   if (dataSource == 'vietmap' &&
       !forceOffline &&
       (profile == RouteProfile.car || profile == RouteProfile.motorbike)) {
     try {
-      return await fetchVietmapRoute(
+      return await fetchVietmapRoutes(
         points,
         vehicle: profile == RouteProfile.motorbike ? 'motorcycle' : 'car',
+        maxAlternatives: maxAlternatives,
       );
     } catch (e) {
       debugPrint('VIETMAP: route failed: $e — falling back to OSRM');
@@ -227,14 +240,14 @@ Future<OsrmRoute> fetchAnyRoute(
   }
   if (profile == RouteProfile.car && OfflineRouter.instance.isLoaded) {
     final local = await OfflineRouter.instance.route(points);
-    if (local != null) return local;
+    if (local != null) return [local];
   }
   if (forceOffline) {
     throw StateError(profile == RouteProfile.car
         ? 'Ngoại tuyến: chưa tải bộ dữ liệu chỉ đường'
         : 'Ngoại tuyến: bộ dữ liệu chỉ hỗ trợ ô tô');
   }
-  return fetchOsrmRoute(points, profile: profile.osrm);
+  return [await fetchOsrmRoute(points, profile: profile.osrm)];
 }
 
 /// True when on-device routing could be used right now (loaded graph).

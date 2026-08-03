@@ -21,6 +21,10 @@ class NavProgress {
   final int totalStops; // number of stops incl. the final destination
   final String stopName; // name of the approaching stop ('' when none)
 
+  /// Fraction of the route already travelled (0..1) — drives the
+  /// Google-style trip progress bar at the top of the nav screen.
+  final double progress;
+
   NavProgress({
     required this.meter,
     required this.iconCode,
@@ -33,6 +37,7 @@ class NavProgress {
     this.stopIndex = 0,
     this.totalStops = 0,
     this.stopName = '',
+    this.progress = 0,
   });
 }
 
@@ -139,6 +144,9 @@ class TurnByTurnEngine {
       stopIndex: stopIndex,
       totalStops: _stopCum.length,
       stopName: stopName,
+      progress: route.distance <= 0
+          ? 0
+          : (cum / route.distance).clamp(0.0, 1.0),
     );
   }
 

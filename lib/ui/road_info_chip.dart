@@ -8,14 +8,26 @@ import '../overpass.dart';
 import 'widgets.dart';
 
 class RoadInfoChip extends StatelessWidget {
-  const RoadInfoChip({super.key, this.info, this.loading = false});
+  const RoadInfoChip({
+    super.key,
+    this.info,
+    this.loading = false,
+    this.speedMps,
+  });
 
   final RoadInfo? info;
   final bool loading;
 
+  /// Current speed in m/s (from GPS) — shown as a Google-style speed pill
+  /// that turns red when exceeding the speed limit.
+  final double? speedMps;
+
   @override
   Widget build(BuildContext context) {
     final i = info;
+    final limit = i?.speedLimit;
+    final kmh = speedMps == null ? null : (speedMps! * 3.6).round();
+    final speeding = limit != null && kmh != null && kmh > limit;
     return Material(
       elevation: 6,
       shadowColor: Colors.black26,
@@ -26,6 +38,30 @@ class RoadInfoChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // Current speed pill (Google style — red when speeding).
+            Container(
+              width: 32,
+              height: 32,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: speeding ? const Color(0xFFD93025) : Colors.white,
+                border: Border.all(
+                  color: speeding ? const Color(0xFFD93025) : kAppBlue,
+                  width: 3,
+                ),
+              ),
+              child: Text(
+                kmh == null ? '--' : '$kmh',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  height: 1.0,
+                  color: speeding ? Colors.white : kAppBlue,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
             // Speed-limit sign.
             Container(
               width: 32,
