@@ -21,6 +21,77 @@ import 'package:path_provider/path_provider.dart';
 
 const String _ua = 'navbridge/1.0 (BLE portable navigation; offline tiles)';
 
+// ---- OSM-compliant tile fetching ---------------------------------------
+//
+// tile.openstreetmap.org enforces its tile usage policy: max 2 download
+// threads and ~1 tile per second. flutter_map normally fires a burst of
+// concurrent requests while panning/zooming → 403/429 blocks (and can get
+// the IP banned). This coordinator serializes every tile fetch so the app
+// stays under the limit, backs off when the server blocks us, and never
+// re-requests a tile that already failed this session.
+
+/// Max concurrent tile HTTP fetches (OSM policy: <= 2 threads).
+const int _maxTileConcurrency = 2;
+
+/// Minimum gap between tile requests (OSM policy: ~1 tile/s).
+const Duration _minTileGap = Duration(milliseconds: 1000);
+
+/// How long to pause all tile fetches after a 403/429 (avoid IP bans).
+const Duration _blockBackoff = Duration(minutes: 2);
+
+DateTime _lastTileRequest = DateTime.fromMillisecondsSinceEpoch(0);
+DateTime _tileBlockedUntil = DateTime.fromMillisecondsSinceEpoch(0);
+int _tileInFlight = 0;
+final Set<String> _inFlightTiles = {};
+final Set<String> _failedTiles = {};
+
+/// Fetches one tile respecting the OSM tile policy. Returns null when the
+/// tile is unavailable (server blocked, rate-limited, HTTP error, or it
+/// already failed this session) — callers fall back to a transparent tile.
+Future<http.Response?> _fetchTile(int z, int x, int y, String url) async {
+  final key = '$z/$x/$y';
+  if (_tileBlockedUntil.isAfter(DateTime.now())) return null; // backoff
+  if (_failedTiles.contains(key) || _inFlightTiles.contains(key)) return null;
+
+  // Wait for a concurrency slot.
+  while (_tileInFlight >= _maxTileConcurrency) {
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+  }
+  // Respect the ~1 tile/s minimum spacing.
+  final wait = _minTileGap - DateTime.now().difference(_lastTileRequest);
+  if (wait > Duration.zero) {
+    await Future<void>.delayed(wait);
+  }
+
+  _tileInFlight++;
+  _inFlightTiles.add(key);
+  _lastTileRequest = DateTime.now();
+  try {
+    final res = await http
+        .get(Uri.parse(url), headers: {'User-Agent': _ua})
+        .timeout(const Duration(seconds: 8));
+    if (res.statusCode == 403 || res.statusCode == 429) {
+      // The server is telling us to stop — pause ALL tile fetches.
+      _tileBlockedUntil = DateTime.now().add(_blockBackoff);
+      _failedTiles.add(key);
+      debugPrint('TILE: server blocked tile (${res.statusCode}) — '
+          'pausing fetches for ${_blockBackoff.inMinutes} min');
+      return null;
+    }
+    if (res.statusCode != 200 || res.bodyBytes.isEmpty) {
+      _failedTiles.add(key); // don't re-request the same missing tile
+      return null;
+    }
+    return res;
+  } catch (_) {
+    _failedTiles.add(key);
+    return null;
+  } finally {
+    _tileInFlight--;
+    _inFlightTiles.remove(key);
+  }
+}
+
 /// Base URL for bulk region tile downloads.
 ///
 /// MUST stay empty: bulk/pre-downloading whole regions from
@@ -338,22 +409,20 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
       }
     }
     if (await isOnline()) {
-      try {
-        final url = (options.urlTemplate ?? '')
-            .replaceAll('{z}', '$z')
-            .replaceAll('{x}', '$x')
-            .replaceAll('{y}', '$y');
-        final res = await http
-            .get(Uri.parse(url), headers: {'User-Agent': _ua})
-            .timeout(const Duration(seconds: 8));
-        if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
-          file.createSync(recursive: true);
-          file.writeAsBytesSync(res.bodyBytes);
-          return _decode(decode, res.bodyBytes);
-        }
-      } catch (_) {
-        // fall through to transparent tile
+      final url = (options.urlTemplate ?? '')
+          .replaceAll('{z}', '$z')
+          .replaceAll('{x}', '$x')
+          .replaceAll('{y}', '$y');
+      // Rate-limited + serialized so we stay under the OSM tile policy
+      // (never a burst, no repeated requests for failed tiles, backoff on
+      // 403/429).
+      final res = await _fetchTile(z, x, y, url);
+      if (res != null && res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
+        file.createSync(recursive: true);
+        file.writeAsBytesSync(res.bodyBytes);
+        return _decode(decode, res.bodyBytes);
       }
+      // fall through to transparent tile
     }
     return _decode(decode, TileProvider.transparentImage);
   }
