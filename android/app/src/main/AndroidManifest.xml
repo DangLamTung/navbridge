@@ -12,6 +12,14 @@
         android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30"/>
+    <!-- Voice commands (speech recognition) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- TTS engine (voice guidance → Bluetooth speaker) -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
+    </queries>
     <uses-feature android:name="android.hardware.bluetooth_le"
         android:required="true"/>
 

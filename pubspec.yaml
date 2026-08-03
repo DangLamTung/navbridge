@@ -24,6 +24,9 @@ dependencies:
   share_plus: ^10.1.4
   # Online/offline detection (offline mode)
   connectivity_plus: ^6.1.0
+  # Voice commands (Android speech recognition) + spoken turn-by-turn guidance
+  speech_to_text: ^7.0.0
+  flutter_tts: ^4.0.2
   cupertino_icons: ^1.0.8
   maplibre_gl: ^0.26.2
 

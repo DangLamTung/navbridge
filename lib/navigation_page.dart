@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'ble_clock.dart';
 import 'device_picker.dart';
@@ -33,6 +34,8 @@ import 'trip_logger.dart';
 import 'trip_plan.dart';
 import 'trips_screen.dart';
 import 'vector_nav_map.dart';
+import 'voice_commands.dart';
+import 'voice_guide.dart';
 import 'ui/clock_button.dart';
 import 'ui/map_controls.dart';
 import 'ui/nav_top_bar.dart';
@@ -114,6 +117,16 @@ class _NavigationPageState extends State<NavigationPage> {
   // --- multi-stop plan ---
   final List<TripStop> _stops = [];
 
+  // --- voice: spoken guidance (Bluetooth speaker) + mic commands --------
+  final VoiceGuide _voice = VoiceGuide();
+  final VoiceCommands _commands = VoiceCommands();
+  bool _listening = false;
+  bool _voiceOn = true; // spoken turn-by-turn guidance enabled
+  int _lastMeter = 0;
+  bool _spoken300 = false;
+  bool _spoken50 = false;
+  bool _arrivedSpoken = false;
+
   @override
   void initState() {
     super.initState();
@@ -150,6 +163,15 @@ class _NavigationPageState extends State<NavigationPage> {
       forceOffline = s.forceOffline;
       setState(() => _offline = _offline || forceOffline);
     });
+    // Voice: spoken turn-by-turn (→ Bluetooth speaker) + mic commands.
+    _voice.init();
+    _commands.init(onStatus: (s) {
+      // Speech session ended (final result / silence / error) → release mic.
+      if (s == 'done' || s == 'notListening') {
+        _listening = false;
+        if (mounted) setState(() {});
+      }
+    });
   }
 
   @override
@@ -160,6 +182,8 @@ class _NavigationPageState extends State<NavigationPage> {
     _gpsSub?.cancel();
     _simTimer?.cancel();
     _connSub?.cancel();
+    _voice.stop();
+    _commands.stop();
     // If a trip is still recording when the page is closed, save it.
     final t = _trip;
     if (t != null && t.hasEnoughData) {
@@ -206,6 +230,7 @@ class _NavigationPageState extends State<NavigationPage> {
     _progress = nav;
     debugPrint('SIM: handleNav dist=$_simDist meter=${nav.meter} icon=${nav.iconCode}');
     _sendToClock(nav);
+    _maybeSpeakManeuver(nav);
     _refreshRoad(pos);
     _logFix(pos, speedMps);
     _map.move(pos, 17);
@@ -589,6 +614,10 @@ class _NavigationPageState extends State<NavigationPage> {
     _progress = nav;
     _logFix(origin, 0);
     _sendToClock(nav);
+    _lastMeter = 0;
+    _spoken300 = false;
+    _spoken50 = false;
+    _arrivedSpoken = false;
     if (mounted) setState(() {});
   }
 
@@ -646,6 +675,128 @@ class _NavigationPageState extends State<NavigationPage> {
 
   void _zoomBy(double delta) =>
       _map.move(_map.camera.center, _map.camera.zoom + delta);
+
+  // ---- voice: spoken turn-by-turn (Bluetooth speaker) ------------------
+
+  /// Speak the upcoming maneuver at 300 m / 80 m / at the turn itself.
+  void _maybeSpeakManeuver(NavProgress nav) {
+    if (!_voiceOn || !_voice.ready) return;
+    if (nav.iconCode == iconArrive) {
+      if (_arrivedSpoken) return;
+      _arrivedSpoken = true;
+      _voice.speak('Bạn đã đến nơi.');
+      return;
+    }
+    // The engine advanced to a new maneuver when the distance jumps up.
+    if (nav.meter > _lastMeter + 50) {
+      _spoken300 = false;
+      _spoken50 = false;
+    }
+    _lastMeter = nav.meter;
+    final m = nav.meter;
+    if (!_spoken300 && m <= 300 && m > 80) {
+      _spoken300 = true;
+      _voice.speak(_announce(nav, m));
+    } else if (!_spoken50 && m <= 80) {
+      _spoken50 = true;
+      _voice.speak(_announce(nav, m, now: true));
+    }
+  }
+
+  String _announce(NavProgress nav, int m, {bool now = false}) {
+    final verb = switch (nav.iconCode) {
+      iconTurnLeft => 'rẽ trái',
+      iconTurnRight => 'rẽ phải',
+      iconSlightLeft => 'rẽ trái nhẹ',
+      iconSlightRight => 'rẽ phải nhẹ',
+      iconUturnLeft || iconUturnRight => 'quay đầu',
+      iconRoundabout => 'đi theo vòng xuyến',
+      _ => 'đi thẳng',
+    };
+    final road = nav.text.isNotEmpty ? ' vào ${nav.text}' : '';
+    return now ? '$verb$road' : 'Sau $m mét, $verb$road';
+  }
+
+  // ---- voice: commands (mic) -------------------------------------------
+
+  Future<void> _toggleListening() async {
+    if (_listening) {
+      _listening = false;
+      if (mounted) setState(() {});
+      await _commands.stop();
+      return;
+    }
+    if (!_commands.available) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Thiết bị này không hỗ trợ nhận diện giọng nói.')));
+      }
+      return;
+    }
+    final mic = await Permission.microphone.request();
+    if (!mic.isGranted) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Cần quyền micro để điều khiển bằng giọng nói.')));
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _listening = true);
+    await _commands.listen(_onVoiceResult);
+  }
+
+  void _onVoiceResult(String text) {
+    _listening = false;
+    if (mounted) setState(() {});
+    debugPrint('VOICE: recognized "$text"');
+    final cmd = parseVoiceCommand(text);
+    switch (cmd.type) {
+      case VoiceCommandType.searchAndNavigate:
+        _voiceSearchAndNavigate(cmd.query, cmd.navigate);
+      case VoiceCommandType.start:
+        _voice.speak('Bắt đầu chỉ đường.');
+        _startNavigation();
+      case VoiceCommandType.stop:
+        _voice.speak('Đã dừng chỉ đường.');
+        _exitNavigation();
+      case VoiceCommandType.zoomIn:
+        _zoomBy(1);
+      case VoiceCommandType.zoomOut:
+        _zoomBy(-1);
+      case VoiceCommandType.voiceOn:
+        setState(() => _voiceOn = true);
+        _voice.speak('Đã bật hướng dẫn bằng giọng nói.');
+      case VoiceCommandType.voiceOff:
+        _voice.stop();
+        setState(() => _voiceOn = false);
+      case VoiceCommandType.help:
+        _voice.speak(
+            'Bạn có thể nói: chỉ đường tới chợ Bến Thành, bắt đầu, dừng lại, phóng to, thu nhỏ, bật tiếng, tắt tiếng.');
+      case VoiceCommandType.none:
+        _voice.speak('Xin lỗi, tôi không hiểu lệnh.');
+    }
+  }
+
+  Future<void> _voiceSearchAndNavigate(String query, bool navigate) async {
+    if (query.isEmpty) {
+      _voice.speak('Bạn muốn tìm địa điểm nào?');
+      return;
+    }
+    _searchCtrl.text = query;
+    final r = await osmAutocomplete(query);
+    if (r.isEmpty) {
+      _voice.speak('Không tìm thấy địa điểm $query.');
+      return;
+    }
+    final s = r.first;
+    _voice.speak('Đã tìm thấy ${s.display}.');
+    await _selectSuggestion(s);
+    if (navigate && mounted) {
+      _voice.speak('Bắt đầu chỉ đường.');
+      _startNavigation();
+    }
+  }
 
   /// Cycle the car marker icon (arrow → fun emojis).
   void _cycleCarIcon() {
@@ -825,6 +976,24 @@ class _NavigationPageState extends State<NavigationPage> {
                             color: const Color(0xFFF4B400),
                             onTap: _cycleCarIcon,
                           ),
+                          const SizedBox(height: 8),
+                          RoundActionButton(
+                            icon:
+                                _voiceOn ? Icons.volume_up : Icons.volume_off,
+                            color: _voiceOn
+                                ? const Color(0xFF34A853)
+                                : const Color(0xFF5F6368),
+                            onTap: () =>
+                                setState(() => _voiceOn = !_voiceOn),
+                          ),
+                          const SizedBox(height: 8),
+                          RoundActionButton(
+                            icon: _listening ? Icons.mic : Icons.mic_none,
+                            color: _listening
+                                ? const Color(0xFFEA4335)
+                                : const Color(0xFFF4B400),
+                            onTap: _toggleListening,
+                          ),
                         ],
                       ),
                     ),
@@ -973,6 +1142,13 @@ class _NavigationPageState extends State<NavigationPage> {
               busy: _searching || _building,
               showClear: _searchCtrl.text.isNotEmpty,
             ),
+          ),
+          const SizedBox(width: 8),
+          RoundActionButton(
+            icon: _listening ? Icons.mic : Icons.mic_none,
+            color: _listening ? const Color(0xFFEA4335) : kAppBlue,
+            onTap: _toggleListening,
+            size: 44,
           ),
           const SizedBox(width: 8),
           ClockButton(status: _clockStatus, onTap: _toggleClock),
