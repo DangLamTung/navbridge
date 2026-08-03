@@ -337,6 +337,12 @@ class _VectorNavMapState extends State<VectorNavMap> {
   /// 3D perspective angle (Google-Maps-style) when navigating.
   static const double _tilt = 55;
 
+  /// Where the car sits on screen, as a fraction of the visible map height
+  /// measured from the camera center. 0.0 = dead center. (A positive value
+  /// would place the car lower on screen to show more road ahead; the user
+  /// asked for the object to be centered, so this stays 0.)
+  static const double _carAnchor = 0.0;
+
   void _followPosition() {
     final ctrl = _controller;
     final c = widget.current;
@@ -344,7 +350,9 @@ class _VectorNavMapState extends State<VectorNavMap> {
     final bearing = _bearing();
     final car = ll.LatLng(c.latitude, c.longitude);
     // Google-style framing: shift the camera ahead of the travel direction so
-    // the car sits ~1/3 from the bottom and the road ahead is visible.
+    // the car sits ~1/3 from the bottom and the road ahead is visible. The
+    // user wants the car centered → [_carAnchor] = 0 keeps the camera on the
+    // car itself.
     final ahead = _followTarget(car, bearing > 0 ? bearing : 0, _zoom);
     if (!_hasPosition) {
       _camPos = ahead;
@@ -429,8 +437,9 @@ class _VectorNavMapState extends State<VectorNavMap> {
     return a + diff * k;
   }
 
-  /// Camera target: the car position shifted ahead of the travel direction so
-  /// it sits ~1/3 from the bottom of the screen (more road ahead, Google-like).
+  /// Camera target for [car]: the car itself when [_carAnchor] is 0 (centered)
+  /// or shifted ahead of the travel direction by [_carAnchor]×visible so the
+  /// car sits lower on screen (more road ahead, classic Google framing).
   ll.LatLng _followTarget(ll.LatLng car, double bearingDeg, double zoom) {
     // Approx ground meters per pixel at this zoom (Web Mercator).
     final mpp = 156543.03392 *
@@ -439,7 +448,8 @@ class _VectorNavMapState extends State<VectorNavMap> {
     // Visible vertical ground extent: viewport px × m/px × 3D-tilt extension
     // (tilted camera looks further ahead).
     final visible = 1100.0 * mpp * 1.8;
-    final offset = 0.13 * visible;
+    final offset = _carAnchor * visible;
+    if (offset <= 0) return car; // dead-center follow
     final rad = bearingDeg * math.pi / 180;
     final dLat = offset * math.cos(rad) / 111320.0;
     final dLng = offset * math.sin(rad) /
