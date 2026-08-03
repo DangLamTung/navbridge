@@ -4,12 +4,8 @@ import com.graphhopper.GHRequest
 import com.graphhopper.GraphHopper
 import com.graphhopper.ResponsePath
 import com.graphhopper.config.Profile
-import com.graphhopper.json.Statement
-import com.graphhopper.util.CustomModel
 import com.graphhopper.util.shapes.GHPoint
 import io.flutter.plugin.common.MethodChannel
-import org.json.JSONArray
-import org.json.JSONObject
 import java.util.concurrent.Executors
 
 /**
@@ -18,6 +14,10 @@ import java.util.concurrent.Executors
  * Loads a pre-built car graph (a folder extracted from a .ghz download) and
  * answers route requests over the "navbridge/routing" MethodChannel. All work
  * runs on a single background thread so the UI never blocks.
+ *
+ * GraphHopper 7.0 is used on purpose: it is the last line with the classic
+ * setVehicle/setWeighting("fastest") profiles — newer lines need custom models
+ * (Janino dynamic compilation) which does not work on Android ART.
  */
 class GraphHopperRouting {
     private var hopper: GraphHopper? = null
@@ -26,12 +26,8 @@ class GraphHopperRouting {
     fun isLoaded(): Boolean = hopper != null
 
     /** The car profile used at graph build time — must match the builder. */
-    private fun carProfile(): Profile {
-        val cm = CustomModel()
-            .addToPriority(Statement.If("!car_access", Statement.Op.MULTIPLY, "0"))
-            .addToSpeed(Statement.If("true", Statement.Op.LIMIT, "car_average_speed"))
-        return Profile("car").setCustomModel(cm)
-    }
+    private fun carProfile(): Profile =
+        Profile("car").setVehicle("car").setWeighting("fastest")
 
     /** Load a pre-built graph folder (or a `.ghz` zip) at [graphPath]. */
     fun load(graphPath: String, result: MethodChannel.Result) {
@@ -41,13 +37,15 @@ class GraphHopperRouting {
                     val gh = GraphHopper()
                     val loc = prepareLocation(graphPath)
                     gh.setGraphHopperLocation(loc)
-                    gh.setEncodedValuesString("car_access, car_average_speed")
                     gh.setProfiles(carProfile())
                     gh.importOrLoad()
                     hopper = gh
                 }
                 result.success(true)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                // Catch Errors too (e.g. NoSuchMethodError) so the app never
+                // crashes from a graph problem.
+                android.util.Log.e("NavBridgeRouter", "load failed", e)
                 result.error("load_error", e.message ?: "load failed", null)
             }
         }
@@ -66,8 +64,10 @@ class GraphHopperRouting {
                 if (rsp.hasErrors()) {
                     throw IllegalStateException(rsp.errors.toString())
                 }
-                result.success(toJson(rsp.best))
-            } catch (e: Exception) {
+                // Flutter's StandardMethodCodec only accepts primitives /
+                // List / Map — NOT JSONObject. Send a plain Map.
+                result.success(toMap(rsp.best))
+            } catch (e: Throwable) {
                 result.error("route_error", e.message ?: "route failed", null)
             }
         }
@@ -100,30 +100,29 @@ class GraphHopperRouting {
         return dest.absolutePath
     }
 
-    private fun toJson(path: ResponsePath): JSONObject {
-        val obj = JSONObject()
-        obj.put("distance", path.distance)
-        obj.put("duration", path.time / 1000.0)
-        val pts = JSONArray()
+    /** Builds a plain Map (MethodChannel-codec friendly) from the route. */
+    private fun toMap(path: ResponsePath): Map<String, Any?> {
+        val pts = ArrayList<Double>()
         for (i in 0 until path.points.size()) {
-            pts.put(path.points.getLat(i))
-            pts.put(path.points.getLon(i))
+            pts.add(path.points.getLat(i))
+            pts.add(path.points.getLon(i))
         }
-        obj.put("points", pts)
-        val steps = JSONArray()
+        val steps = ArrayList<Map<String, Any?>>()
         for (ins in path.instructions) {
-            val s = JSONObject()
-            s.put("name", ins.name)
-            s.put("distance", ins.distance)
-            s.put("duration", ins.time / 1000.0)
-            s.put("sign", ins.sign)
-            val lat = if (ins.points.size() > 0) ins.points.getLat(0) else 0.0
-            val lng = if (ins.points.size() > 0) ins.points.getLon(0) else 0.0
-            s.put("lat", lat)
-            s.put("lng", lng)
-            steps.put(s)
+            steps.add(mapOf(
+                "name" to ins.name,
+                "distance" to ins.distance,
+                "duration" to (ins.time / 1000.0),
+                "sign" to ins.sign,
+                "lat" to (if (ins.points.size() > 0) ins.points.getLat(0) else 0.0),
+                "lng" to (if (ins.points.size() > 0) ins.points.getLon(0) else 0.0)
+            ))
         }
-        obj.put("steps", steps)
-        return obj
+        return mapOf(
+            "distance" to path.distance,
+            "duration" to (path.time / 1000.0),
+            "points" to pts,
+            "steps" to steps
+        )
     }
 }

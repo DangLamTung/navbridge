@@ -111,7 +111,7 @@ class _NavigationPageState extends State<NavigationPage> {
       _startGps();
       // Load the on-device routing graph if one is already downloaded.
       if (await routingGraphPresent()) {
-        final ok = await OfflineRouter.instance.load(await routingGraphDir());
+        final ok = await OfflineRouter.instance.load(await routingGraphPath());
         debugPrint('ROUTER: on-device graph loaded=$ok');
       }
     });

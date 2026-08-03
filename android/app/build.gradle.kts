@@ -34,6 +34,18 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // GraphHopper 7.0 pulls jakarta.xml.bind-api + jakarta.activation-api,
+    // both shipping META-INF/NOTICE.md → merge conflict. Exclude them.
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "/META-INF/NOTICE.md"
+            excludes += "/META-INF/LICENSE.md"
+            excludes += "/META-INF/DEPENDENCIES"
+            excludes += "/META-INF/*.kotlin_module"
+        }
+    }
 }
 
 kotlin {
@@ -44,7 +56,10 @@ kotlin {
 
 dependencies {
     // On-device offline routing (GraphHopper core, MIT, runs on Android).
-    implementation("com.graphhopper:graphhopper-core:10.0")
+    // 7.0 is the last line with classic setVehicle/setWeighting("fastest")
+    // (no custom-model expression compilation → works on Android ART;
+    // 8.x rejects fastest, 9.x/10.x need Janino or JDK 19+).
+    implementation("com.graphhopper:graphhopper-core:7.0")
     implementation("org.slf4j:slf4j-nop:2.0.13")
 }
 

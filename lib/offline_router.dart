@@ -8,6 +8,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
@@ -33,7 +34,8 @@ class OfflineRouter {
       final ok = await _channel.invokeMethod<bool>('load', {'dir': graphPath});
       _loaded = ok ?? false;
       return _loaded;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ROUTER: load error: $e');
       return false;
     }
   }
@@ -56,11 +58,14 @@ class OfflineRouter {
         flat.add(p.latitude);
         flat.add(p.longitude);
       }
-      final res = await _channel
-          .invokeMapMethod<String, dynamic>('route', {'points': flat});
-      if (res == null) return null;
+      // Platform-channel maps decode as Map<Object?, Object?>, so a typed
+      // invokeMapMethod<String, dynamic> cast throws. Convert explicitly.
+      final raw = await _channel.invokeMethod<Object?>('route', {'points': flat});
+      if (raw == null) return null;
+      final res = Map<String, dynamic>.from(raw as Map);
       return _parse(res);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ROUTER: route error: $e');
       return null;
     }
   }
@@ -71,7 +76,11 @@ class OfflineRouter {
     for (var i = 0; i + 1 < flat.length; i += 2) {
       geometry.add(LatLng(flat[i].toDouble(), flat[i + 1].toDouble()));
     }
-    final rawSteps = (res['steps'] as List? ?? []).cast<Map<String, dynamic>>();
+    // Steps arrive as List<Map<Object?, Object?>> — convert each explicitly
+    // (List.cast<Map<String, dynamic>>() would throw on iteration).
+    final rawSteps = (res['steps'] as List? ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
     final steps = <OsrmStep>[];
     for (final s in rawSteps) {
       final sign = ((s['sign'] ?? 0) as num).toInt();
@@ -129,9 +138,17 @@ Future<String> routingGraphDir() async {
   return '${sup.path}/routing_graph';
 }
 
+/// Path to pass to the loader: the `.ghz` file if present, else the folder.
+Future<String> routingGraphPath() async {
+  final dir = await routingGraphDir();
+  return File('$dir.ghz').existsSync() ? '$dir.ghz' : dir;
+}
+
 Future<bool> routingGraphPresent() async {
-  final d = Directory(await routingGraphDir());
-  return d.existsSync() && d.listSync().isNotEmpty;
+  final dir = await routingGraphDir();
+  final d = Directory(dir);
+  return (d.existsSync() && d.listSync().isNotEmpty) ||
+      File('$dir.ghz').existsSync();
 }
 
 /// Download [url] to [target] with byte progress; returns true on success.

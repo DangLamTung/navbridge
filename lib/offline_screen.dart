@@ -75,9 +75,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
   }
 
   Future<void> _loadGraph() async {
-    if (!_graphHas) return;
+    if (!await routingGraphPresent()) return;
     setState(() => _graphLoading = true);
-    final ok = await OfflineRouter.instance.load(await routingGraphDir());
+    final ok = await OfflineRouter.instance.load(await routingGraphPath());
     if (mounted) {
       setState(() {
         _graphLoading = false;
