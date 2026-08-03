@@ -55,9 +55,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
     _refreshGraph();
     onlineStream().listen((o) => setState(() => _online = o));
     isOnline().then((o) => setState(() => _online = o));
-    loadSettings().then((s) {
-      if (mounted) setState(() => _forceOffline = s.forceOffline);
-    });
+    // The global reflects the persisted choice AND any session override (the
+    // user may have gone online "if needed" from the map) — show that state.
+    setState(() => _forceOffline = forceOffline);
   }
 
   Future<void> _toggleForceOffline(bool v) async {

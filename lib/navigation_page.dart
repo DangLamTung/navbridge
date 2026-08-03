@@ -58,6 +58,10 @@ class _NavigationPageState extends State<NavigationPage> {
   // --- search -----------------------------------------------------------
   final _searchCtrl = TextEditingController();
   final _searchFocus = FocusNode();
+
+  /// Once the user declines "go online for this search", don't nag again
+  /// for the rest of the session.
+  bool _searchOfflineDeclined = false;
   List<OsmSuggestion> _suggestions = [];
   Timer? _debounce;
   bool _searching = false;
@@ -372,7 +376,19 @@ class _NavigationPageState extends State<NavigationPage> {
     _debounce = Timer(const Duration(milliseconds: 400), () async {
       setState(() => _searching = true);
       try {
-        final r = await osmAutocomplete(text.trim());
+        var r = await osmAutocomplete(text.trim());
+        // Forced-offline + nothing in the offline cache → ask the user
+        // whether to go online for this search, instead of silently showing
+        // nothing (they want to CHOOSE to go online if needed).
+        if (r.isEmpty && forceOffline && !_searchOfflineDeclined) {
+          final goOnline = await _confirmGoOnline(
+              'Không có kết quả ngoại tuyến cho “${text.trim()}”.');
+          if (goOnline) {
+            r = await osmAutocomplete(text.trim());
+          } else {
+            _searchOfflineDeclined = true; // don't nag again this session
+          }
+        }
         if (!mounted) return;
         setState(() => _suggestions = r.take(6).toList());
       } catch (_) {
@@ -381,6 +397,45 @@ class _NavigationPageState extends State<NavigationPage> {
         if (mounted) setState(() => _searching = false);
       }
     });
+  }
+
+  /// When forced-offline is active, ask the user whether to go online for an
+  /// action that needs the network (search / routing). Accepting lifts the
+  /// offline lock for THIS session only — the persisted setting is unchanged,
+  /// so a restart goes back to forced offline. Returns true when the action
+  /// may proceed online.
+  Future<bool> _confirmGoOnline(String reason) async {
+    if (!forceOffline) return true; // already online
+    final goOnline = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cần kết nối mạng'),
+        content: Text(
+            '$reason\n\nBạn có muốn bật trực tuyến (tạm thời) không?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Ở ngoại tuyến'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Bật trực tuyến'),
+          ),
+        ],
+      ),
+    );
+    if (goOnline == true) {
+      forceOffline = false; // session only — not persisted
+      if (mounted) setState(() => _offline = false);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+          content: Text('Đã bật trực tuyến (phiên này)'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ));
+    }
+    return goOnline == true;
   }
 
   void _clearSearch() {
@@ -426,7 +481,18 @@ class _NavigationPageState extends State<NavigationPage> {
     _origin = origin;
     _current ??= origin;
     final points = [origin, for (final s in _stops) s.pos];
-    final route = await fetchAnyRoute(points);
+    OsrmRoute route;
+    try {
+      route = await fetchAnyRoute(points);
+    } catch (_) {
+      // Offline and no offline graph for this route → offer to go online
+      // instead of just failing (the user wants to choose if needed).
+      if (!forceOffline) rethrow;
+      final goOnline = await _confirmGoOnline(
+          'Chưa có bộ dữ liệu chỉ đường ngoại tuyến cho tuyến này.');
+      if (!goOnline || !mounted) return;
+      route = await fetchOsrmRoute(points);
+    }
     debugPrint('PLAN: BUILD ok pts=${points.length} '
         'dist=${route.distance}m stops=${route.stopCumulative.length}');
     if (!mounted) return;
