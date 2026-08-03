@@ -20,7 +20,8 @@ android {
         applicationId = "com.navbridge.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 24
+        // GraphHopper needs Android 8+ (MethodHandle + java.time).
+        minSdk = 26
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -39,6 +40,12 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    // On-device offline routing (GraphHopper core, MIT, runs on Android).
+    implementation("com.graphhopper:graphhopper-core:10.0")
+    implementation("org.slf4j:slf4j-nop:2.0.13")
 }
 
 flutter {

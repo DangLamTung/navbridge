@@ -21,6 +21,16 @@ import 'package:path_provider/path_provider.dart';
 
 const String _ua = 'navbridge/1.0 (BLE portable navigation; offline tiles)';
 
+/// Base URL for bulk region tile downloads.
+///
+/// MUST stay empty: bulk/pre-downloading whole regions from
+/// tile.openstreetmap.org violates the OSM tile usage policy. To enable
+/// region downloads, set this to a self-hosted or licensed tile server that
+/// returns `/z/x/y.png` tiles (e.g. 'https://tiles.example.org'). When empty,
+/// only tiles actually viewed are cached (compliant) and the downloader is
+/// disabled.
+const String tileDownloadBaseUrl = '';
+
 /// Average tile size (bytes) per zoom — used for pre-download size estimates.
 const Map<int, int> _avgBytes = {
   0: 5000, 1: 5000, 2: 5000, 3: 6000, 4: 6000, 5: 7000, 6: 7000, 7: 8000,
@@ -91,6 +101,20 @@ Future<int> tileCacheBytes() async {
     if (f is File && f.path.endsWith('.png')) total += f.lengthSync();
   }
   return total;
+}
+
+/// Remove every stored tile (auto-cache + downloaded regions).
+Future<void> clearTileCache() async {
+  final root = await tileStoreDir();
+  try {
+    for (final e in root.listSync()) {
+      if (e is Directory) {
+        e.deleteSync(recursive: true);
+      } else if (e is File) {
+        e.deleteSync();
+      }
+    }
+  } catch (_) {}
 }
 
 // ---- region model ------------------------------------------------------
@@ -181,9 +205,10 @@ Future<void> saveRegions(List<OfflineRegion> rs) async {
 
 /// Downloads all tiles of a region with progress + cancel support.
 ///
-/// Rate-limited to ~1 tile/second (single thread) to respect the
-/// tile.openstreetmap.org usage policy (max 2 threads, avg 1 tile/s,
-/// no bulk bursts) — otherwise the server 403/429s or IP-bans us.
+/// Only enabled when [tileDownloadBaseUrl] points at a self-hosted / licensed
+/// tile server — bulk downloads from tile.openstreetmap.org are not allowed
+/// by the OSM tile usage policy. The downloader is single-threaded and
+/// rate-limited to ~1 tile/second.
 class RegionDownloader {
   final OfflineRegion region;
   int done = 0;
@@ -192,12 +217,14 @@ class RegionDownloader {
   int failed = 0;
   bool _blocked = false;
   bool get blocked => _blocked;
+  bool get disabled => tileDownloadBaseUrl.isEmpty;
 
   RegionDownloader(this.region);
 
   void cancel() => _cancel = true;
 
   Future<void> download(void Function(int done, int total) onProgress) async {
+    if (tileDownloadBaseUrl.isEmpty) return; // policy: no bulk OSM download
     done = 0;
     failed = 0;
     _blocked = false;
@@ -218,7 +245,7 @@ class RegionDownloader {
             done++;
             continue;
           }
-          // Respect OSM's ~1 tile/s policy.
+          // Respect ~1 tile/s.
           final wait = minGap - DateTime.now().difference(lastRequest);
           if (wait > Duration.zero) {
             await Future<void>.delayed(wait);
@@ -226,7 +253,7 @@ class RegionDownloader {
           lastRequest = DateTime.now();
           try {
             final res = await http
-                .get(Uri.parse('https://tile.openstreetmap.org/$z/$x/$y.png'),
+                .get(Uri.parse('$tileDownloadBaseUrl/$z/$x/$y.png'),
                     headers: {'User-Agent': _ua})
                 .timeout(const Duration(seconds: 10));
             if (res.statusCode == 429 || res.statusCode == 403) {

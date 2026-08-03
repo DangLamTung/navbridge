@@ -1,0 +1,188 @@
+/// On-device offline routing via GraphHopper (MethodChannel → Kotlin).
+///
+/// A pre-built car graph (a `.ghz` zip or an extracted folder) is downloaded
+/// once and loaded into GraphHopper on the device; then any A→B (or multi-stop)
+/// route can be computed fully offline, including re-routing.
+library;
+
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:latlong2/latlong.dart';
+import 'package:path_provider/path_provider.dart';
+
+import 'offline_tiles.dart' show isOnline;
+import 'osrm.dart';
+
+const MethodChannel _channel = MethodChannel('navbridge/routing');
+
+class OfflineRouter {
+  OfflineRouter._();
+
+  static final OfflineRouter instance = OfflineRouter._();
+
+  bool _loaded = false;
+  bool get isLoaded => _loaded;
+
+  /// Load the graph at [graphPath] (a folder, or a `.ghz` zip — the native
+  /// side extracts it). Returns true when routing is ready.
+  Future<bool> load(String graphPath) async {
+    try {
+      final ok = await _channel.invokeMethod<bool>('load', {'dir': graphPath});
+      _loaded = ok ?? false;
+      return _loaded;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Ask the native side whether a graph is already loaded (e.g. after the
+  /// process restarted).
+  Future<bool> refreshLoaded() async {
+    try {
+      _loaded = await _channel.invokeMethod<bool>('isLoaded') ?? false;
+    } catch (_) {}
+    return _loaded;
+  }
+
+  /// Compute a route through [points] (2+) entirely on-device.
+  Future<OsrmRoute?> route(List<LatLng> points) async {
+    if (points.length < 2 || !_loaded) return null;
+    try {
+      final flat = <double>[];
+      for (final p in points) {
+        flat.add(p.latitude);
+        flat.add(p.longitude);
+      }
+      final res = await _channel
+          .invokeMapMethod<String, dynamic>('route', {'points': flat});
+      if (res == null) return null;
+      return _parse(res);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  OsrmRoute _parse(Map<String, dynamic> res) {
+    final flat = (res['points'] as List).cast<num>();
+    final geometry = <LatLng>[];
+    for (var i = 0; i + 1 < flat.length; i += 2) {
+      geometry.add(LatLng(flat[i].toDouble(), flat[i + 1].toDouble()));
+    }
+    final rawSteps = (res['steps'] as List? ?? []).cast<Map<String, dynamic>>();
+    final steps = <OsrmStep>[];
+    for (final s in rawSteps) {
+      final sign = ((s['sign'] ?? 0) as num).toInt();
+      final (type, modifier) = _maneuverForSign(sign);
+      steps.add(OsrmStep(
+        name: (s['name'] ?? '') as String,
+        distance: ((s['distance'] ?? 0) as num).toDouble(),
+        duration: ((s['duration'] ?? 0) as num).toDouble(),
+        type: type,
+        modifier: modifier,
+        maneuver: LatLng(((s['lat'] ?? 0) as num).toDouble(),
+            ((s['lng'] ?? 0) as num).toDouble()),
+      ));
+    }
+    // Stop boundaries: instructions with sign 5 (REACHED_VIA) / 4 (FINISH).
+    final stopCum = <double>[];
+    var c = 0.0;
+    for (final s in rawSteps) {
+      final sign = ((s['sign'] ?? 0) as num).toInt();
+      c += ((s['distance'] ?? 0) as num).toDouble();
+      if (sign == 5 || sign == 4) stopCum.add(c);
+    }
+    if (stopCum.isEmpty && c > 0) stopCum.add(c);
+    return OsrmRoute(
+      distance: ((res['distance'] ?? 0) as num).toDouble(),
+      duration: ((res['duration'] ?? 0) as num).toDouble(),
+      geometry: geometry,
+      steps: steps,
+      stopCumulative: stopCum,
+    );
+  }
+
+  // GraphHopper instruction sign → OSRM-style maneuver.
+  (String, String?) _maneuverForSign(int sign) => switch (sign) {
+        -8 || -98 => ('turn', 'uturn'),
+        -3 => ('turn', 'sharp left'),
+        -2 => ('turn', 'left'),
+        -1 => ('turn', 'slight left'),
+        0 => ('continue', 'straight'),
+        1 => ('turn', 'slight right'),
+        2 => ('turn', 'right'),
+        3 => ('turn', 'sharp right'),
+        8 => ('turn', 'uturn'),
+        4 || 5 => ('arrive', null),
+        6 || 7 => ('roundabout', 'left'),
+        _ => ('continue', 'straight'),
+      };
+}
+
+// ---- graph storage / download -------------------------------------------
+
+/// Folder that holds the extracted GraphHopper graph.
+Future<String> routingGraphDir() async {
+  final sup = await getApplicationSupportDirectory();
+  return '${sup.path}/routing_graph';
+}
+
+Future<bool> routingGraphPresent() async {
+  final d = Directory(await routingGraphDir());
+  return d.existsSync() && d.listSync().isNotEmpty;
+}
+
+/// Download [url] to [target] with byte progress; returns true on success.
+Future<bool> downloadToFile(
+  String url,
+  String target,
+  void Function(int done, int total) onProgress,
+) async {
+  final client = http.Client();
+  try {
+    final req = http.Request('GET', Uri.parse(url));
+    req.headers['User-Agent'] = 'navbridge/1.0 (BLE portable navigation; graph)';
+    final streamed = await client.send(req).timeout(const Duration(seconds: 30));
+    final total = streamed.contentLength ?? 0;
+    if (streamed.statusCode != 200) return false;
+    final file = File(target);
+    file.createSync(recursive: true);
+    final sink = file.openWrite();
+    var done = 0;
+    await for (final chunk in streamed.stream) {
+      sink.add(chunk);
+      done += chunk.length;
+      onProgress(done, total);
+    }
+    await sink.close();
+    return true;
+  } catch (_) {
+    return false;
+  } finally {
+    client.close();
+  }
+}
+
+/// Best route source: on-device GraphHopper when loaded, OSRM otherwise.
+/// Throws when no source is available (fully offline without a graph).
+Future<OsrmRoute> fetchAnyRoute(List<LatLng> points) async {
+  if (OfflineRouter.instance.isLoaded) {
+    final local = await OfflineRouter.instance.route(points);
+    if (local != null) return local;
+  }
+  return fetchOsrmRoute(points);
+}
+
+/// True when on-device routing could be used right now (loaded graph).
+Future<bool> localRoutingAvailable() async {
+  if (OfflineRouter.instance.isLoaded) return true;
+  if (!await isOnline()) {
+    // offline + graph present but not loaded yet → try to load it
+    if (await routingGraphPresent()) {
+      return OfflineRouter.instance.load(await routingGraphDir());
+    }
+  }
+  return false;
+}

@@ -3,11 +3,14 @@
 /// downloaded regions.
 library;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'offline_router.dart';
 import 'offline_tiles.dart';
 import 'ui/widgets.dart';
 
@@ -36,18 +39,74 @@ class _OfflineScreenState extends State<OfflineScreen> {
   int _done = 0;
   int _total = 1;
 
+  // --- on-device routing graph (GraphHopper) ---
+  bool _graphHas = false;
+  bool _graphLoaded = false;
+  bool _graphLoading = false;
+  int _graphBytes = 0;
+  int _cacheBytes = 0;
+
   @override
   void initState() {
     super.initState();
     _reload();
+    _refreshGraph();
     onlineStream().listen((o) => setState(() => _online = o));
     isOnline().then((o) => setState(() => _online = o));
   }
 
+  Future<void> _refreshGraph() async {
+    final has = await routingGraphPresent();
+    var bytes = 0;
+    if (has) {
+      final d = Directory(await routingGraphDir());
+      await for (final f in d.list(recursive: true)) {
+        if (f is File) bytes += f.lengthSync();
+      }
+    }
+    await OfflineRouter.instance.refreshLoaded();
+    if (mounted) {
+      setState(() {
+        _graphHas = has;
+        _graphBytes = bytes;
+        _graphLoaded = OfflineRouter.instance.isLoaded;
+      });
+    }
+  }
+
+  Future<void> _loadGraph() async {
+    if (!_graphHas) return;
+    setState(() => _graphLoading = true);
+    final ok = await OfflineRouter.instance.load(await routingGraphDir());
+    if (mounted) {
+      setState(() {
+        _graphLoading = false;
+        _graphLoaded = ok;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(ok
+              ? 'Đã nạp bộ dữ liệu chỉ đường.'
+              : 'Không nạp được bộ dữ liệu.')));
+    }
+  }
+
   Future<void> _reload() async {
     final r = await loadRegions();
+    final bytes = await tileCacheBytes();
     if (mounted) {
-      setState(() => _regions = r);
+      setState(() {
+        _regions = r;
+        _cacheBytes = bytes;
+      });
+    }
+  }
+
+  Future<void> _clearCache() async {
+    await clearTileCache();
+    if (mounted) {
+      setState(() => _cacheBytes = 0);
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Đã xoá bộ nhớ đệm bản đồ.')));
     }
   }
 
@@ -187,9 +246,73 @@ class _OfflineScreenState extends State<OfflineScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          const Text('Vùng bản đồ',
+          const Text('Bản đồ ngoại tuyến (tự động)',
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
+          Material(
+            color: const Color(0xFFF1F3F4),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.auto_awesome, size: 18, color: kAppBlue),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Bản đồ đã xem được lưu tự động: '
+                          '${formatBytes(_cacheBytes)}',
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Các ô bản đồ bạn mở khi trực tuyến được giữ lại để dùng '
+                    'khi ngoại tuyến (theo đúng chính sách sử dụng OSM).',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: _cacheBytes > 0 ? _clearCache : null,
+                      icon: const Icon(Icons.delete_sweep, size: 18),
+                      label: const Text('Xoá bộ nhớ đệm',
+                          style: TextStyle(fontSize: 13)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text('Tải cả vùng',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          if (tileDownloadBaseUrl.isEmpty)
+            Material(
+              color: const Color(0xFFFCE8E6),
+              borderRadius: BorderRadius.circular(12),
+              child: const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text(
+                  'Tải khối lượng lớn từ tile.openstreetmap.org bị tắt để tuân '
+                  'thủ chính sách sử dụng OSM (không được tải trước/bulk).\n\n'
+                  'Muốn tải cả vùng cho ngoại tuyến, hãy trỏ ứng dụng tới một '
+                  'máy chủ tile của riêng bạn — đặt hằng số tileDownloadBaseUrl '
+                  'trong lib/offline_tiles.dart (hoặc dùng gói bản đồ MBTiles '
+                  'tự tạo từ dữ liệu OSM).',
+                  style: TextStyle(fontSize: 12.5, color: Color(0xFFB3261E)),
+                ),
+              ),
+            )
+          else ...[
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -292,6 +415,73 @@ class _OfflineScreenState extends State<OfflineScreen> {
                             style: TextStyle(fontWeight: FontWeight.w700)),
                       ),
                     ),
+                ],
+              ),
+            ),
+          ),
+          ],
+          const SizedBox(height: 20),
+          const Text('Chỉ đường ngoại tuyến',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          Material(
+            color: const Color(0xFFF1F3F4),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        _graphLoaded
+                            ? Icons.check_circle
+                            : (_graphHas ? Icons.folder : Icons.cloud_download),
+                        size: 18,
+                        color: _graphLoaded
+                            ? const Color(0xFF34A853)
+                            : kAppBlue,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _graphLoaded
+                              ? 'Đã nạp — định tuyến ngoại tuyến sẵn sàng'
+                              : (_graphHas
+                                  ? 'Bộ dữ liệu đã có (${formatBytes(_graphBytes)})'
+                                  : 'Chưa có bộ dữ liệu chỉ đường'),
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Tải bộ dữ liệu GraphHopper (khoảng 300–500 MB cho Việt Nam) '
+                    'một lần để định tuyến hoàn toàn ngoại tuyến, kể cả khi đi lệch lộ trình.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _graphHas && !_graphLoading ? _loadGraph : null,
+                          icon: _graphLoading
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2))
+                              : const Icon(Icons.upload_file, size: 18),
+                          label: const Text('Nạp bộ dữ liệu',
+                              style: TextStyle(fontSize: 13)),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),

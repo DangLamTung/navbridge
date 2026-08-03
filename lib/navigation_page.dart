@@ -23,6 +23,7 @@ import 'device_picker.dart';
 import 'nav_engine.dart';
 import 'nav_protocol.dart';
 import 'offline_screen.dart';
+import 'offline_router.dart';
 import 'offline_tiles.dart';
 import 'osm_api.dart';
 import 'osrm.dart';
@@ -108,6 +109,11 @@ class _NavigationPageState extends State<NavigationPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _requestPermission();
       _startGps();
+      // Load the on-device routing graph if one is already downloaded.
+      if (await routingGraphPresent()) {
+        final ok = await OfflineRouter.instance.load(await routingGraphDir());
+        debugPrint('ROUTER: on-device graph loaded=$ok');
+      }
     });
     _connSub = onlineStream().listen((online) {
       if (!mounted) return;
@@ -244,7 +250,7 @@ class _NavigationPageState extends State<NavigationPage> {
     final dest = _destination;
     if (dest == null) return;
     try {
-      final route = await fetchOsrmRoute([from, dest]);
+      final route = await fetchAnyRoute([from, dest]);
       if (!mounted || _destination == null) return;
       setState(() {
         _route = route;
@@ -365,7 +371,7 @@ class _NavigationPageState extends State<NavigationPage> {
     _origin = origin;
     _current ??= origin;
     final points = [origin, for (final s in _stops) s.pos];
-    final route = await fetchOsrmRoute(points);
+    final route = await fetchAnyRoute(points);
     debugPrint('PLAN: BUILD ok pts=${points.length} '
         'dist=${route.distance}m stops=${route.stopCumulative.length}');
     if (!mounted) return;
