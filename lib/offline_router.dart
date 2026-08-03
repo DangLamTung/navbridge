@@ -17,6 +17,8 @@ import 'package:path_provider/path_provider.dart';
 import 'offline_tiles.dart' show forceOffline, isOnline;
 import 'osrm.dart';
 import 'route_profile.dart';
+import 'vietmap_config.dart' show dataSource;
+import 'vietmap_router.dart';
 
 const MethodChannel _channel = MethodChannel('navbridge/routing');
 
@@ -205,10 +207,24 @@ Future<bool> downloadToFile(
 /// [profile] selects the road type (car / motorbike / bicycle / walking).
 /// The on-device graph is car-only: car routes use it; other profiles always
 /// route online (OSRM) so the path matches the chosen mode of transport.
+/// With the Vietmap data source active, car + motorbike route on Vietmap
+/// (fast, VN-optimized, live congestion); bicycle/walking stay on OSRM.
 Future<OsrmRoute> fetchAnyRoute(
   List<LatLng> points, {
   RouteProfile profile = RouteProfile.car,
 }) async {
+  if (dataSource == 'vietmap' &&
+      !forceOffline &&
+      (profile == RouteProfile.car || profile == RouteProfile.motorbike)) {
+    try {
+      return await fetchVietmapRoute(
+        points,
+        vehicle: profile == RouteProfile.motorbike ? 'motorcycle' : 'car',
+      );
+    } catch (e) {
+      debugPrint('VIETMAP: route failed: $e — falling back to OSRM');
+    }
+  }
   if (profile == RouteProfile.car && OfflineRouter.instance.isLoaded) {
     final local = await OfflineRouter.instance.route(points);
     if (local != null) return local;

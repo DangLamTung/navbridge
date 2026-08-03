@@ -25,6 +25,10 @@ class OsrmStep {
   // straight | slight left | left | sharp left
   final LatLng maneuver; // coordinate where the maneuver happens
 
+  /// Live congestion level (0 low · 1 moderate · 2 heavy/severe), when the
+  /// route came from a traffic-aware backend (Vietmap). Null = n/a.
+  final int? congestion;
+
   OsrmStep({
     required this.name,
     required this.distance,
@@ -32,6 +36,7 @@ class OsrmStep {
     required this.type,
     required this.modifier,
     required this.maneuver,
+    this.congestion,
   });
 }
 

@@ -14,6 +14,7 @@ import 'offline_router.dart';
 import 'offline_tiles.dart';
 import 'settings.dart';
 import 'ui/widgets.dart';
+import 'vietmap_config.dart' show dataSource;
 
 String formatBytes(int b) {
   if (b >= 1 << 30) return '${(b / (1 << 30)).toStringAsFixed(2)} GB';
@@ -63,9 +64,16 @@ class _OfflineScreenState extends State<OfflineScreen> {
   Future<void> _toggleForceOffline(bool v) async {
     setState(() => _forceOffline = v);
     forceOffline = v;
-    await saveSettings(AppSettings(forceOffline: v));
+    await saveSettings(AppSettings(forceOffline: v, dataSource: dataSource));
     // Tile cache is source-agnostic but network fetches stop/start here.
     setState(() {});
+  }
+
+  Future<void> _setDataSource(String s) async {
+    if (dataSource == s) return;
+    dataSource = s;
+    setState(() {});
+    await saveSettings(AppSettings(forceOffline: _forceOffline, dataSource: s));
   }
 
   Future<void> _refreshGraph() async {
@@ -274,6 +282,47 @@ class _OfflineScreenState extends State<OfflineScreen> {
                     ? 'Chỉ dùng dữ liệu trên máy (bản đồ đã lưu + chỉ đường ngoại tuyến).'
                     : 'Bật để khoá ngoại tuyến khi đi đường dài: không dùng mạng.',
                 style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // data source: OSM (default, offline-capable) / Vietmap (fast VN)
+          Material(
+            color: const Color(0xFFFEF7E0),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Nguồn dữ liệu (tìm kiếm & chỉ đường)',
+                      style: TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _SourceChoice(
+                          label: 'OSM',
+                          subtitle: 'Ngoại tuyến được',
+                          icon: Icons.public,
+                          selected: dataSource == 'osm',
+                          onTap: () => _setDataSource('osm'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _SourceChoice(
+                          label: 'Vietmap',
+                          subtitle: 'Nhanh + giao thông thật',
+                          icon: Icons.traffic,
+                          selected: dataSource == 'vietmap',
+                          onTap: () => _setDataSource('vietmap'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
@@ -546,6 +595,55 @@ class _OfflineScreenState extends State<OfflineScreen> {
                 ),
               ),
         ],
+      ),
+    );
+  }
+}
+
+/// One selectable data-source card (OSM / Vietmap).
+class _SourceChoice extends StatelessWidget {
+  const _SourceChoice({
+    required this.label,
+    required this.subtitle,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final String subtitle;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = selected ? Colors.white : Colors.grey[800];
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? kAppBlue : const Color(0xFFF1F3F4),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 20, color: fg),
+            const SizedBox(height: 4),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: fg)),
+            const SizedBox(height: 2),
+            Text(subtitle,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 10, color: selected ? Colors.white70 : Colors.grey[600])),
+          ],
+        ),
       ),
     );
   }

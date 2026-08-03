@@ -9,9 +9,13 @@ import 'package:path_provider/path_provider.dart';
 class AppSettings {
   final bool forceOffline;
 
-  const AppSettings({this.forceOffline = false});
+  /// Map/routing data source: 'osm' (default) | 'vietmap'.
+  final String dataSource;
 
-  Map<String, dynamic> toJson() => {'forceOffline': forceOffline};
+  const AppSettings({this.forceOffline = false, this.dataSource = 'osm'});
+
+  Map<String, dynamic> toJson() =>
+      {'forceOffline': forceOffline, 'dataSource': dataSource};
 }
 
 Future<File> _settingsFile() async {
@@ -24,7 +28,10 @@ Future<AppSettings> loadSettings() async {
     final f = await _settingsFile();
     if (!f.existsSync()) return const AppSettings();
     final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
-    return AppSettings(forceOffline: (j['forceOffline'] ?? false) as bool);
+    return AppSettings(
+      forceOffline: (j['forceOffline'] ?? false) as bool,
+      dataSource: (j['dataSource'] ?? 'osm') as String,
+    );
   } catch (_) {
     return const AppSettings();
   }

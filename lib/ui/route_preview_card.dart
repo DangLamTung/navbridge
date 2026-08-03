@@ -150,14 +150,21 @@ class _ProfileChip extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(profile.icon, size: 18, color: fg),
+            Icon(profile.icon, size: 16, color: fg),
             const SizedBox(height: 2),
-            Text(
-              profile.label,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: fg,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  profile.label,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: fg,
+                  ),
+                ),
               ),
             ),
           ],

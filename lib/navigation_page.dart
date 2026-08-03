@@ -35,6 +35,8 @@ import 'trip_logger.dart';
 import 'trip_plan.dart';
 import 'trips_screen.dart';
 import 'vector_nav_map.dart';
+import 'vietmap_api.dart';
+import 'vietmap_config.dart';
 import 'voice_commands.dart';
 import 'voice_guide.dart';
 import 'ui/clock_button.dart';
@@ -112,8 +114,15 @@ class _NavigationPageState extends State<NavigationPage> {
     'topo': 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
     'esri':
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    'vietmap': VietmapConfig.satelliteTiles,
   };
-  static const List<String> _tileLayerNames = ['osm', 'carto', 'topo', 'esri'];
+  static const List<String> _tileLayerNames = [
+    'osm',
+    'carto',
+    'topo',
+    'esri',
+    'vietmap',
+  ];
   String _tileSource = 'osm'; // active basemap layer
 
   // --- multi-stop plan ---
@@ -159,10 +168,11 @@ class _NavigationPageState extends State<NavigationPage> {
       if (!mounted) return;
       setState(() => _offline = !on || forceOffline);
     });
-    // Restore the persisted offline/online mode choice.
+    // Restore the persisted offline/online mode + data-source choice.
     loadSettings().then((s) {
       if (!mounted) return;
       forceOffline = s.forceOffline;
+      dataSource = s.dataSource;
       setState(() => _offline = _offline || forceOffline);
     });
     // Voice: spoken turn-by-turn (→ Bluetooth speaker) + mic commands.
@@ -472,12 +482,28 @@ class _NavigationPageState extends State<NavigationPage> {
 
   Future<void> _selectSuggestion(OsmSuggestion s) async {
     _searchFocus.unfocus();
+    // Vietmap suggestions carry no coordinates — resolve them on selection.
+    var lat = s.lat;
+    var lng = s.lng;
+    if (s.source == 'vietmap' && s.refId.isNotEmpty) {
+      final p = await vietmapPlace(s.refId);
+      if (p == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Không lấy được tọa độ địa điểm.')));
+        }
+        return;
+      }
+      lat = p.$1;
+      lng = p.$2;
+      s = OsmSuggestion(refId: s.refId, display: s.display, lat: lat, lng: lng);
+    }
     setState(() {
       _suggestions = [];
       _building = true;
       _searchCtrl.text = s.display;
-      _stops.add(TripStop(name: s.display, lat: s.lat, lng: s.lng));
-      _destination = LatLng(s.lat, s.lng);
+      _stops.add(TripStop(name: s.display, lat: lat, lng: lng));
+      _destination = LatLng(lat, lng);
       _searchCtrl.clear();
     });
     try {
@@ -864,6 +890,11 @@ class _NavigationPageState extends State<NavigationPage> {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => const OfflineScreen()),
     );
+    // The user may have changed the data source — reload it.
+    if (!mounted) return;
+    final s = await loadSettings();
+    dataSource = s.dataSource;
+    setState(() {});
   }
 
   // ---- UI composition --------------------------------------------------

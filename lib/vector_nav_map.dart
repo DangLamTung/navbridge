@@ -243,9 +243,11 @@ class _VectorNavMapState extends State<VectorNavMap> {
     _lastRouteSig = _routeSignature(widget.routeGeometry);
   }
 
-  /// Traffic level 0 (green) / 1 (yellow) / 2 (red) from a step's implied
-  /// speed — an offline stand-in for live traffic data.
+  /// Traffic level 0 (green) / 1 (yellow) / 2 (red). Uses the backend's live
+  /// congestion level when available (Vietmap), else the step's implied speed
+  /// as an offline stand-in.
   static int _trafficLevel(OsrmStep s) {
+    if (s.congestion != null) return s.congestion!;
     if (s.type == 'arrive' || s.type == 'depart' || s.duration <= 0) {
       return 0;
     }

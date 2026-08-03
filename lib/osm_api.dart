@@ -14,9 +14,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'offline_tiles.dart' show forceOffline;
+import 'vietmap_api.dart';
+import 'vietmap_config.dart' show dataSource;
 
 const _nominatimBase = 'https://nominatim.openstreetmap.org';
 
@@ -28,11 +31,16 @@ class OsmSuggestion {
   final double lat;
   final double lng;
 
+  /// Where this suggestion came from: 'osm' (has coords) or 'vietmap'
+  /// (coords come from a place lookup on selection).
+  final String source;
+
   OsmSuggestion({
     required this.refId,
     required this.display,
     required this.lat,
     required this.lng,
+    this.source = 'osm',
   });
 }
 
@@ -63,6 +71,7 @@ Future<void> _loadSearchCache() async {
             display: (s['display'] ?? '') as String,
             lat: ((s['lat'] ?? 0) as num).toDouble(),
             lng: ((s['lng'] ?? 0) as num).toDouble(),
+            source: (s['source'] ?? 'osm') as String,
           )
       ];
     }
@@ -81,6 +90,7 @@ Future<void> _saveSearchCache() async {
               'display': s.display,
               'lat': s.lat,
               'lng': s.lng,
+              'source': s.source,
             }
         ]
     };
@@ -90,14 +100,36 @@ Future<void> _saveSearchCache() async {
 
 /// Search suggestions for a partial query (min ~2 chars).
 /// Falls back to the local cache when the network is unavailable; in forced
-/// offline mode only the local cache is used.
+/// offline mode only the local cache is used. With the Vietmap data source
+/// active, uses Vietmap autocomplete (fast, VN-focused) instead of Nominatim.
 Future<List<OsmSuggestion>> osmAutocomplete(
   String text, {
   int limit = 6,
+  LatLng? focus,
 }) async {
   await _loadSearchCache();
   final key = text.trim().toLowerCase();
   if (forceOffline) return _searchCache[key] ?? const [];
+
+  if (dataSource == 'vietmap') {
+    try {
+      final vm = await vietmapAutocomplete(text, focus: focus);
+      final out = <OsmSuggestion>[
+        for (final s in vm.take(limit))
+          OsmSuggestion(
+            refId: s.refId,
+            display: s.display,
+            lat: 0,
+            lng: 0,
+            source: 'vietmap',
+          ),
+      ];
+      if (out.isNotEmpty) return out;
+    } catch (_) {
+      // fall through to Nominatim
+    }
+  }
+
   try {
     final url = '$_nominatimBase/search'
         '?format=jsonv2'
