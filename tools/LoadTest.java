@@ -16,7 +16,12 @@ public class LoadTest {
         gh.setProfiles(new Profile("car").setVehicle("car").setWeighting("fastest"));
         gh.importOrLoad();
         System.out.println("LOADED");
-        GHResponse rsp = gh.route(new GHRequest(43.7311, 7.4198, 43.7389, 7.4270).setProfile("car"));
+        // Default test: HCMC (Ben Thanh -> Tan Son Nhat). Override via args.
+        double lat1 = args.length > 1 ? Double.parseDouble(args[1]) : 10.7729;
+        double lon1 = args.length > 2 ? Double.parseDouble(args[2]) : 106.6983;
+        double lat2 = args.length > 3 ? Double.parseDouble(args[3]) : 10.8185;
+        double lon2 = args.length > 4 ? Double.parseDouble(args[4]) : 106.6523;
+        GHResponse rsp = gh.route(new GHRequest(lat1, lon1, lat2, lon2).setProfile("car"));
         if (rsp.hasErrors()) {
             System.out.println("ROUTE_ERRORS: " + rsp.getErrors());
         } else {

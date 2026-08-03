@@ -19,7 +19,7 @@ CP="$(find "$HOME/.gradle/caches/modules-2" -name '*.jar' ! -name '*-sources.jar
       ! -name '*-javadoc.jar' 2>/dev/null | grep -vE 'graphhopper.*/(8\.|9\.|10\.)' | tr '\n' ':')"
 
 echo "Compiling + importing $PBF -> $OUT  (can take a while for large regions)..."
-"$JAVA" -Xmx14g -cp "$CP" --source 17 "$DIR/BuildGraph.java" "$PBF" "$OUT"
+"$JAVA" -Xmx${GRAPH_MEM:-12g} -cp "$CP" --source 17 "$DIR/BuildGraph.java" "$PBF" "$OUT"
 
 echo "Zipping -> ${OUT}.ghz"
 rm -f "${OUT}.ghz"

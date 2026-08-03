@@ -2,6 +2,7 @@ package com.navbridge.app
 
 import com.graphhopper.GHRequest
 import com.graphhopper.GraphHopper
+import com.graphhopper.GraphHopperConfig
 import com.graphhopper.ResponsePath
 import com.graphhopper.config.Profile
 import com.graphhopper.util.shapes.GHPoint
@@ -36,8 +37,18 @@ class GraphHopperRouting {
                 if (hopper == null) {
                     val gh = GraphHopper()
                     val loc = prepareLocation(graphPath)
-                    gh.setGraphHopperLocation(loc)
-                    gh.setProfiles(carProfile())
+                    // MMAP data access: maps graph files lazily instead of
+                    // loading them into the Java heap. Needed for the
+                    // whole-Vietnam graph (~450 MB) on phone-size heaps.
+                    val config = GraphHopperConfig()
+                    config.putObject("graph.dataaccess", "MMAP")
+                    config.putObject("graph.location", loc)
+                    // init() hard-requires these keys even for pure loading.
+                    config.putObject("import.osm.ignored_highways", "")
+                    config.putObject("graph.vehicles", "car")
+                    config.putObject("graph.encoded_values", "")
+                    config.setProfiles(listOf(carProfile()))
+                    gh.init(config)
                     gh.importOrLoad()
                     hopper = gh
                 }
