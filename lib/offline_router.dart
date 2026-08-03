@@ -212,18 +212,24 @@ Future<bool> downloadToFile(
 Future<OsrmRoute> fetchAnyRoute(
   List<LatLng> points, {
   RouteProfile profile = RouteProfile.car,
+  bool avoidHighway = false,
 }) async {
-  final routes = await fetchAnyRoutes(points, profile: profile);
+  final routes =
+      await fetchAnyRoutes(points, profile: profile, avoidHighway: avoidHighway);
   return routes.first;
 }
 
 /// Like [fetchAnyRoute] but returns up to [maxAlternatives] route options
 /// (best first) when the active source can produce alternatives (Vietmap
 /// `alternative=true`). Non-Vietmap sources return a single-element list.
+/// [avoidHighway] re-routes without motorways (OSRM `exclude=motorway`;
+/// the on-device car graph and Vietmap don't support exclusions, so it's
+/// ignored there).
 Future<List<OsrmRoute>> fetchAnyRoutes(
   List<LatLng> points, {
   RouteProfile profile = RouteProfile.car,
   int maxAlternatives = 3,
+  bool avoidHighway = false,
 }) async {
   if (dataSource == 'vietmap' &&
       !forceOffline &&
@@ -247,7 +253,13 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
         ? 'Ngoại tuyến: chưa tải bộ dữ liệu chỉ đường'
         : 'Ngoại tuyến: bộ dữ liệu chỉ hỗ trợ ô tô');
   }
-  return [await fetchOsrmRoute(points, profile: profile.osrm)];
+  return [
+    await fetchOsrmRoute(
+      points,
+      profile: profile.osrm,
+      exclude: avoidHighway ? 'motorway' : null,
+    )
+  ];
 }
 
 /// True when on-device routing could be used right now (loaded graph).

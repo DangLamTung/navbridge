@@ -51,14 +51,15 @@ class VietmapNavView extends StatefulWidget {
   final VoidCallback onExit;
 
   @override
-  State<VietmapNavView> createState() => _VietmapNavViewState();
+  State<VietmapNavView> createState() => VietmapNavViewState();
 }
 
-class _VietmapNavViewState extends State<VietmapNavView> {
+class VietmapNavViewState extends State<VietmapNavView> {
   MapNavigationViewController? _controller;
   MapOptions? _options;
   RouteProgressEvent? _progress;
   bool _started = false;
+  vm.LatLng? _lastPos;
 
   @override
   void initState() {
@@ -126,6 +127,10 @@ class _VietmapNavViewState extends State<VietmapNavView> {
     final eta = DateTime.now().add(Duration(seconds: remain));
     final total = (e.distanceRemaining ?? 0) + (e.distanceTraveled ?? 0);
     final loc = e.snappedLocation ?? e.currentLocation;
+    if (loc?.latitude != null && loc?.longitude != null) {
+      _lastPos = vm.LatLng(
+          loc!.latitude!.toDouble(), loc.longitude!.toDouble());
+    }
     final nav = NavProgress(
       meter: meter,
       iconCode: _vmIcon(e.currentModifierType, e.currentModifier),
@@ -158,6 +163,19 @@ class _VietmapNavViewState extends State<VietmapNavView> {
     ];
     c.buildRoute(waypoints: w, profile: _profile);
     c.startNavigation();
+  }
+
+  /// Re-route to a POI picked from the quick-search bar: from the current
+  /// position to [lat]/[lng]. Called by the host page.
+  Future<void> rerouteTo(double lat, double lng) async {
+    final c = _controller;
+    if (c == null) return;
+    final from = _lastPos ?? _toVm(widget.waypoints.first);
+    final ok = await c.buildRoute(
+      waypoints: <vm.LatLng>[from, vm.LatLng(lat, lng)],
+      profile: _profile,
+    );
+    if (ok) c.startNavigation();
   }
 
   Widget _instructionIcon() {

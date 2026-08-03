@@ -21,6 +21,7 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'osrm.dart';
+import 'poi_search.dart';
 
 /// Built-in car marker icons (see assets/offline_map/icons/).
 const List<String> kCarIcons = [
@@ -46,6 +47,7 @@ class VectorNavMap extends StatefulWidget {
     this.heading,
     this.headingUp = true,
     this.carIcon = 'arrow',
+    this.pois = const [],
   });
 
   /// Route polyline to draw (latlong2 points).
@@ -67,6 +69,9 @@ class VectorNavMap extends StatefulWidget {
   /// Car marker icon name (from [kCarIcons]).
   final String carIcon;
 
+  /// Nearby POIs to highlight (gas/food/hotel/…) during navigation.
+  final List<PoiResult> pois;
+
   @override
   State<VectorNavMap> createState() => _VectorNavMapState();
 }
@@ -79,6 +84,9 @@ class _VectorNavMapState extends State<VectorNavMap> {
   Line? _routeLine;
   final List<Line> _trafficLines = [];
   final List<Circle> _trafficLights = [];
+  final List<Circle> _poiCircles = [];
+  final List<Symbol> _poiSymbols = [];
+  String? _lastPoiSig;
   Symbol? _carMarker;
   Circle? _carCone;
   bool _hasPosition = false;
@@ -301,6 +309,62 @@ class _VectorNavMapState extends State<VectorNavMap> {
   ll.LatLng? _routeSignature(List<ll.LatLng> pts) {
     if (pts.isEmpty) return null;
     return pts.first; // route changes are always a brand-new geometry
+  }
+
+  /// POI markers (colored dot + name label). Rebuilt when the list changes.
+  String _poiSignature(List<PoiResult> pois) =>
+      pois.map((p) => '${p.type.key}:${p.lat},${p.lng}:${p.name}').join('|');
+
+  Future<void> _updatePois() async {
+    final ctrl = _controller;
+    if (ctrl == null) return;
+    final sig = _poiSignature(widget.pois);
+    if (sig == _lastPoiSig) return;
+    _lastPoiSig = sig;
+    for (final c in _poiCircles) {
+      try {
+        ctrl.removeCircle(c);
+      } catch (_) {}
+    }
+    for (final s in _poiSymbols) {
+      try {
+        ctrl.removeSymbol(s);
+      } catch (_) {}
+    }
+    _poiCircles.clear();
+    _poiSymbols.clear();
+    for (final p in widget.pois) {
+      final col = switch (p.type) {
+        PoiType.fuel => '#F4B400',
+        PoiType.food => '#EA4335',
+        PoiType.hotel => '#1A73E8',
+        PoiType.atm => '#9334E6',
+        PoiType.hospital => '#34A853',
+        PoiType.parking => '#5F6368',
+      };
+      try {
+        final c = await ctrl.addCircle(CircleOptions(
+          geometry: LatLng(p.lat, p.lng),
+          circleColor: col,
+          circleRadius: 9.0,
+          circleStrokeColor: '#FFFFFF',
+          circleStrokeWidth: 2.5,
+          circleOpacity: 0.95,
+        ));
+        _poiCircles.add(c);
+        final s = await ctrl.addSymbol(SymbolOptions(
+          geometry: LatLng(p.lat, p.lng),
+          textField: p.name,
+          textSize: 12,
+          textColor: '#202124',
+          textHaloColor: '#FFFFFF',
+          textHaloWidth: 1.8,
+          textAnchor: 'bottom',
+          textOffset: const Offset(0, -0.4),
+        ));
+        _poiSymbols.add(s);
+      } catch (_) {}
+    }
   }
 
   void _updateRoute() {
@@ -541,6 +605,7 @@ class _VectorNavMapState extends State<VectorNavMap> {
     }
     _followPosition();
     _updateRoute();
+    _updatePois();
   }
 
   @override
@@ -571,6 +636,7 @@ class _VectorNavMapState extends State<VectorNavMap> {
         await _ensureCarHalo();
         await _ensureCarMarker();
         _followPosition();
+        await _updatePois();
       },
     );
   }

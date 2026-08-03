@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../elevation.dart';
 import '../route_profile.dart';
 import 'widgets.dart';
 
@@ -32,6 +33,9 @@ class RoutePreviewCard extends StatelessWidget {
     this.alternativeLabels = const [],
     this.selectedAlternative = 0,
     this.onAlternative,
+    this.avoidHighway = false,
+    this.onToggleAvoidHighway,
+    this.elevation,
   });
 
   /// e.g. "12 ph"
@@ -60,6 +64,13 @@ class RoutePreviewCard extends StatelessWidget {
 
   /// Called when an alternative route chip is tapped.
   final ValueChanged<int>? onAlternative;
+
+  /// Re-route without motorways (route criteria).
+  final bool avoidHighway;
+  final VoidCallback? onToggleAvoidHighway;
+
+  /// Route ascent/descent (best-effort; null = unknown).
+  final ElevationInfo? elevation;
 
   /// Active route/road type (car / motorbike / bicycle / walking).
   final RouteProfile profile;
@@ -156,6 +167,53 @@ class RoutePreviewCard extends StatelessWidget {
                 ),
               ),
             ],
+            // Route criteria: elevation (ascent/descent) + avoid motorways.
+            if (elevation != null || onToggleAvoidHighway != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  if (elevation != null)
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE8F0FE),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.terrain,
+                                size: 16, color: Color(0xFF1A73E8)),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                'Lên ${elevation!.up.round()} m '
+                                '• Xuống ${elevation!.down.round()} m',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF174EA6)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  const Spacer(),
+                  if (onToggleAvoidHighway != null)
+                    _CriteriaChip(
+                      icon: Icons.directions_car_outlined,
+                      label: 'Tránh cao tốc',
+                      selected: avoidHighway,
+                      onTap: onToggleAvoidHighway!,
+                    ),
+                ],
+              ),
+            ],
             const SizedBox(height: 10),
             // Route / road type selector: Ô tô · Xe máy · Xe đạp · Đi bộ.
             Row(
@@ -194,6 +252,52 @@ class RoutePreviewCard extends StatelessWidget {
               onPressed: onClear,
               icon: const Icon(Icons.close, size: 16),
               label: const Text('Xoá lộ trình', style: TextStyle(fontSize: 13)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One route-criteria chip (e.g. "Tránh cao tốc").
+class _CriteriaChip extends StatelessWidget {
+  const _CriteriaChip({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = selected ? Colors.white : const Color(0xFF5F6368);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? kAppBlue : const Color(0xFFF1F3F4),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: fg),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: fg,
+              ),
             ),
           ],
         ),

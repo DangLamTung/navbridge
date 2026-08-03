@@ -12,7 +12,9 @@
 library;
 
 import 'dart:async';
+import 'dart:math' show Point;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -21,11 +23,13 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'ble_clock.dart';
 import 'device_picker.dart';
+import 'elevation.dart';
 import 'nav_engine.dart';
 import 'nav_protocol.dart';
 import 'offline_screen.dart';
 import 'offline_router.dart';
 import 'offline_tiles.dart';
+import 'poi_search.dart';
 import 'route_profile.dart';
 import 'settings.dart';
 import 'osm_api.dart';
@@ -95,6 +99,23 @@ class _NavigationPageState extends State<NavigationPage> {
   List<OsrmRoute> _alternativeRoutes = []; // Vietmap alternative routes
   int _selectedRoute = 0; // index into [_alternativeRoutes]
   List<LatLng> _planPoints = []; // route points for re-fitting the camera
+
+  // --- draggable route (Google-style grab-the-line to add a via point) ---
+  // One handle per route segment (a simple A→B route has exactly one).
+  List<LatLng> _dragHandles = [];
+  final ValueNotifier<MapCamera?> _camNotifier = ValueNotifier(null);
+
+  // --- route criteria: traffic / elevation / avoid highway ---------------
+  bool _avoidHighway = false; // re-plan without motorways (OSRM)
+  ElevationInfo? _elevation; // ascent/descent of the current route
+  final Map<String, ElevationInfo> _elevationCache = {};
+
+  // --- quick POI search (gas / food / hotel / … during navigation) ------
+  final GlobalKey<VietmapNavViewState> _vmNavKey =
+      GlobalKey<VietmapNavViewState>();
+  List<PoiResult> _pois = [];
+  PoiType? _poiType;
+  bool _poiBusy = false;
 
   // --- simulated drive (test mode) ---
   Timer? _simTimer;
@@ -167,6 +188,11 @@ class _NavigationPageState extends State<NavigationPage> {
         final ok = await OfflineRouter.instance.load(await routingGraphPath());
         debugPrint('ROUTER: on-device graph loaded=$ok');
       }
+      // Initial camera for the route drag handle (kept fresh by
+      // onPositionChanged).
+      try {
+        _camNotifier.value = _map.camera;
+      } catch (_) {}
     });
     _connSub = onlineStream().listen((online) {
       if (!mounted) return;
@@ -354,7 +380,11 @@ class _NavigationPageState extends State<NavigationPage> {
     final dest = _destination;
     if (dest == null) return;
     try {
-      final route = await fetchAnyRoute([from, dest], profile: _routeProfile);
+      final route = await fetchAnyRoute(
+        [from, dest],
+        profile: _routeProfile,
+        avoidHighway: _avoidHighway,
+      );
       if (!mounted || _destination == null) return;
       setState(() {
         _route = route;
@@ -549,7 +579,11 @@ class _NavigationPageState extends State<NavigationPage> {
     List<OsrmRoute> alternatives = [];
     try {
       // Vietmap can return up to 3 route options (best first).
-      final routes = await fetchAnyRoutes(points, profile: _routeProfile);
+      final routes = await fetchAnyRoutes(
+        points,
+        profile: _routeProfile,
+        avoidHighway: _avoidHighway,
+      );
       route = routes.first;
       alternatives = routes.length > 1 ? routes : [];
     } catch (_) {
@@ -561,7 +595,11 @@ class _NavigationPageState extends State<NavigationPage> {
           : 'Bộ dữ liệu ngoại tuyến chỉ hỗ trợ ô tô — cần trực tuyến cho ${_routeProfile.label.toLowerCase()}. ';
       final goOnline = await _confirmGoOnline(msg);
       if (!goOnline || !mounted) return;
-      route = await fetchOsrmRoute(points, profile: _routeProfile.osrm);
+      route = await fetchOsrmRoute(
+        points,
+        profile: _routeProfile.osrm,
+        exclude: _avoidHighway ? 'motorway' : null,
+      );
     }
     debugPrint('PLAN: BUILD ok pts=${points.length} '
         'dist=${route.distance}m stops=${route.stopCumulative.length} '
@@ -576,7 +614,9 @@ class _NavigationPageState extends State<NavigationPage> {
       _destination = _stops.last.pos;
       _navigating = false;
       _progress = null;
+      _updateDragHandles(route);
     });
+    unawaited(_loadElevation(route));
     _map.fitCamera(CameraFit.bounds(
       bounds: LatLngBounds.fromPoints(points),
       padding: const EdgeInsets.all(60),
@@ -593,7 +633,9 @@ class _NavigationPageState extends State<NavigationPage> {
       _selectedRoute = i;
       _route = route;
       _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
+      _updateDragHandles(route);
     });
+    unawaited(_loadElevation(route));
     if (_planPoints.length >= 2) {
       _map.fitCamera(CameraFit.bounds(
         bounds: LatLngBounds.fromPoints(_planPoints),
@@ -638,6 +680,10 @@ class _NavigationPageState extends State<NavigationPage> {
         _selectedRoute = 0;
         _planPoints = [];
         _showSteps = false;
+        _dragHandles = [];
+        _elevation = null;
+        _pois = [];
+        _poiType = null;
       });
       return;
     }
@@ -718,6 +764,10 @@ class _NavigationPageState extends State<NavigationPage> {
       _alternativeRoutes = [];
       _selectedRoute = 0;
       _planPoints = [];
+      _dragHandles = [];
+      _elevation = null;
+      _pois = [];
+      _poiType = null;
     });
     await _finishTrip(); // save the recorded trip
   }
@@ -980,6 +1030,280 @@ class _NavigationPageState extends State<NavigationPage> {
     return best;
   }
 
+  // ---- draggable route handles -----------------------------------------
+
+  /// One drag handle per route segment (origin→stop1, stop1→stop2, …).
+  /// A simple A→B route gets exactly one handle; adding stops or a long
+  /// trip yields one per segment.
+  void _updateDragHandles(OsrmRoute? route) {
+    _dragHandles = [];
+    final g = route?.geometry ?? const <LatLng>[];
+    if (route == null || g.length < 2 || _stops.isEmpty) return;
+    final cum = route.stopCumulative;
+    for (var j = 0; j < _stops.length; j++) {
+      final cStart = j == 0 ? 0.0 : (j - 1 < cum.length ? cum[j - 1] : 0);
+      final cEnd = j < cum.length ? cum[j] : route.distance;
+      final dist = route.distance <= 0 ? 1.0 : route.distance;
+      final frac = ((cStart + cEnd) / 2) / dist;
+      final idx = (frac * (g.length - 1)).round().clamp(0, g.length - 1);
+      _dragHandles.add(g[idx]);
+    }
+  }
+
+  /// The user finished dragging handle [segIndex] → insert the point as a
+  /// via stop in that segment and re-plan (the route now goes through it).
+  void _commitDragHandle(int segIndex) {
+    if (segIndex < 0 || segIndex >= _dragHandles.length) return;
+    final via = _dragHandles[segIndex];
+    final stops = List<TripStop>.of(_stops);
+    final idx = segIndex.clamp(0, stops.length);
+    stops.insert(
+      idx,
+      TripStop(name: 'Điểm giữa', lat: via.latitude, lng: via.longitude),
+    );
+    setState(() {
+      _stops..clear()..addAll(stops);
+    });
+    _buildPlanRoute();
+  }
+
+  /// Best-effort elevation (ascent/descent) for the route card, cached per
+  /// route. Never fatal — shows nothing when it can't be fetched.
+  Future<void> _loadElevation(OsrmRoute route) async {
+    final key = '${route.distance.round()}:${route.geometry.length}';
+    final cached = _elevationCache[key];
+    if (cached != null) {
+      if (mounted) setState(() => _elevation = cached);
+      return;
+    }
+    final e = await fetchRouteElevation(route.geometry);
+    if (e != null) _elevationCache[key] = e;
+    if (mounted) setState(() => _elevation = e);
+  }
+
+  /// Re-plan avoiding motorways (traffic/road-type criteria).
+  void _toggleAvoidHighway() {
+    setState(() => _avoidHighway = !_avoidHighway);
+    if (_stops.isNotEmpty) _buildPlanRoute();
+  }
+
+  // ---- quick POI search (gas / food / hotel / …) -----------------------
+
+  Widget _poiArea() {
+    // Above the Vietmap SDK's own ETA bar when that nav UI is active.
+    final pad = _useVietmapNav ? 110.0 : 0.0;
+    return Padding(
+      padding: EdgeInsets.only(bottom: pad),
+      child: _pois.isEmpty ? _poiTypeBar() : _poiResults(),
+    );
+  }
+
+  Widget _poiTypeBar() {
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          for (final t in PoiType.values)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Material(
+                color: Colors.white,
+                elevation: 4,
+                shadowColor: Colors.black26,
+                borderRadius: BorderRadius.circular(20),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(20),
+                  onTap: () => _searchPoi(t),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_poiBusy && _poiType == t)
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        else
+                          Icon(t.icon, size: 16, color: poiColor(t)),
+                        const SizedBox(width: 6),
+                        Text(
+                          t.label,
+                          style: const TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _poiResults() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 8, 4),
+          child: Row(
+            children: [
+              Text(
+                '${_poiType?.label ?? ''} gần đây',
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w800),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: () => setState(() {
+                  _pois = [];
+                  _poiType = null;
+                }),
+                style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact),
+                child: const Text('Đóng', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 76,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            itemCount: _pois.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (_, i) => _poiCard(_pois[i]),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _poiCard(PoiResult p) {
+    final d = _current == null ? 0.0 : distanceMeters(_current!, p.pos);
+    final col = poiColor(p.type);
+    return Material(
+      color: Colors.white,
+      elevation: 4,
+      shadowColor: Colors.black26,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => _rerouteToPoi(p),
+        child: Container(
+          width: 180,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(p.type.icon, size: 16, color: col),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      p.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${formatDistance(d)} • ${p.type.label}',
+                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Find the nearest POIs of [type] around the current position and
+  /// highlight them on the map.
+  Future<void> _searchPoi(PoiType type) async {
+    final c = _current ?? _origin;
+    if (c == null) return;
+    setState(() {
+      _poiBusy = true;
+      _poiType = type;
+    });
+    try {
+      final r = await searchPois(type, c);
+      if (!mounted) return;
+      setState(() => _pois = r);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    } finally {
+      if (mounted) setState(() => _poiBusy = false);
+    }
+  }
+
+  /// Navigate to a picked POI, keeping the current navigation running.
+  Future<void> _rerouteToPoi(PoiResult p) async {
+    if (_useVietmapNav) {
+      // Ask the Vietmap SDK to re-route to the POI.
+      await _vmNavKey.currentState?.rerouteTo(p.lat, p.lng);
+      if (mounted) setState(() {
+        _pois = [];
+        _poiType = null;
+      });
+      return;
+    }
+    final from = _current ?? _origin;
+    if (from == null) return;
+    try {
+      final route = await fetchAnyRoute(
+        [from, p.pos],
+        profile: _routeProfile,
+        avoidHighway: _avoidHighway,
+      );
+      if (!mounted) return;
+      setState(() {
+        _destination = p.pos;
+        _stops
+          ..clear()
+          ..add(TripStop(name: p.name, lat: p.lat, lng: p.lng));
+        _route = route;
+        _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
+        _alternativeRoutes = [];
+        _selectedRoute = 0;
+        _planPoints = [from, p.pos];
+        _pois = [];
+        _poiType = null;
+        _updateDragHandles(route);
+      });
+      unawaited(_loadElevation(route));
+      if (_current != null) {
+        final nav = _engine!.update(_current!);
+        _progress = nav;
+        _sendToClock(nav);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Không định tuyến được: $e')));
+      }
+    }
+  }
+
   /// Switch the basemap layer (OSM → CARTO → Topo → Satellite → …).
   void _cycleTileLayer() {
     final i = _tileLayerNames.indexOf(_tileSource);
@@ -1049,6 +1373,7 @@ class _NavigationPageState extends State<NavigationPage> {
           // the raster map.
           _navigating && _useVietmapNav
               ? VietmapNavView(
+                  key: _vmNavKey,
                   waypoints: _navWaypoints(),
                   profile: _routeProfile,
                   onProgress: _handleVietmapProgress,
@@ -1063,6 +1388,7 @@ class _NavigationPageState extends State<NavigationPage> {
                       heading: _heading,
                       headingUp: _headingUp,
                       carIcon: _carIcon,
+                      pois: _pois,
                     )
                   : _buildMap(route, current),
           Positioned.fill(
@@ -1253,105 +1579,154 @@ class _NavigationPageState extends State<NavigationPage> {
   }
 
   Widget _buildMap(OsrmRoute? route, LatLng? current) {
-    return FlutterMap(
-      mapController: _map,
-      options: MapOptions(
-        initialCenter: current ?? const LatLng(10.8231, 106.6297),
-        initialZoom: 13,
-        interactionOptions: const InteractionOptions(
-          flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
-        ),
-        // Google-style interactive route editing on the preview map:
-        // tap an alternative route line to select it, long-press to add a
-        // via point and re-plan.
-        onTap: (_, tapPos) {
-          if (_navigating || _alternativeRoutes.length <= 1) return;
-          for (var i = 0; i < _alternativeRoutes.length; i++) {
-            if (i == _selectedRoute) continue;
-            if (_distToLine(tapPos, _alternativeRoutes[i].geometry) <
-                0.05 /* ~50m */) {
-              _selectAlternative(i);
-              return;
-            }
-          }
-        },
-        onLongPress: (_, pos) {
-          if (!_navigating) _addViaPoint(pos);
-        },
-      ),
+    return Stack(
       children: [
-        TileLayer(
-          // Basemap layer (changeable): OSM / CARTO / OpenTopoMap / ESRI
-          // satellite. Requests are throttled to the OSM tile policy and
-          // auto-fail over; each layer caches under its own folder so styles
-          // never mix.
-          urlTemplate: _tileLayers[_tileSource],
-          userAgentPackageName: 'com.navbridge.app',
-          tileProvider: _tileProvider,
-        ),
-        if (route != null)
-          PolylineLayer(polylines: [
-            // Alternative routes drawn dimmed (Google's tap-to-compare).
-            for (var i = 0; i < _alternativeRoutes.length; i++)
-              if (i != _selectedRoute)
+        FlutterMap(
+          mapController: _map,
+          options: MapOptions(
+            initialCenter: current ?? const LatLng(10.8231, 106.6297),
+            initialZoom: 13,
+            interactionOptions: const InteractionOptions(
+              flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+            ),
+            // Keep the route drag handle glued to its point while panning.
+            onPositionChanged: (cam, _) => _camNotifier.value = cam,
+            // Google-style interactive route editing on the preview map:
+            // tap an alternative route line to select it, long-press to add
+            // a via point and re-plan.
+            onTap: (_, tapPos) {
+              if (_navigating || _alternativeRoutes.length <= 1) return;
+              for (var i = 0; i < _alternativeRoutes.length; i++) {
+                if (i == _selectedRoute) continue;
+                if (_distToLine(tapPos, _alternativeRoutes[i].geometry) <
+                    0.05 /* ~50m */) {
+                  _selectAlternative(i);
+                  return;
+                }
+              }
+            },
+            onLongPress: (_, pos) {
+              if (!_navigating) {
+                _addViaPoint(pos);
+              }
+            },
+          ),
+          children: [
+            TileLayer(
+              // Basemap layer (changeable): OSM / CARTO / OpenTopoMap / ESRI
+              // satellite. Requests are throttled to the OSM tile policy and
+              // auto-fail over; each layer caches under its own folder so
+              // styles never mix.
+              urlTemplate: _tileLayers[_tileSource],
+              userAgentPackageName: 'com.navbridge.app',
+              tileProvider: _tileProvider,
+            ),
+            if (route != null)
+              PolylineLayer(polylines: [
+                // Alternative routes drawn dimmed (Google's tap-to-compare).
+                for (var i = 0; i < _alternativeRoutes.length; i++)
+                  if (i != _selectedRoute)
+                    Polyline(
+                      points: _alternativeRoutes[i].geometry,
+                      color: const Color(0xFF9BB2E8),
+                      strokeWidth: 5,
+                    ),
+                // white casing under the blue route (Google look)
                 Polyline(
-                  points: _alternativeRoutes[i].geometry,
-                  color: const Color(0xFF9BB2E8),
-                  strokeWidth: 5,
+                    points: route.geometry,
+                    color: Colors.white,
+                    strokeWidth: 9),
+                Polyline(
+                    points: route.geometry,
+                    color: kAppBlue,
+                    strokeWidth: 6),
+              ]),
+            MarkerLayer(markers: [
+              if (_origin != null)
+                Marker(
+                  point: _origin!,
+                  width: 30,
+                  height: 30,
+                  child: const OriginMarker(),
                 ),
-            // white casing under the blue route (Google look)
-            Polyline(points: route.geometry, color: Colors.white, strokeWidth: 9),
-            Polyline(points: route.geometry, color: kAppBlue, strokeWidth: 6),
-          ]),
-        MarkerLayer(markers: [
-          if (_origin != null)
-            Marker(
-              point: _origin!,
-              width: 30,
-              height: 30,
-              child: const OriginMarker(),
-            ),
-          // numbered markers for intermediate stops (the last stop is the
-          // red destination pin below)
-          for (var i = 0; i < _stops.length - 1; i++)
-            Marker(
-              point: _stops[i].pos,
-              width: 28,
-              height: 28,
-              child: Container(
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: kAppBlue,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
+              // numbered markers for intermediate stops (the last stop is
+              // the red destination pin below)
+              for (var i = 0; i < _stops.length - 1; i++)
+                Marker(
+                  point: _stops[i].pos,
+                  width: 28,
+                  height: 28,
+                  child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: kAppBlue,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                    child: Text('${i + 1}',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700)),
+                  ),
                 ),
-                child: Text('${i + 1}',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700)),
-              ),
+              if (_destination != null)
+                Marker(
+                  point: _destination!,
+                  width: 44,
+                  height: 44,
+                  child: const Icon(
+                    Icons.location_pin,
+                    color: Colors.red,
+                    size: 44,
+                    shadows: [Shadow(color: Colors.black38, blurRadius: 4)],
+                  ),
+                ),
+              if (current != null)
+                Marker(
+                  point: current,
+                  width: 26,
+                  height: 26,
+                  child: const CurrentMarker(),
+                ),
+              // POI quick-search highlights.
+              for (final p in _pois)
+                Marker(
+                  point: p.pos,
+                  width: 26,
+                  height: 26,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: poiColor(p.type),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: const [
+                        BoxShadow(color: Colors.black38, blurRadius: 4),
+                      ],
+                    ),
+                    child: Icon(p.type.icon, size: 14, color: Colors.white),
+                  ),
+                ),
+            ]),
+          ],
+        ),
+        // Google-style draggable route handles (preview mode only): one per
+        // segment — a simple route has exactly one.
+        if (!_navigating && route != null && _dragHandles.isNotEmpty)
+          for (var i = 0; i < _dragHandles.length; i++)
+            _RouteDragHandle(
+              key: ValueKey('drag$i'),
+              via: _dragHandles[i],
+              cameraListenable: _camNotifier,
+              onDrag: (delta) {
+                final cam = _map.camera;
+                final cur = cam.latLngToScreenPoint(_dragHandles[i]);
+                final next = cam.pointToLatLng(
+                    Point(cur.x + delta.dx, cur.y + delta.dy));
+                setState(() => _dragHandles[i] = next);
+              },
+              onDragEnd: () => _commitDragHandle(i),
             ),
-          if (_destination != null)
-            Marker(
-              point: _destination!,
-              width: 44,
-              height: 44,
-              child: const Icon(
-                Icons.location_pin,
-                color: Colors.red,
-                size: 44,
-                shadows: [Shadow(color: Colors.black38, blurRadius: 4)],
-              ),
-            ),
-          if (current != null)
-            Marker(
-              point: current,
-              width: 26,
-              height: 26,
-              child: const CurrentMarker(),
-            ),
-        ]),
       ],
     );
   }
@@ -1452,6 +1827,9 @@ class _NavigationPageState extends State<NavigationPage> {
         ],
         selectedAlternative: _selectedRoute,
         onAlternative: _selectAlternative,
+        avoidHighway: _avoidHighway,
+        onToggleAvoidHighway: _toggleAvoidHighway,
+        elevation: _elevation,
       );
     } else {
       card = null;
@@ -1459,6 +1837,7 @@ class _NavigationPageState extends State<NavigationPage> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (_navigating) _poiArea(),
         const OsmAttribution(),
         if (card != null)
           Padding(
@@ -1466,6 +1845,57 @@ class _NavigationPageState extends State<NavigationPage> {
             child: card,
           ),
       ],
+    );
+  }
+}
+
+/// Google-style draggable route handle: a grab dot on the route that the
+/// user drags to insert a via point and re-plan. Drawn as a Flutter widget
+/// on top of the map so its pan gesture doesn't fight the map's own pan.
+class _RouteDragHandle extends StatelessWidget {
+  const _RouteDragHandle({
+    super.key,
+    required this.via,
+    required this.cameraListenable,
+    required this.onDrag,
+    required this.onDragEnd,
+  });
+
+  final LatLng via;
+  final ValueListenable<MapCamera?> cameraListenable;
+  final ValueChanged<Offset> onDrag;
+  final VoidCallback onDragEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<MapCamera?>(
+      valueListenable: cameraListenable,
+      builder: (context, cam, _) {
+        if (cam == null) return const SizedBox.shrink();
+        final p = cam.latLngToScreenPoint(via);
+        return Positioned(
+          left: p.x - 18,
+          top: p.y - 18,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onPanUpdate: (d) => onDrag(d.delta),
+            onPanEnd: (_) => onDragEnd(),
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: kAppBlue, width: 3),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black38, blurRadius: 4),
+                ],
+              ),
+              child: const Icon(Icons.drag_handle, size: 16, color: kAppBlue),
+            ),
+          ),
+        );
+      },
     );
   }
 }
