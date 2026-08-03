@@ -145,19 +145,22 @@ Future<http.Response?> _fetchTile(
         _failedTiles.add(key); // don't re-request the same missing tile
         return null;
       }
-      // tile.openstreetmap.org serves its "access blocked" placeholder with
-      // HTTP 200 (not 403) when the client's IP is banned. Treat it like a
-      // block: never cache it AND fail over to the next server so the map
+      // Some tile servers serve their "access blocked" placeholder with
+      // HTTP 200 (not 403) when the client's IP is banned — observed on BOTH
+      // tile.openstreetmap.org and basemaps.cartocdn.com. Treat those as a
+      // block: never cache them AND fail over to the next server so the map
       // keeps rendering.
       //
-      // IMPORTANT: only apply this heuristic to OSM. Other providers never
+      // Only run the heuristic on block-prone hosts: other providers never
       // serve placeholders (they use real 403/429), and their real tiles can
       // legitimately be small and near-uniform (e.g. rural land at low zoom)
       // — flagging those would blank out whole areas.
-      if (_tileHost(template).contains('openstreetmap.org') &&
-          await _looksLikeBlockPlaceholder(res.bodyBytes)) {
+      final host = _tileHost(template);
+      final blockProne = host.contains('openstreetmap.org') ||
+          host.contains('basemaps.cartocdn.com');
+      if (blockProne && await _looksLikeBlockPlaceholder(res.bodyBytes)) {
         _blockedTileServers.add(template);
-        debugPrint('TILE: ${_tileHost(template)} served a block placeholder '
+        debugPrint('TILE: $host served a block placeholder '
             'for $key — switching server');
         _serverIndex = (_serverIndex + 1) % _serverList.length;
         tried++;
@@ -300,10 +303,34 @@ String _sourceDir(String? source) =>
     (source == null || source == 'osm') ? '' : '$source/';
 
 Future<Directory> tileStoreDir({String? source}) async {
+  await _ensureTileCacheVersion();
   final sup = await getApplicationSupportDirectory();
   final d = Directory('${sup.path}/offline_tiles/${_sourceDir(source)}');
   if (!d.existsSync()) d.createSync(recursive: true);
   return d;
+}
+
+/// Bump when the tile-cache validation changes (e.g. a batch of poisoned
+/// "access blocked" tiles was cached) — forces a one-time full cache clear.
+const int tileCacheVersion = 2;
+bool _tileVersionChecked = false;
+
+Future<void> _ensureTileCacheVersion() async {
+  if (_tileVersionChecked) return;
+  _tileVersionChecked = true; // guard against recursion via clearTileCache
+  try {
+    final sup = await getApplicationSupportDirectory();
+    final vf = File('${sup.path}/tile_cache_version');
+    var v = 0;
+    try {
+      v = int.tryParse(vf.readAsStringSync().trim()) ?? 0;
+    } catch (_) {}
+    if (v != tileCacheVersion) {
+      await clearTileCache();
+      await vf.writeAsString('$tileCacheVersion', flush: true);
+      debugPrint('TILE: tile cache cleared (version $tileCacheVersion)');
+    }
+  } catch (_) {}
 }
 
 Future<File> tileFile(int z, int x, int y, {String? source}) async {
