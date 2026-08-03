@@ -66,6 +66,14 @@ dependencies {
     // 8.x rejects fastest, 9.x/10.x need Janino or JDK 19+).
     implementation("com.graphhopper:graphhopper-core:7.0")
     implementation("org.slf4j:slf4j-nop:2.0.13")
+
+    // The Vietmap navigation SDK (maps-sdk-android 4.1.0) BUNDLES the
+    // timber classes; the standalone timber:5.0.1 it pulls transitively
+    // duplicates them → checkReleaseDuplicateClasses fails. Exclude the
+    // standalone artifact; the bundled classes are sufficient.
+    configurations.all {
+        exclude(group = "com.jakewharton.timber", module = "timber")
+    }
 }
 
 flutter {

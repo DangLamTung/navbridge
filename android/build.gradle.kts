@@ -2,6 +2,8 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // Vietmap navigation SDK ships native AARs via JitPack.
+        maven(url = "https://jitpack.io")
     }
 }
 

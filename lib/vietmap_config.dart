@@ -21,6 +21,14 @@ class VietmapConfig {
   /// Raster satellite tiles (the only raster Vietmap style).
   static const String satelliteTiles =
       'https://maps.vietmap.vn/maps/tiles/st/{z}/{x}/{y}.png?apikey=$tileKey';
+
+  /// Vietmap vector map style (tm = street) — used by the navigation SDK.
+  static String get vectorStyle =>
+      'https://maps.vietmap.vn/maps/styles/tm/style.json?apikey=$tileKey';
+
+  /// True when real keys were provided at build time (--dart-define), i.e.
+  /// the Vietmap features (and their navigation SDK) can actually run.
+  static bool get hasKeys => apiKey.isNotEmpty && tileKey.isNotEmpty;
 }
 
 /// Active map/routing data source: 'osm' (default, offline-capable, OSM

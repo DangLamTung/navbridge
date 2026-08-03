@@ -36,6 +36,7 @@ import 'trip_plan.dart';
 import 'trips_screen.dart';
 import 'ui/arrival_card.dart';
 import 'vector_nav_map.dart';
+import 'vietmap_nav_view.dart';
 import 'vietmap_api.dart';
 import 'vietmap_config.dart';
 import 'voice_commands.dart';
@@ -888,6 +889,97 @@ class _NavigationPageState extends State<NavigationPage> {
     setState(() => _carIcon = kCarIcons[(i + 1) % kCarIcons.length]);
   }
 
+  // ---- Vietmap's own navigation SDK ------------------------------------
+
+  /// Use Vietmap's official turn-by-turn navigation view when the Vietmap
+  /// source is active, real keys were provided at build time and we're
+  /// online. OSM / offline keep the custom (offline-capable) UI.
+  bool get _useVietmapNav =>
+      dataSource == 'vietmap' &&
+      VietmapConfig.hasKeys &&
+      !_offline &&
+      _stops.isNotEmpty;
+
+  /// Origin + planned stops for the Vietmap navigation SDK.
+  List<LatLng> _navWaypoints() {
+    final pts = <LatLng>[
+      if (_origin != null)
+        _origin!
+      else if (_current != null)
+        _current!
+      else
+        const LatLng(10.8231, 106.6297),
+      for (final s in _stops) s.pos,
+    ];
+    return pts;
+  }
+
+  /// Feed the BLE clock + voice guidance from the Vietmap SDK's progress
+  /// events (their UI is full-screen, so this is the only hook we need).
+  void _handleVietmapProgress(NavProgress nav, LatLng pos) {
+    _progress = nav;
+    _current = pos;
+    if (mounted) setState(() {});
+    _sendToClock(nav);
+    _maybeSpeakManeuver(nav);
+    _logFix(pos, nav.speedMps);
+  }
+
+  /// The SDK reached the destination — speak it and push an arrive frame.
+  void _handleVietmapArrived() {
+    if (!_arrivedSpoken) {
+      _arrivedSpoken = true;
+      _voice.speak('Bạn đã đến nơi');
+    }
+    final nav = _progress;
+    if (nav != null) {
+      _sendToClock(NavProgress(
+        meter: 0,
+        iconCode: iconArrive,
+        etaHour: nav.etaHour,
+        etaMinute: nav.etaMinute,
+        text: nav.text,
+        speedMps: 0,
+        progress: 1,
+      ));
+    }
+    unawaited(_finishTrip());
+  }
+
+  /// Stop / cancel from the Vietmap UI (idempotent).
+  void _handleVietmapExit() {
+    if (!_navigating) return;
+    _exitNavigation();
+  }
+
+  /// Long-press the map to insert a via point and re-plan (interactive
+  /// route editing on the OSM/offline map).
+  void _addViaPoint(LatLng pos) {
+    final stops = List<TripStop>.of(_stops);
+    if (stops.isNotEmpty) {
+      stops.insert(
+        stops.length - 1,
+        TripStop(name: 'Điểm giữa', lat: pos.latitude, lng: pos.longitude),
+      );
+    }
+    setState(() {
+      _stops..clear()..addAll(stops);
+    });
+    _buildPlanRoute();
+  }
+
+  /// Min distance (meters) from [p] to a polyline — used to make the
+  /// alternative route lines tappable.
+  double _distToLine(LatLng p, List<LatLng> poly) {
+    if (poly.isEmpty) return double.infinity;
+    var best = distanceMeters(p, poly.first);
+    for (var i = 1; i < poly.length; i++) {
+      final d = distanceMeters(p, poly[i]);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
   /// Switch the basemap layer (OSM → CARTO → Topo → Satellite → …).
   void _cycleTileLayer() {
     final i = _tileLayerNames.indexOf(_tileSource);
@@ -951,31 +1043,108 @@ class _NavigationPageState extends State<NavigationPage> {
     return Scaffold(
       body: Stack(
         children: [
-          // Navigation mode renders a Google-Maps-style offline VECTOR map
-          // (MapLibre + bundled HCMC PMTiles); browsing/search keeps the
-          // raster map.
-          _navigating
-              ? VectorNavMap(
-                  routeGeometry: route?.geometry ?? const [],
-                  routeSteps: route?.steps ?? const [],
-                  current: current,
-                  heading: _heading,
-                  headingUp: _headingUp,
-                  carIcon: _carIcon,
+          // Navigation mode: with the Vietmap source + keys + online, use
+          // Vietmap's own turn-by-turn SDK (full screen); otherwise render
+          // the Google-Maps-style offline VECTOR map; browsing/search keeps
+          // the raster map.
+          _navigating && _useVietmapNav
+              ? VietmapNavView(
+                  waypoints: _navWaypoints(),
+                  profile: _routeProfile,
+                  onProgress: _handleVietmapProgress,
+                  onArrived: _handleVietmapArrived,
+                  onExit: _handleVietmapExit,
                 )
-              : _buildMap(route, current),
+              : _navigating
+                  ? VectorNavMap(
+                      routeGeometry: route?.geometry ?? const [],
+                      routeSteps: route?.steps ?? const [],
+                      current: current,
+                      heading: _heading,
+                      headingUp: _headingUp,
+                      carIcon: _carIcon,
+                    )
+                  : _buildMap(route, current),
           Positioned.fill(
             child: SafeArea(
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  // Pin the top bar to the top — a plain (non-positioned)
-                  // child here would be stretched and vertically centered.
+                  // Pin the top area to the top — the banner and, under it,
+                  // the road-info chip flow together so a tall banner (long
+                  // destination / expanded step list) can never overlap the
+                  // chip.
                   Positioned(
                     top: 0,
                     left: 0,
                     right: 0,
-                    child: _navigating ? _navTopBar() : _topBar(),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _navigating
+                            ? (_useVietmapNav
+                                ? const SizedBox.shrink()
+                                : _navTopBar())
+                            : _topBar(),
+                        if (_navigating && !_useVietmapNav)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 6, 10, 0),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                RoadInfoChip(
+                                  info: _roadInfo,
+                                  loading: _roadLoading,
+                                  speedMps: _progress?.speedMps,
+                                ),
+                                const Spacer(),
+                                Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    RoundActionButton(
+                                      icon: _headingUp
+                                          ? Icons.explore
+                                          : Icons.navigation,
+                                      color: _headingUp
+                                          ? kAppBlue
+                                          : const Color(0xFF5F6368),
+                                      onTap: () => setState(
+                                          () => _headingUp = !_headingUp),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    RoundActionButton(
+                                      icon: Icons.emoji_emotions_outlined,
+                                      color: const Color(0xFFF4B400),
+                                      onTap: _cycleCarIcon,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    RoundActionButton(
+                                      icon: _voiceOn
+                                          ? Icons.volume_up
+                                          : Icons.volume_off,
+                                      color: _voiceOn
+                                          ? const Color(0xFF34A853)
+                                          : const Color(0xFF5F6368),
+                                      onTap: () => setState(
+                                          () => _voiceOn = !_voiceOn),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    RoundActionButton(
+                                      icon: _listening
+                                          ? Icons.mic
+                                          : Icons.mic_none,
+                                      color: _listening
+                                          ? const Color(0xFFEA4335)
+                                          : const Color(0xFFF4B400),
+                                      onTap: _toggleListening,
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                   if (_offline)
                     Positioned(
@@ -1030,62 +1199,6 @@ class _NavigationPageState extends State<NavigationPage> {
                                   onSave: _savePlan,
                                 )
                               : const SizedBox.shrink()),
-                    ),
-                  if (_navigating)
-                    Positioned(
-                      left: 12,
-                      top: 74,
-                      child: RoadInfoChip(
-                        info: _roadInfo,
-                        loading: _roadLoading,
-                        speedMps: _progress?.speedMps,
-                      ),
-                    ),
-                  // Navigation-mode controls: heading-up toggle + fun car
-                  // icon cycler (Google-Maps-style rotate + custom marker).
-                  if (_navigating)
-                    Positioned(
-                      right: 10,
-                      top: 64,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          RoundActionButton(
-                            icon: _headingUp
-                                ? Icons.explore
-                                : Icons.navigation,
-                            color: _headingUp
-                                ? kAppBlue
-                                : const Color(0xFF5F6368),
-                            onTap: () =>
-                                setState(() => _headingUp = !_headingUp),
-                          ),
-                          const SizedBox(height: 8),
-                          RoundActionButton(
-                            icon: Icons.emoji_emotions_outlined,
-                            color: const Color(0xFFF4B400),
-                            onTap: _cycleCarIcon,
-                          ),
-                          const SizedBox(height: 8),
-                          RoundActionButton(
-                            icon:
-                                _voiceOn ? Icons.volume_up : Icons.volume_off,
-                            color: _voiceOn
-                                ? const Color(0xFF34A853)
-                                : const Color(0xFF5F6368),
-                            onTap: () =>
-                                setState(() => _voiceOn = !_voiceOn),
-                          ),
-                          const SizedBox(height: 8),
-                          RoundActionButton(
-                            icon: _listening ? Icons.mic : Icons.mic_none,
-                            color: _listening
-                                ? const Color(0xFFEA4335)
-                                : const Color(0xFFF4B400),
-                            onTap: _toggleListening,
-                          ),
-                        ],
-                      ),
                     ),
                   // Raster-only controls (zoom/locate target the raster map
                   // controller) — hide during vector navigation mode.
@@ -1148,6 +1261,23 @@ class _NavigationPageState extends State<NavigationPage> {
         interactionOptions: const InteractionOptions(
           flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
         ),
+        // Google-style interactive route editing on the preview map:
+        // tap an alternative route line to select it, long-press to add a
+        // via point and re-plan.
+        onTap: (_, tapPos) {
+          if (_navigating || _alternativeRoutes.length <= 1) return;
+          for (var i = 0; i < _alternativeRoutes.length; i++) {
+            if (i == _selectedRoute) continue;
+            if (_distToLine(tapPos, _alternativeRoutes[i].geometry) <
+                0.05 /* ~50m */) {
+              _selectAlternative(i);
+              return;
+            }
+          }
+        },
+        onLongPress: (_, pos) {
+          if (!_navigating) _addViaPoint(pos);
+        },
       ),
       children: [
         TileLayer(
@@ -1288,7 +1418,9 @@ class _NavigationPageState extends State<NavigationPage> {
         ? 'Điểm ${(nav!.stopIndex + 1)}/${nav.totalStops}'
         : '';
     final Widget? card;
-    if (_navigating) {
+    if (_navigating && _useVietmapNav) {
+      card = null; // the Vietmap SDK draws its own banner + ETA bar
+    } else if (_navigating) {
       // Google-style arrival card when the destination is reached.
       if (nav != null && nav.iconCode == iconArrive) {
         card = ArrivalCard(

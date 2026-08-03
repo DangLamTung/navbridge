@@ -29,6 +29,9 @@ dependencies:
   flutter_tts: ^4.0.2
   cupertino_icons: ^1.0.8
   maplibre_gl: ^0.26.2
+  vietmap_flutter_navigation: ^4.2.0
+  # Vietmap's own LatLng/Point types (used by the navigation SDK calls).
+  vietmap_gl_platform_interface: ^1.0.0
 
 dev_dependencies:
   flutter_test:

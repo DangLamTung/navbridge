@@ -14,6 +14,10 @@
         android:maxSdkVersion="30"/>
     <!-- Voice commands (speech recognition) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Vietmap navigation SDK (foreground service) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- TTS engine (voice guidance → Bluetooth speaker) -->
     <queries>
         <intent>
@@ -55,6 +59,12 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Vietmap navigation SDK foreground service (turn-by-turn). -->
+        <service
+            android:name="vn.vietmap.services.android.navigation.v5.navigation.NavigationService"
+            android:foregroundServiceType="location"
+            android:exported="false">
+        </service>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
