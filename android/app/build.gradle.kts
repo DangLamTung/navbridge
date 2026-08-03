@@ -32,6 +32,11 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // R8 fails on JDK-only classes referenced by GraphHopper's
+            // transitive deps (javax.activation / javax.imageio / xml.stream).
+            // We want AOT speed, not shrinking — so no minify.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 
