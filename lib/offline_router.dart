@@ -14,7 +14,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'offline_tiles.dart' show isOnline;
+import 'offline_tiles.dart' show forceOffline, isOnline;
 import 'osrm.dart';
 
 const MethodChannel _channel = MethodChannel('navbridge/routing');
@@ -198,11 +198,15 @@ Future<bool> downloadToFile(
 }
 
 /// Best route source: on-device GraphHopper when loaded, OSRM otherwise.
+/// In forced-offline mode only the on-device graph is used (never OSRM).
 /// Throws when no source is available (fully offline without a graph).
 Future<OsrmRoute> fetchAnyRoute(List<LatLng> points) async {
   if (OfflineRouter.instance.isLoaded) {
     final local = await OfflineRouter.instance.route(points);
     if (local != null) return local;
+  }
+  if (forceOffline) {
+    throw StateError('Ngoại tuyến: chưa tải bộ dữ liệu chỉ đường');
   }
   return fetchOsrmRoute(points);
 }

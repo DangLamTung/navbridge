@@ -84,12 +84,19 @@ String _tileHost(String template) {
 /// Fetches one tile respecting the OSM tile policy, with automatic failover
 /// across the primary + fallback tile servers. Returns null when every
 /// server failed — callers fall back to a transparent tile.
-Future<http.Response?> _fetchTile(int z, int x, int y, String primary) async {
-  final key = '$z/$x/$y';
+Future<http.Response?> _fetchTile(
+    int z, int x, int y, String primary, String source) async {
+  final key = '$source/$z/$x/$y';
   if (_tileBlockedUntil.isAfter(DateTime.now())) return null; // all blocked
   if (_failedTiles.contains(key) || _inFlightTiles.contains(key)) return null;
 
-  if (_serverList.isEmpty) _serverList = [primary, ..._fallbackTileTemplates];
+  // (Re)build the server rotation whenever the primary template changes
+  // (i.e. the user switched basemap layer) — otherwise a new layer like ESRI
+  // would never be requested because its URL is not in the stale list.
+  if (_serverList.isEmpty || _serverList.first != primary) {
+    _serverList = [primary, ..._fallbackTileTemplates];
+    _serverIndex = 0;
+  }
 
   // Every server has blocked us this session → pause, then start fresh.
   if (_blockedTileServers.containsAll(_serverList)) {
@@ -207,6 +214,11 @@ Future<bool> _looksLikeBlockPlaceholder(Uint8List bytes) async {
   }
 }
 
+/// When true the app is locked to offline mode: tiles are only served from
+/// disk (no network fetches), routing is on-device only and search is
+/// cache-only. Toggled by the user (offline screen) and persisted.
+bool forceOffline = false;
+
 /// Base URL for bulk region tile downloads.
 ///
 /// MUST stay empty: bulk/pre-downloading whole regions from
@@ -235,6 +247,7 @@ int _avgTileBytes(int z) => _avgBytes[z] ?? 30000;
 /// fallback we simply TRY the fetch — a failed fetch is harmless (transparent
 /// tile + failure-cache), but a false "offline" is a blank map forever.
 Future<bool> isOnline() async {
+  if (forceOffline) return false; // locked to offline mode
   try {
     final r = await Connectivity()
         .checkConnectivity()
@@ -280,15 +293,21 @@ int _tileCount(LatLngBounds b, int z) {
 
 // ---- store -------------------------------------------------------------
 
-Future<Directory> tileStoreDir() async {
+/// Cache folder name for a tile layer source. The default ('osm') keeps the
+/// legacy path so existing cached tiles stay valid; other sources get their
+/// own sub-folder so switching basemap layers never mixes styles.
+String _sourceDir(String? source) =>
+    (source == null || source == 'osm') ? '' : '$source/';
+
+Future<Directory> tileStoreDir({String? source}) async {
   final sup = await getApplicationSupportDirectory();
-  final d = Directory('${sup.path}/offline_tiles');
+  final d = Directory('${sup.path}/offline_tiles/${_sourceDir(source)}');
   if (!d.existsSync()) d.createSync(recursive: true);
   return d;
 }
 
-Future<File> tileFile(int z, int x, int y) async {
-  final root = await tileStoreDir();
+Future<File> tileFile(int z, int x, int y, {String? source}) async {
+  final root = await tileStoreDir(source: source);
   return File('${root.path}/$z/$x/$y.png');
 }
 
@@ -499,20 +518,25 @@ Future<void> deleteRegion(OfflineRegion r) async {
 // ---- map tile provider -------------------------------------------------
 
 /// Serves tiles from disk; when missing and online, downloads and caches
-/// them; when missing and offline, shows a transparent tile.
+/// them; when missing and offline, shows a transparent tile. Each basemap
+/// layer ([source]) caches under its own folder so layers never mix.
 class OfflineTileProvider extends TileProvider {
-  OfflineTileProvider() : super();
+  OfflineTileProvider({this.source = 'osm'}) : super();
+
+  /// Basemap layer id (see navigation_page tile layer map).
+  final String source;
 
   @override
   ImageProvider getImage(TileCoordinates coordinates, TileLayer options) =>
-      OfflineTileImage(coordinates, options);
+      OfflineTileImage(coordinates, options, source);
 }
 
 class OfflineTileImage extends ImageProvider<OfflineTileImage> {
   final TileCoordinates coordinates;
   final TileLayer options;
+  final String source;
 
-  OfflineTileImage(this.coordinates, this.options);
+  OfflineTileImage(this.coordinates, this.options, this.source);
 
   int get z => coordinates.z;
   int get x => coordinates.x;
@@ -528,7 +552,7 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
       OneFrameImageStreamCompleter(_load(decode));
 
   Future<ImageInfo> _load(ImageDecoderCallback decode) async {
-    final file = await tileFile(z, x, y);
+    final file = await tileFile(z, x, y, source: source);
     if (file.existsSync()) {
       try {
         return _decode(decode, file.readAsBytesSync());
@@ -542,7 +566,7 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
       // with automatic failover to other free OSM tile servers when one
       // blocks us (403/429 — e.g. an IP ban).
       final res =
-          await _fetchTile(z, x, y, options.urlTemplate ?? '');
+          await _fetchTile(z, x, y, options.urlTemplate ?? '', source);
       if (res != null && res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
         file.createSync(recursive: true);
         file.writeAsBytesSync(res.bodyBytes);
@@ -565,8 +589,9 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
       other is OfflineTileImage &&
       other.z == z &&
       other.x == x &&
-      other.y == y;
+      other.y == y &&
+      other.source == source;
 
   @override
-  int get hashCode => Object.hash(z, x, y);
+  int get hashCode => Object.hash(source, z, x, y);
 }

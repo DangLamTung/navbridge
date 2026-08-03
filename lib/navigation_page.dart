@@ -25,6 +25,7 @@ import 'nav_protocol.dart';
 import 'offline_screen.dart';
 import 'offline_router.dart';
 import 'offline_tiles.dart';
+import 'settings.dart';
 import 'osm_api.dart';
 import 'osrm.dart';
 import 'overpass.dart';
@@ -90,9 +91,21 @@ class _NavigationPageState extends State<NavigationPage> {
   TripLogger? _trip;
 
   // --- offline mode ---
-  final OfflineTileProvider _tileProvider = OfflineTileProvider();
+  OfflineTileProvider _tileProvider = OfflineTileProvider();
   bool _offline = false;
   StreamSubscription<bool>? _connSub;
+
+  // --- changeable basemap layers ----------------------------------------
+  static const Map<String, String> _tileLayers = {
+    'osm': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    'carto':
+        'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+    'topo': 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+    'esri':
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  };
+  static const List<String> _tileLayerNames = ['osm', 'carto', 'topo', 'esri'];
+  String _tileSource = 'osm'; // active basemap layer
 
   // --- multi-stop plan ---
   final List<TripStop> _stops = [];
@@ -121,10 +134,17 @@ class _NavigationPageState extends State<NavigationPage> {
     });
     _connSub = onlineStream().listen((online) {
       if (!mounted) return;
-      setState(() => _offline = !online);
+      setState(() => _offline = !online || forceOffline);
     });
     isOnline().then((on) {
-      if (mounted) setState(() => _offline = !on);
+      if (!mounted) return;
+      setState(() => _offline = !on || forceOffline);
+    });
+    // Restore the persisted offline/online mode choice.
+    loadSettings().then((s) {
+      if (!mounted) return;
+      forceOffline = s.forceOffline;
+      setState(() => _offline = _offline || forceOffline);
     });
   }
 
@@ -567,6 +587,23 @@ class _NavigationPageState extends State<NavigationPage> {
     setState(() => _carIcon = kCarIcons[(i + 1) % kCarIcons.length]);
   }
 
+  /// Switch the basemap layer (OSM → CARTO → Topo → Satellite → …).
+  void _cycleTileLayer() {
+    final i = _tileLayerNames.indexOf(_tileSource);
+    final next = _tileLayerNames[(i + 1) % _tileLayerNames.length];
+    setState(() {
+      _tileSource = next;
+      _tileProvider = OfflineTileProvider(source: next);
+    });
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text('Bản đồ: $_tileSource'),
+        duration: const Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+      ));
+  }
+
   void _locateMe() {
     final c = _current;
     if (c != null) _map.move(c, 17);
@@ -752,6 +789,12 @@ class _NavigationPageState extends State<NavigationPage> {
                           color: kAppBlue,
                           onTap: _openOffline,
                         ),
+                        const SizedBox(height: 8),
+                        RoundActionButton(
+                          icon: Icons.layers_outlined,
+                          color: const Color(0xFF7B1FA2),
+                          onTap: _cycleTileLayer,
+                        ),
                       ],
                     ),
                   ),
@@ -782,11 +825,11 @@ class _NavigationPageState extends State<NavigationPage> {
       ),
       children: [
         TileLayer(
-          // Primary = tile.openstreetmap.org with an app-specific User-Agent
-          // (see offline_tiles.dart). Requests are throttled to the OSM tile
-          // policy and auto-fail over to CARTO/OpenTopoMap on 403/429; OSM
-          // "access blocked" placeholder responses are never cached.
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          // Basemap layer (changeable): OSM / CARTO / OpenTopoMap / ESRI
+          // satellite. Requests are throttled to the OSM tile policy and
+          // auto-fail over; each layer caches under its own folder so styles
+          // never mix.
+          urlTemplate: _tileLayers[_tileSource],
           userAgentPackageName: 'com.navbridge.app',
           tileProvider: _tileProvider,
         ),

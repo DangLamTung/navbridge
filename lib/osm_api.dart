@@ -16,6 +16,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import 'offline_tiles.dart' show forceOffline;
+
 const _nominatimBase = 'https://nominatim.openstreetmap.org';
 
 /// One OSM search result — already resolved to coordinates, so no second
@@ -87,13 +89,15 @@ Future<void> _saveSearchCache() async {
 }
 
 /// Search suggestions for a partial query (min ~2 chars).
-/// Falls back to the local cache when the network is unavailable.
+/// Falls back to the local cache when the network is unavailable; in forced
+/// offline mode only the local cache is used.
 Future<List<OsmSuggestion>> osmAutocomplete(
   String text, {
   int limit = 6,
 }) async {
   await _loadSearchCache();
   final key = text.trim().toLowerCase();
+  if (forceOffline) return _searchCache[key] ?? const [];
   try {
     final url = '$_nominatimBase/search'
         '?format=jsonv2'

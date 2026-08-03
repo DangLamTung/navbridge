@@ -12,6 +12,7 @@ import 'package:latlong2/latlong.dart';
 
 import 'offline_router.dart';
 import 'offline_tiles.dart';
+import 'settings.dart';
 import 'ui/widgets.dart';
 
 String formatBytes(int b) {
@@ -34,6 +35,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
       LatLngBounds(const LatLng(10.70, 106.60), const LatLng(10.85, 106.80)); // HCMC core
   int _maxZoom = 16;
   bool _online = true;
+  bool _forceOffline = false;
   bool _downloading = false;
   RegionDownloader? _dl;
   int _done = 0;
@@ -53,6 +55,17 @@ class _OfflineScreenState extends State<OfflineScreen> {
     _refreshGraph();
     onlineStream().listen((o) => setState(() => _online = o));
     isOnline().then((o) => setState(() => _online = o));
+    loadSettings().then((s) {
+      if (mounted) setState(() => _forceOffline = s.forceOffline);
+    });
+  }
+
+  Future<void> _toggleForceOffline(bool v) async {
+    setState(() => _forceOffline = v);
+    forceOffline = v;
+    await saveSettings(AppSettings(forceOffline: v));
+    // Tile cache is source-agnostic but network fetches stop/start here.
+    setState(() {});
   }
 
   Future<void> _refreshGraph() async {
@@ -243,6 +256,25 @@ class _OfflineScreenState extends State<OfflineScreen> {
                 Text(_online ? 'Đang trực tuyến' : 'Đang ngoại tuyến',
                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               ]),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // forced offline/online mode for long navigation
+          Material(
+            color: const Color(0xFFE8F0FE),
+            borderRadius: BorderRadius.circular(12),
+            child: SwitchListTile(
+              value: _forceOffline,
+              onChanged: _toggleForceOffline,
+              activeThumbColor: kAppBlue,
+              title: const Text('Chế độ ngoại tuyến (bắt buộc)',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              subtitle: Text(
+                _forceOffline
+                    ? 'Chỉ dùng dữ liệu trên máy (bản đồ đã lưu + chỉ đường ngoại tuyến).'
+                    : 'Bật để khoá ngoại tuyến khi đi đường dài: không dùng mạng.',
+                style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+              ),
             ),
           ),
           const SizedBox(height: 16),

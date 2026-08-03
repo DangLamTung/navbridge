@@ -211,6 +211,9 @@ class _VectorNavMapState extends State<VectorNavMap> {
     return 0; // north-up
   }
 
+  /// 3D perspective angle (Google-Maps-style) when navigating.
+  static const double _tilt = 55;
+
   void _followPosition() {
     final ctrl = _controller;
     final c = widget.current;
@@ -221,19 +224,21 @@ class _VectorNavMapState extends State<VectorNavMap> {
         target: LatLng(c.latitude, c.longitude),
         zoom: 17,
         bearing: bearing,
+        tilt: _tilt,
       )));
       _hasPosition = true;
       _lastBearing = bearing;
     } else if (bearing != _lastBearing) {
-      // Rotate the map to the new heading (heading-up mode).
+      // Rotate the map to the new heading (heading-up mode), keep the 3D tilt.
       ctrl.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(
         target: LatLng(c.latitude, c.longitude),
         zoom: _zoom,
         bearing: bearing,
+        tilt: _tilt,
       )));
       _lastBearing = bearing;
     } else {
-      // Just recentre on the exact position, keep zoom + bearing.
+      // Just recentre on the exact position, keep zoom + bearing + tilt.
       ctrl.moveCamera(
           CameraUpdate.newLatLng(LatLng(c.latitude, c.longitude)));
     }
