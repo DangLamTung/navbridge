@@ -5,16 +5,17 @@
 /// or edit the defaults below.
 class AppConfig {
   // Vietmap API key — used for search / geocode / routing (NOT tiles).
-  static const String vietmapApiKey = String.fromEnvironment(
-      'VIETMAP_API_KEY',
-      defaultValue: 'REDACTED_VIETMAP_API_KEY');
+  // SECURITY: never commit a real key here. Must be passed at build time:
+  //   --dart-define=VIETMAP_API_KEY=...
+  // (The original committed key was exposed via git history and must be
+  // rotated in the Vietmap console.)
+  static const String vietmapApiKey = String.fromEnvironment('VIETMAP_API_KEY');
 
   // Vietmap TILE-map key — the map style + vector tiles are served under this
   // separate key. The map SDK reuses this key for every tile request, so the
   // style URL must carry it (docs: /docs/map-api/tilemap/).
-  static const String vietmapTileKey = String.fromEnvironment(
-      'VIETMAP_TILE_KEY',
-      defaultValue: 'REDACTED_VIETMAP_TILE_KEY');
+  // SECURITY: pass via --dart-define=VIETMAP_TILE_KEY=... at build time.
+  static const String vietmapTileKey = String.fromEnvironment('VIETMAP_TILE_KEY');
 
   // Optional: the clock's BLE address. When empty the app scans for a device
   // advertising the E-ink service or with "EINK" in its name.
