@@ -103,6 +103,10 @@ class _VectorNavMapState extends State<VectorNavMap> {
   double _wantBearing = 0;
   Timer? _camTimer;
 
+  /// True while the user is touching the map — pause the auto-follow camera
+  /// so a rotate/pan gesture isn't fought by the 33 ms ease timer.
+  bool _userInteracting = false;
+
   /// Icon scale. The navigation puck (arrow) is Vietmap's exact 75dp puck
   /// (white circle + #2a5dff arrow), rasterized at 4x (300px); MapLibre
   /// icon-size is in physical pixels, so scale by density to land at 75dp.
@@ -483,7 +487,7 @@ class _VectorNavMapState extends State<VectorNavMap> {
     } else {
       final turned = ((bearing - _camBearing) % 360).abs() > 1.0;
       final moved = _camPos == null || _distMeters(_camPos!, ahead) > 2.0;
-      if (turned || moved) {
+      if ((turned || moved) && !_userInteracting) {
         _wantPos = ahead;
         _wantBearing = bearing;
         _camTimer ??= Timer.periodic(
@@ -499,6 +503,10 @@ class _VectorNavMapState extends State<VectorNavMap> {
   void _tickCamera(Timer t) {
     if (!mounted) {
       _stopCameraEase();
+      return;
+    }
+    if (_userInteracting) {
+      _stopCameraEase(); // user is rotating/panning — don't fight them
       return;
     }
     final ctrl = _controller;
@@ -669,25 +677,42 @@ class _VectorNavMapState extends State<VectorNavMap> {
       return const ColoredBox(color: Color(0xFFE8EAED));
     }
     final c = widget.current;
-    return MapLibreMap(
-      styleString: style,
-      initialCameraPosition: CameraPosition(
-        target: c == null
-            ? const LatLng(10.8231, 106.6297)
-            : LatLng(c.latitude, c.longitude),
-        zoom: 15,
+    return Listener(
+      onPointerDown: (_) => _onUserTouch(true),
+      onPointerUp: (_) => _onUserTouch(false),
+      onPointerCancel: (_) => _onUserTouch(false),
+      child: MapLibreMap(
+        styleString: style,
+        initialCameraPosition: CameraPosition(
+          target: c == null
+              ? const LatLng(10.8231, 106.6297)
+              : LatLng(c.latitude, c.longitude),
+          zoom: 15,
+        ),
+        minMaxZoomPreference:
+            const MinMaxZoomPreference(3, 19), // pinch up to z19 (overzoom)
+        compassEnabled: true,
+        onMapCreated: (ctrl) => _controller = ctrl,
+        onStyleLoadedCallback: () async {
+          await _addRoute();
+          await _ensureCarMarker();
+          _followPosition();
+          await _updatePois();
+        },
       ),
-      minMaxZoomPreference:
-          const MinMaxZoomPreference(3, 19), // pinch up to z19 (overzoom)
-      compassEnabled: true,
-      onMapCreated: (ctrl) => _controller = ctrl,
-      onStyleLoadedCallback: () async {
-        await _addRoute();
-        await _ensureCarMarker();
-        _followPosition();
-        await _updatePois();
-      },
     );
+  }
+
+  /// Pause/resume the auto-follow camera while the user touches the map
+  /// (rotate / pan shouldn't fight the 33 ms re-follow; resume after release).
+  void _onUserTouch(bool down) {
+    if (_userInteracting == down) return;
+    _userInteracting = down;
+    if (down) {
+      _stopCameraEase();
+    } else {
+      _followPosition();
+    }
   }
 
   @override
