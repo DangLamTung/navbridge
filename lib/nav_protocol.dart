@@ -96,3 +96,16 @@ String formatDistance(num meters) {
   }
   return '${meters.round()} m';
 }
+
+/// Vietnamese guidance verb for a clock icon code ("rẽ trái", "đi thẳng", …).
+/// Shared by the spoken announcements and the on-screen Vietmap-style banner.
+String maneuverVerb(int code) => switch (code) {
+      iconTurnLeft => 'rẽ trái',
+      iconTurnRight => 'rẽ phải',
+      iconSlightLeft => 'rẽ trái nhẹ',
+      iconSlightRight => 'rẽ phải nhẹ',
+      iconUturnLeft || iconUturnRight => 'quay đầu',
+      iconRoundabout => 'đi theo vòng xuyến',
+      iconArrive => 'đến nơi',
+      _ => 'đi thẳng',
+    };

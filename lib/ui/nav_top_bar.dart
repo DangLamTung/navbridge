@@ -1,6 +1,6 @@
-/// Top banner shown while navigating — Google-Maps-style blue turn header:
-/// big current-turn arrow + destination, next-turn strip, ETA, exit button.
-/// Replaces the search bar during navigation.
+/// Top banner shown while navigating — Vietmap-navigation-style translucent
+/// light-blue header: big "Còn X mét, rẽ…" line + road name, next-turn strip,
+/// ETA, exit button. Replaces the search bar during navigation.
 library;
 
 import 'package:flutter/material.dart';
@@ -56,18 +56,6 @@ class NavTopBar extends StatelessWidget {
   String _etaText(NavProgress nav) =>
       '${nav.etaHour.toString().padLeft(2, '0')}:'
       '${nav.etaMinute.toString().padLeft(2, '0')}';
-
-  /// Vietmap-style guidance verb: "rẽ trái" / "đi thẳng" / …
-  String _turnVerb(int code) => switch (code) {
-        iconTurnLeft => 'rẽ trái',
-        iconTurnRight => 'rẽ phải',
-        iconSlightLeft => 'rẽ trái nhẹ',
-        iconSlightRight => 'rẽ phải nhẹ',
-        iconUturnLeft || iconUturnRight => 'quay đầu',
-        iconRoundabout => 'đi theo vòng xuyến',
-        iconArrive => 'đến nơi',
-        _ => 'đi thẳng',
-      };
 
   @override
   Widget build(BuildContext context) {
@@ -128,7 +116,7 @@ class NavTopBar extends StatelessWidget {
                           nav == null
                               ? 'Đang khởi động…'
                               : 'Còn ${formatDistance(nav.meter)}, '
-                                  '${_turnVerb(nav.iconCode)}',
+                                  '${maneuverVerb(nav.iconCode)}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(

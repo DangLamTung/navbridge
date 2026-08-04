@@ -67,9 +67,6 @@ class TurnByTurnEngine {
     }
   }
 
-  double get totalDistance => route.distance;
-
-  /// Cumulative distance along the route at the last snapped position.
   double get currentCumulative => _cum[_curIdx];
 
   /// Distance from [pos] to the nearest route point (off-route detection).
@@ -149,10 +146,6 @@ class TurnByTurnEngine {
           : (cum / route.distance).clamp(0.0, 1.0),
     );
   }
-
-  /// Distance along the route from a snapped polyline index to the end.
-  double remainingFromIndex(int idx) =>
-      route.distance - _cum[idx].clamp(0, route.distance);
 
   /// Nearest polyline index to `pos`, searching around the last snap first.
   int _nearestIndex(LatLng pos) {

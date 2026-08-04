@@ -44,11 +44,7 @@ const String _ua = 'navbridge/1.0 (BLE portable navigation; road info)';
 
 /// Vietnamese label + statutory default limit (km/h) per OSM/GraphHopper
 /// highway class value. Used when the way has no `maxspeed` tag.
-(String, int) classInfo(String highway) => _classInfo(highway);
-
-/// Vietnamese label + statutory default limit (km/h) per OSM highway class.
-/// Used when the way has no `maxspeed` tag.
-(String, int) _classInfo(String highway) => switch (highway) {
+(String, int) classInfo(String highway) => switch (highway) {
       'motorway' => ('Cao tốc', 120),
       'motorway_link' => ('Cao tốc', 100),
       'trunk' => ('Quốc lộ', 90),
@@ -139,7 +135,7 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos) async {
 
   final tags = (best['tags'] as Map<String, dynamic>? ?? {});
   final highway = (tags['highway'] ?? '') as String;
-  final (label, fallback) = _classInfo(highway);
+  final (label, fallback) = classInfo(highway);
   final info = RoadInfo(
     name: (tags['name'] ?? '') as String,
     highway: highway,

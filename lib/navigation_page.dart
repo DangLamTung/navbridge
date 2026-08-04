@@ -539,14 +539,16 @@ class _NavigationPageState extends State<NavigationPage> {
     );
     if (goOnline == true) {
       forceOffline = false; // session only — not persisted
-      if (mounted) setState(() => _offline = false);
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(
-          content: Text('Đã bật trực tuyến (phiên này)'),
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ));
+      if (mounted) {
+        setState(() => _offline = false);
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(
+            content: Text('Đã bật trực tuyến (phiên này)'),
+            duration: Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ));
+      }
     }
     return goOnline == true;
   }
@@ -895,15 +897,7 @@ class _NavigationPageState extends State<NavigationPage> {
   }
 
   String _announce(NavProgress nav, int m, {bool now = false}) {
-    final verb = switch (nav.iconCode) {
-      iconTurnLeft => 'rẽ trái',
-      iconTurnRight => 'rẽ phải',
-      iconSlightLeft => 'rẽ trái nhẹ',
-      iconSlightRight => 'rẽ phải nhẹ',
-      iconUturnLeft || iconUturnRight => 'quay đầu',
-      iconRoundabout => 'đi theo vòng xuyến',
-      _ => 'đi thẳng',
-    };
+    final verb = maneuverVerb(nav.iconCode);
     final road = nav.text.isNotEmpty ? ' vào ${nav.text}' : '';
     return now ? '$verb$road' : 'Sau $m mét, $verb$road';
   }
@@ -994,6 +988,11 @@ class _NavigationPageState extends State<NavigationPage> {
     final i = kCarIcons.indexOf(_carIcon);
     setState(() => _carIcon = kCarIcons[(i + 1) % kCarIcons.length]);
   }
+
+  /// "Điểm 2/3" for multi-stop trips ('' for a single destination).
+  String _stopLabel(NavProgress? nav) => (nav?.totalStops ?? 0) > 1
+      ? 'Điểm ${(nav!.stopIndex + 1)}/${nav.totalStops}'
+      : '';
 
   // ---- Vietmap's own navigation SDK ------------------------------------
 
@@ -1315,10 +1314,12 @@ class _NavigationPageState extends State<NavigationPage> {
     if (_useVietmapNav) {
       // Ask the Vietmap SDK to re-route to the POI.
       await _vmNavKey.currentState?.rerouteTo(p.lat, p.lng);
-      if (mounted) setState(() {
-        _pois = [];
-        _poiType = null;
-      });
+      if (mounted) {
+        setState(() {
+          _pois = [];
+          _poiType = null;
+        });
+      }
       return;
     }
     final from = _current ?? _origin;
@@ -1829,9 +1830,7 @@ class _NavigationPageState extends State<NavigationPage> {
       progress: nav,
       recording: _trip != null,
       clockConnected: _clock.isConnected,
-      stopLabel: (nav?.totalStops ?? 0) > 1
-          ? 'Điểm ${(nav!.stopIndex + 1)}/${nav.totalStops}'
-          : '',
+      stopLabel: _stopLabel(nav),
       tripProgress: nav?.progress ?? 0,
       steps: _route?.steps ?? const [],
       expanded: _showSteps,
@@ -1843,9 +1842,7 @@ class _NavigationPageState extends State<NavigationPage> {
   Widget _bottomArea() {
     final route = _route;
     final nav = _progress;
-    final stopLabel = (nav?.totalStops ?? 0) > 1
-        ? 'Điểm ${(nav!.stopIndex + 1)}/${nav.totalStops}'
-        : '';
+    final stopLabel = _stopLabel(nav);
     final Widget? card;
     if (_navigating && _useVietmapNav) {
       card = null; // the Vietmap SDK draws its own banner + ETA bar

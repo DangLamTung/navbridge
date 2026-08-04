@@ -98,29 +98,6 @@ class CurrentMarker extends StatelessWidget {
   }
 }
 
-/// Small icon + label pair used in the bottom cards.
-class StatChip extends StatelessWidget {
-  const StatChip({super.key, required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 16, color: Colors.grey[700]),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-        ),
-      ],
-    );
-  }
-}
-
 /// Tiny OSM attribution (required by the tile usage policy).
 class OsmAttribution extends StatelessWidget {
   const OsmAttribution({super.key});

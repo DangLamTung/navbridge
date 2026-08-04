@@ -4,30 +4,12 @@
 ///
 /// or edit the defaults below.
 class AppConfig {
-  // Vietmap API key — used for search / geocode / routing (NOT tiles).
-  // SECURITY: never commit a real key here. Must be passed at build time:
-  //   --dart-define=VIETMAP_API_KEY=...
-  // (The original committed key was exposed via git history and must be
-  // rotated in the Vietmap console.)
-  static const String vietmapApiKey = String.fromEnvironment('VIETMAP_API_KEY');
-
-  // Vietmap TILE-map key — the map style + vector tiles are served under this
-  // separate key. The map SDK reuses this key for every tile request, so the
-  // style URL must carry it (docs: /docs/map-api/tilemap/).
-  // SECURITY: pass via --dart-define=VIETMAP_TILE_KEY=... at build time.
-  static const String vietmapTileKey = String.fromEnvironment('VIETMAP_TILE_KEY');
-
   // Optional: the clock's BLE address. When empty the app scans for a device
   // advertising the E-ink service or with "EINK" in its name.
   // The DA14585 only advertises periodically, so connecting by MAC (direct
   // GATT connect) is far more reliable. MAC from the vendor app's logs.
   static const String clockMac = String.fromEnvironment('CLOCK_MAC',
       defaultValue: '18:BC:5A:80:AD:ED');
-
-  // Vietmap map style — current v6 vector styles (docs: /docs/map-api/tilemap/)
-  //   tm = street (default), lm = light, dm = dark, hm = hybrid
-  static const String mapStyle =
-      'https://maps.vietmap.vn/maps/styles/lm/style.json?apikey=$vietmapTileKey';
 
   // --- E-ink clock BLE GATT profile (see firmware/PROTOCOL.md) ---
   static const String serviceUuid = 'afdbecdd-1234-abcd-2007-aabbccddeeff';
@@ -42,8 +24,4 @@ class AppConfig {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
   ];
   static const String authKey = 'I47T_EINK_KEY';
-
-  // Simulation: drive the route without GPS (great for testing).
-  static const bool simulateRoute = bool.fromEnvironment('SIMULATE_ROUTE',
-      defaultValue: false);
 }

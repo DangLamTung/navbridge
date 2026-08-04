@@ -14,7 +14,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'offline_tiles.dart' show forceOffline, isOnline;
+import 'offline_tiles.dart' show forceOffline;
 import 'osrm.dart';
 import 'route_profile.dart';
 import 'vietmap_config.dart' show dataSource;
@@ -260,16 +260,4 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
       exclude: avoidHighway ? 'motorway' : null,
     )
   ];
-}
-
-/// True when on-device routing could be used right now (loaded graph).
-Future<bool> localRoutingAvailable() async {
-  if (OfflineRouter.instance.isLoaded) return true;
-  if (!await isOnline()) {
-    // offline + graph present but not loaded yet → try to load it
-    if (await routingGraphPresent()) {
-      return OfflineRouter.instance.load(await routingGraphDir());
-    }
-  }
-  return false;
 }

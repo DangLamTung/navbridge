@@ -90,7 +90,7 @@ class _VectorNavMapState extends State<VectorNavMap> {
   Symbol? _carMarker;
   Circle? _carCone;
   bool _hasPosition = false;
-  double _zoom = 18; // follow zoom (overzooms the z16 tiles, Google-style)
+  final double _zoom = 18; // follow zoom (overzooms the z16 tiles, Google-style)
   ll.LatLng? _lastRouteSig;
   ll.LatLng? _lastCarPos;
   double? _lastIconRotate;

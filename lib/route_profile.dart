@@ -35,11 +35,4 @@ extension RouteProfileX on RouteProfile {
         RouteProfile.bicycle => 'cycling',
         RouteProfile.walking => 'walking',
       };
-
-  RouteProfile get next => switch (this) {
-        RouteProfile.car => RouteProfile.motorbike,
-        RouteProfile.motorbike => RouteProfile.bicycle,
-        RouteProfile.bicycle => RouteProfile.walking,
-        RouteProfile.walking => RouteProfile.car,
-      };
 }
