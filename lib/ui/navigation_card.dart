@@ -1,4 +1,7 @@
-/// Bottom card shown while navigating: maneuver icon, distance, ETA, speed.
+/// Bottom card shown while navigating — copies the Vietmap SDK's
+/// [BottomActionView]: stop button on the left, big amber ETA in the middle
+/// ("X phút" / "X giờ, Y phút"), distance • arrival time below, and an
+/// overview button on the right.
 library;
 
 import 'package:flutter/material.dart';
@@ -12,6 +15,7 @@ class NavigationCard extends StatelessWidget {
     super.key,
     required this.progress,
     required this.onStop,
+    this.onOverview,
     this.stopLabel = '',
   });
 
@@ -20,6 +24,9 @@ class NavigationCard extends StatelessWidget {
 
   final VoidCallback onStop;
 
+  /// Fit-the-route overview action (null hides the overview button).
+  final VoidCallback? onOverview;
+
   /// e.g. "Điểm 2/3" for multi-stop trips (empty for single-destination).
   final String stopLabel;
 
@@ -27,91 +34,109 @@ class NavigationCard extends StatelessWidget {
       '${nav.etaHour.toString().padLeft(2, '0')}:'
       '${nav.etaMinute.toString().padLeft(2, '0')}';
 
+  /// Vietmap-style remaining time: "X phút" or "X giờ, Y phút".
+  String _durationText(NavProgress nav) {
+    final m = nav.etaHour * 60 + nav.etaMinute;
+    if (m < 60) return '$m phút';
+    final h = m ~/ 60;
+    final mm = m % 60;
+    return mm == 0 ? '$h giờ' : '$h giờ, $mm phút';
+  }
+
   @override
   Widget build(BuildContext context) {
     final nav = progress;
     return Material(
       elevation: 10,
       shadowColor: Colors.black26,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
       color: Colors.white,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
           children: [
-            Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration:
-                      const BoxDecoration(color: kAppBlue, shape: BoxShape.circle),
-                  child: Icon(
-                    nav == null ? Icons.navigation : maneuverIcon(nav.iconCode),
-                    color: Colors.white,
-                    size: 26,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        nav == null ? 'Đang khởi động…' : formatDistance(nav.meter),
-                        style: const TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.w800),
-                      ),
-                      Text(
-                        nav?.text ?? '',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+            // Stop navigation button.
+            _RoundAction(
+              icon: Icons.close,
+              onTap: onStop,
+              tooltip: 'Kết thúc chỉ đường',
             ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                StatChip(
-                  icon: Icons.schedule,
-                  label: nav == null ? '--' : _etaText(nav),
-                ),
-                StatChip(
-                  icon: Icons.speed,
-                  label: nav == null
-                      ? '--'
-                      : '${(nav.speedMps * 3.6).round()} km/h',
-                ),
-                if (stopLabel.isNotEmpty)
-                  StatChip(icon: Icons.flag, label: stopLabel),
-              ],
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 40,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFEA4335),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-                onPressed: onStop,
-                icon: const Icon(Icons.stop_circle, size: 18),
-                label: const Text(
-                  'Kết thúc chỉ đường',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-                ),
+            const SizedBox(width: 14),
+            // Big amber ETA + distance • arrival.
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    nav == null ? 'Đang khởi động…' : _durationText(nav),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFFFF6F00), // amber[900], Vietmap-style
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    nav == null
+                        ? '--'
+                        : [
+                            formatDistance(nav.meter),
+                            _etaText(nav),
+                            if (stopLabel.isNotEmpty) stopLabel,
+                          ].join(' • '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                ],
               ),
             ),
+            const SizedBox(width: 14),
+            // Overview (fit-route) button.
+            if (onOverview != null)
+              _RoundAction(
+                icon: Icons.route,
+                onTap: onOverview!,
+                tooltip: 'Xem toàn bộ lộ trình',
+              ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Circular bordered white action button used by the Vietmap-style bar.
+class _RoundAction extends StatelessWidget {
+  const _RoundAction({
+    required this.icon,
+    required this.onTap,
+    required this.tooltip,
+  });
+
+  final IconData icon;
+  final VoidCallback onTap;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            border: Border.all(color: kAppBlue, width: 1.5),
+          ),
+          child: Icon(icon, color: kAppBlue, size: 22),
         ),
       ),
     );

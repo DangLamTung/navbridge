@@ -57,6 +57,18 @@ class NavTopBar extends StatelessWidget {
       '${nav.etaHour.toString().padLeft(2, '0')}:'
       '${nav.etaMinute.toString().padLeft(2, '0')}';
 
+  /// Vietmap-style guidance verb: "rẽ trái" / "đi thẳng" / …
+  String _turnVerb(int code) => switch (code) {
+        iconTurnLeft => 'rẽ trái',
+        iconTurnRight => 'rẽ phải',
+        iconSlightLeft => 'rẽ trái nhẹ',
+        iconSlightRight => 'rẽ phải nhẹ',
+        iconUturnLeft || iconUturnRight => 'quay đầu',
+        iconRoundabout => 'đi theo vòng xuyến',
+        iconArrive => 'đến nơi',
+        _ => 'đi thẳng',
+      };
+
   @override
   Widget build(BuildContext context) {
     final nav = progress;
@@ -64,7 +76,8 @@ class NavTopBar extends StatelessWidget {
       elevation: 6,
       shadowColor: Colors.black38,
       borderRadius: BorderRadius.circular(18),
-      color: kAppBlue,
+      // Vietmap-navigation-style translucent light-blue banner.
+      color: const Color(0xCC42A5F5),
       child: InkWell(
         customBorder: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
@@ -112,22 +125,25 @@ class NavTopBar extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          destination,
+                          nav == null
+                              ? 'Đang khởi động…'
+                              : 'Còn ${formatDistance(nav.meter)}, '
+                                  '${_turnVerb(nav.iconCode)}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
                               color: Colors.white),
                         ),
                         Text(
-                          nav == null
-                              ? 'Đang khởi động…'
-                              : 'Về ${nav.text}',
+                          nav == null || nav.text.isEmpty
+                              ? destination
+                              : nav.text,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                              fontSize: 12, color: Colors.white70),
+                              fontSize: 13, color: Colors.white),
                         ),
                       ],
                     ),

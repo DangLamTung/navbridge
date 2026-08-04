@@ -265,6 +265,9 @@ class _NavigationPageState extends State<NavigationPage> {
         _current = pos;
         _heading = p.heading.isNaN ? null : p.heading;
         if (_engine == null || !_navigating) return;
+        // The Vietmap SDK drives its own navigation (location, route, voice);
+        // here we only keep the raw position for POI search / reroute.
+        if (_useVietmapNav) return;
         // Off the route? Re-route to the destination (re-navigation).
         if (_engine!.offRouteDistance(pos) > 45) {
           _reRoute(pos, speedMps: p.speed);
@@ -843,6 +846,20 @@ class _NavigationPageState extends State<NavigationPage> {
   void _zoomBy(double delta) =>
       _map.move(_map.camera.center, _map.camera.zoom + delta);
 
+  /// Vietmap-style "overview" button: fit the camera to the whole route
+  /// (leaving room for the top banner and the bottom ETA bar).
+  void _overviewRoute() {
+    final r = _route;
+    if (r == null || r.geometry.isEmpty) return;
+    final bounds = LatLngBounds.fromPoints(r.geometry);
+    _map.fitCamera(
+      CameraFit.bounds(
+        bounds: bounds,
+        padding: const EdgeInsets.fromLTRB(50, 170, 50, 240),
+      ),
+    );
+  }
+
   // ---- voice: spoken turn-by-turn (Bluetooth speaker) ------------------
 
   /// Speak the upcoming maneuver right when it becomes current, then again
@@ -980,9 +997,10 @@ class _NavigationPageState extends State<NavigationPage> {
 
   // ---- Vietmap's own navigation SDK ------------------------------------
 
-  /// Use Vietmap's official turn-by-turn navigation view when the Vietmap
-  /// source is active, real keys were provided at build time and we're
-  /// online. OSM / offline keep the custom (offline-capable) UI.
+  /// Use Vietmap's official turn-by-turn navigation view only when the user
+  /// picked the Vietmap source AND real keys were provided + online. The
+  /// default navigation is our own custom UI (which now mirrors the Vietmap
+  /// navigation look) — this SDK path stays optional.
   bool get _useVietmapNav =>
       dataSource == 'vietmap' &&
       VietmapConfig.hasKeys &&
@@ -1003,23 +1021,20 @@ class _NavigationPageState extends State<NavigationPage> {
     return pts;
   }
 
-  /// Feed the BLE clock + voice guidance from the Vietmap SDK's progress
-  /// events (their UI is full-screen, so this is the only hook we need).
+  /// Feed the BLE clock + trip logger from the Vietmap SDK's progress events
+  /// (their UI + native voice are full-screen, so only the clock/logging
+  /// hooks are needed here — our own TTS is skipped to avoid double voice).
   void _handleVietmapProgress(NavProgress nav, LatLng pos) {
     _progress = nav;
     _current = pos;
     if (mounted) setState(() {});
     _sendToClock(nav);
-    _maybeSpeakManeuver(nav);
     _logFix(pos, nav.speedMps);
   }
 
-  /// The SDK reached the destination — speak it and push an arrive frame.
+  /// The SDK reached the destination — push an arrive frame + finish the
+  /// trip (the SDK's own voice announces arrival, so we don't double-speak).
   void _handleVietmapArrived() {
-    if (!_arrivedSpoken) {
-      _arrivedSpoken = true;
-      _voice.speak('Bạn đã đến nơi');
-    }
     final nav = _progress;
     if (nav != null) {
       _sendToClock(NavProgress(
@@ -1846,6 +1861,7 @@ class _NavigationPageState extends State<NavigationPage> {
         card = NavigationCard(
           progress: _progress,
           onStop: _exitNavigation,
+          onOverview: _overviewRoute,
           stopLabel: stopLabel,
         );
       }
