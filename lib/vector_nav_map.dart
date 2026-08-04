@@ -456,7 +456,9 @@ class _VectorNavMapState extends State<VectorNavMap> {
       _stopCameraEase();
       return;
     }
-    const k = 0.20; // per-tick ease factor (~30fps → converges in ~300ms)
+    const k = 0.30; // per-tick ease factor (~30fps → converges in ~200ms)
+    // (0.20 was too floaty for a live drive; 0.30 still glides but follows
+    // the car quickly)
     if (_distMeters(cur, want) < 0.5) {
       // Settled on the target.
       ctrl.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(

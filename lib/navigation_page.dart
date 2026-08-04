@@ -166,6 +166,7 @@ class _NavigationPageState extends State<NavigationPage> {
   bool _spoken300 = false;
   bool _spoken50 = false;
   bool _arrivedSpoken = false;
+  DateTime? _lastReRoute; // cooldown for off-route re-routing
 
   @override
   void initState() {
@@ -250,22 +251,41 @@ class _NavigationPageState extends State<NavigationPage> {
   }
 
   void _startGps() {
+    _gpsSub?.cancel();
     _gpsSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 3,
+        // Every fix (no distance filter) → the nav UI, voice and the clock
+        // update as fast as the sensor reports, instead of every 3 m.
+        distanceFilter: 0,
       ),
-    ).listen((p) {
-      final pos = LatLng(p.latitude, p.longitude);
-      _current = pos;
-      _heading = p.heading.isNaN ? null : p.heading;
-      if (_engine == null || !_navigating) return;
-      // Off the route? Re-route to the destination (re-navigation).
-      if (_engine!.offRouteDistance(pos) > 45) {
-        _reRoute(pos);
-        return;
-      }
-      _handleNav(pos, speedMps: p.speed);
+    ).listen(
+      (p) {
+        final pos = LatLng(p.latitude, p.longitude);
+        _current = pos;
+        _heading = p.heading.isNaN ? null : p.heading;
+        if (_engine == null || !_navigating) return;
+        // Off the route? Re-route to the destination (re-navigation).
+        if (_engine!.offRouteDistance(pos) > 45) {
+          _reRoute(pos, speedMps: p.speed);
+          return;
+        }
+        _handleNav(pos, speedMps: p.speed);
+      },
+      onError: (Object e) {
+        debugPrint('GPS: stream error: $e — restarting');
+        _restartGps();
+      },
+      onDone: _restartGps,
+    );
+  }
+
+  /// Restart the GPS stream shortly after it ends/errors — some devices
+  /// drop the stream, which would silently freeze both the UI updates and
+  /// the off-route re-routing.
+  void _restartGps() {
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) _startGps();
     });
   }
 
@@ -375,7 +395,16 @@ class _NavigationPageState extends State<NavigationPage> {
   }
 
   /// Re-navigation: fetch a fresh route from [from] to the destination.
-  Future<void> _reRoute(LatLng from) async {
+  /// Keeps the current navigation running and snaps straight into the new
+  /// route so the UI + clock update immediately.
+  Future<void> _reRoute(LatLng from, {double speedMps = 0}) async {
+    // Cooldown: don't re-route-spam while GPS is jittery off-route.
+    final now = DateTime.now();
+    if (_lastReRoute != null &&
+        now.difference(_lastReRoute!) < const Duration(seconds: 10)) {
+      return;
+    }
+    _lastReRoute = now;
     debugPrint('SIM: REROUTE from=$from');
     final dest = _destination;
     if (dest == null) return;
@@ -393,6 +422,9 @@ class _NavigationPageState extends State<NavigationPage> {
         _showSteps = false;
         _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
       });
+      // Snap straight into the new route (updates distance, icon, clock,
+      // voice) instead of waiting for the next GPS fix.
+      _handleNav(from, speedMps: speedMps);
     } catch (_) {
       // keep the old route on failure
     }
@@ -813,7 +845,9 @@ class _NavigationPageState extends State<NavigationPage> {
 
   // ---- voice: spoken turn-by-turn (Bluetooth speaker) ------------------
 
-  /// Speak the upcoming maneuver at 300 m / 80 m / at the turn itself.
+  /// Speak the upcoming maneuver right when it becomes current, then again
+  /// at 300 m / 80 m (important turns are never missed — the 300 m/80 m
+  /// thresholds only repeat what the fresh-maneuver announcement said).
   void _maybeSpeakManeuver(NavProgress nav) {
     if (!_voiceOn || !_voice.ready) return;
     if (nav.iconCode == iconArrive) {
@@ -822,14 +856,19 @@ class _NavigationPageState extends State<NavigationPage> {
       _voice.speak('Bạn đã đến nơi.');
       return;
     }
+    final m = nav.meter;
     // The engine advanced to a new maneuver when the distance jumps up.
-    if (nav.meter > _lastMeter + 50) {
+    final isNew = m > _lastMeter + 50;
+    if (isNew) {
       _spoken300 = false;
       _spoken50 = false;
     }
-    _lastMeter = nav.meter;
-    final m = nav.meter;
-    if (!_spoken300 && m <= 300 && m > 80) {
+    _lastMeter = m;
+    if (isNew && m > 80) {
+      // Fresh turn → announce it immediately.
+      _spoken300 = true;
+      _voice.speak(_announce(nav, m));
+    } else if (!_spoken300 && m <= 300 && m > 80) {
       _spoken300 = true;
       _voice.speak(_announce(nav, m));
     } else if (!_spoken50 && m <= 80) {

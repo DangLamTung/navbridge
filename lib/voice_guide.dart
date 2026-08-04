@@ -19,10 +19,16 @@ class VoiceGuide {
       await _tts.setSpeechRate(0.5); // slightly slower, clearer
       await _tts.setPitch(1.0);
       await _tts.setVolume(1.0);
-      // Navigation usage → media stream → Bluetooth speaker when connected.
-      await _tts.setAudioAttributesForNavigation();
-      await _tts.setSharedInstance(true);
+      // Core engine is ready — optional audio attributes below must never
+      // kill the voice (some devices throw on these).
       _ready = true;
+      try {
+        // Navigation usage → media stream → Bluetooth speaker when connected.
+        await _tts.setAudioAttributesForNavigation();
+      } catch (_) {}
+      try {
+        await _tts.setSharedInstance(true);
+      } catch (_) {}
       debugPrint('VOICE: TTS ready (vi-VN, navigation audio)');
     } catch (e) {
       debugPrint('VOICE: TTS init failed: $e');
