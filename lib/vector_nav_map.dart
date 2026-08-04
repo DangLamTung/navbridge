@@ -88,9 +88,8 @@ class _VectorNavMapState extends State<VectorNavMap> {
   final List<Symbol> _poiSymbols = [];
   String? _lastPoiSig;
   Symbol? _carMarker;
-  Circle? _carCone;
   bool _hasPosition = false;
-  final double _zoom = 18; // follow zoom (overzooms the z16 tiles, Google-style)
+  final double _zoom = 15; // Vietmap SimpleCamera.DEFAULT_ZOOM (15.0)
   ll.LatLng? _lastRouteSig;
   ll.LatLng? _lastCarPos;
   double? _lastIconRotate;
@@ -104,9 +103,16 @@ class _VectorNavMapState extends State<VectorNavMap> {
   double _wantBearing = 0;
   Timer? _camTimer;
 
-  /// scale per icon so each renders ~44px on screen.
-  double _iconSize(String name) =>
-      name == 'arrow' ? 0.24 : 0.16; // arrow=200px, emoji=300px
+  /// Icon scale. The navigation puck (arrow) is Vietmap's exact 75dp puck
+  /// (white circle + #2a5dff arrow), rasterized at 4x (300px); MapLibre
+  /// icon-size is in physical pixels, so scale by density to land at 75dp.
+  double _iconSize(String name) {
+    if (name == 'arrow') {
+      final dpr = MediaQuery.of(context).devicePixelRatio;
+      return 75.0 * dpr / 300.0;
+    }
+    return 0.16; // emoji icons (300px) ~ 48px
+  }
 
   @override
   void initState() {
@@ -393,13 +399,57 @@ class _VectorNavMapState extends State<VectorNavMap> {
     }
   }
 
+  /// Vietmap's SimpleCamera: the map rotates to the ROUTE direction (not the
+  /// phone compass), so the road ahead is always vertical in heading-up mode.
+  /// Falls back to the compass heading when there's no route.
   double _bearing() {
-    if (widget.headingUp && (widget.heading ?? 0) > 0) return widget.heading!;
-    return 0; // north-up
+    if (!widget.headingUp) return 0; // north-up
+    if (widget.routeGeometry.length >= 2) return _routeBearing();
+    return widget.heading ?? 0;
   }
 
-  /// 3D perspective angle (Google-Maps-style) when navigating.
-  static const double _tilt = 55;
+  /// On-screen puck rotation (viewport-aligned, MapLibre's default). In
+  /// heading-up mode the camera bearing already equals the route bearing, so
+  /// the puck needs no extra rotation and points straight up (Vietmap). In
+  /// north-up mode it rotates to the route bearing to show travel direction.
+  double _puckRotate() {
+    if (!widget.headingUp) {
+      if (widget.routeGeometry.length >= 2) return _routeBearing();
+      return widget.heading ?? 0;
+    }
+    return 0;
+  }
+
+  /// Bearing of the route at the car: direction of the nearest polyline
+  /// segment (the same source Vietmap's camera uses for its initial bearing).
+  double _routeBearing() {
+    final c = widget.current;
+    final g = widget.routeGeometry;
+    if (c == null || g.length < 2) return widget.heading ?? 0;
+    var bi = 0;
+    var bd = double.infinity;
+    for (var i = 0; i < g.length; i++) {
+      final d = _distMeters(g[i], c);
+      if (d < bd) {
+        bd = d;
+        bi = i;
+      }
+    }
+    final i = bi < g.length - 1 ? bi : g.length - 2;
+    final a = g[i];
+    final b = g[i + 1];
+    final y = math.sin((b.longitude - a.longitude) * math.pi / 180) *
+        math.cos(b.latitude * math.pi / 180);
+    final x = math.cos(a.latitude * math.pi / 180) *
+            math.sin(b.latitude * math.pi / 180) -
+        math.sin(a.latitude * math.pi / 180) *
+            math.cos(b.latitude * math.pi / 180) *
+            math.cos((b.longitude - a.longitude) * math.pi / 180);
+    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+  }
+
+  /// 3D perspective angle — Vietmap SimpleCamera.DEFAULT_TILT (50).
+  static const double _tilt = 50;
 
   /// Where the car sits on screen, as a fraction of the visible map height
   /// measured from the camera center. 0.0 = dead center. (A positive value
@@ -410,6 +460,8 @@ class _VectorNavMapState extends State<VectorNavMap> {
   void _followPosition() {
     final ctrl = _controller;
     final c = widget.current;
+    debugPrint('VECTORMAP: follow current=${c != null} ctrl=${ctrl != null} '
+        'hasPos=$_hasPosition');
     if (ctrl == null || c == null) return;
     final bearing = _bearing();
     final car = ll.LatLng(c.latitude, c.longitude);
@@ -487,7 +539,7 @@ class _VectorNavMapState extends State<VectorNavMap> {
     // target, so place it at the eased position to keep it glued to the
     // anchor (no visible lag between camera and icon).
     final carPos = _followTarget(_camPos!, _wantBearing + 180, _zoom);
-    _paintCar(carPos, bearing);
+    _paintCar(carPos);
   }
 
   void _stopCameraEase() {
@@ -531,35 +583,30 @@ class _VectorNavMapState extends State<VectorNavMap> {
     return math.sqrt(dLat * dLat + dLng * dLng);
   }
 
-  /// Soft halo under the car (Google-style location cone).
-  Future<void> _ensureCarHalo() async {
-    final ctrl = _controller;
-    final c = widget.current;
-    if (ctrl == null || c == null || _carCone != null) return;
-    _carCone = await ctrl.addCircle(CircleOptions(
-      geometry: LatLng(c.latitude, c.longitude),
-      circleColor: '#4285F4',
-      circleRadius: 18.0,
-      circleOpacity: 0.28,
-    ));
-  }
-
-  /// The car marker: a rotating symbol (arrow or fun emoji).
+  /// Soft halo under the car (Google-style location cone) — removed: the
+  /// Vietmap navigation puck carries its own white halo.
+  /// The car marker: the Vietmap navigation puck (white circle + blue arrow)
+  /// or a fun emoji. Rotation is viewport-aligned (see [_puckRotate]).
   Future<void> _ensureCarMarker() async {
     final ctrl = _controller;
     final c = widget.current;
     if (ctrl == null || c == null) return;
     if (_carMarker == null) {
       await _loadIcons(ctrl);
-      _carMarker = await ctrl.addSymbol(SymbolOptions(
-        geometry: LatLng(c.latitude, c.longitude),
-        iconImage: widget.carIcon,
-        iconSize: _iconSize(widget.carIcon),
-        iconRotate: widget.heading ?? 0,
-        iconAnchor: 'center',
-      ));
+      try {
+        _carMarker = await ctrl.addSymbol(SymbolOptions(
+          geometry: LatLng(c.latitude, c.longitude),
+          iconImage: widget.carIcon,
+          iconSize: _iconSize(widget.carIcon),
+          iconRotate: _puckRotate(),
+          iconAnchor: 'center',
+        ));
+        debugPrint('VECTORMAP: car marker created (${widget.carIcon})');
+      } catch (e) {
+        debugPrint('VECTORMAP: car marker failed: $e');
+      }
       _lastCarPos = c;
-      _lastIconRotate = widget.heading ?? 0;
+      _lastIconRotate = _puckRotate();
       _lastIconName = widget.carIcon;
     }
   }
@@ -567,32 +614,33 @@ class _VectorNavMapState extends State<VectorNavMap> {
   void _updateCarMarker() {
     final c = widget.current;
     if (c == null) return;
-    _paintCar(ll.LatLng(c.latitude, c.longitude), widget.heading ?? 0);
+    _paintCar(ll.LatLng(c.latitude, c.longitude));
   }
 
-  /// Place the car icon + halo at [pos], rotated to [heading]. Called both on
+  /// Place the puck icon at [pos] (rotated by [_puckRotate]). Called both on
   /// new GPS fixes and each camera-ease frame (to keep the icon glued to the
   /// screen anchor while the camera glides).
-  void _paintCar(ll.LatLng pos, double heading) {
+  void _paintCar(ll.LatLng pos) {
     final ctrl = _controller;
     if (ctrl == null || _carMarker == null) return;
     final iconChanged = widget.carIcon != _lastIconName;
     final posChanged =
         _lastCarPos == null || _distMeters(_lastCarPos!, pos) > 0.3;
-    final rotChanged = (heading - (_lastIconRotate ?? 0)).abs() > 0.5;
+    final rotate = _puckRotate();
+    final rotChanged = (rotate - (_lastIconRotate ?? 0)).abs() > 0.5;
     if (!posChanged && !rotChanged && !iconChanged) return;
+    debugPrint('VECTORMAP: paint car @'
+        '${pos.latitude.toStringAsFixed(5)},${pos.longitude.toStringAsFixed(5)} '
+        'rot=$rotate');
     _lastCarPos = pos;
-    _lastIconRotate = heading;
+    _lastIconRotate = rotate;
     _lastIconName = widget.carIcon;
     ctrl.updateSymbol(_carMarker!, SymbolOptions(
       geometry: LatLng(pos.latitude, pos.longitude),
       iconImage: widget.carIcon,
       iconSize: _iconSize(widget.carIcon),
-      iconRotate: heading,
+      iconRotate: _puckRotate(),
       iconAnchor: 'center',
-    ));
-    ctrl.updateCircle(_carCone!, CircleOptions(
-      geometry: LatLng(pos.latitude, pos.longitude),
     ));
   }
 
@@ -635,7 +683,6 @@ class _VectorNavMapState extends State<VectorNavMap> {
       onMapCreated: (ctrl) => _controller = ctrl,
       onStyleLoadedCallback: () async {
         await _addRoute();
-        await _ensureCarHalo();
         await _ensureCarMarker();
         _followPosition();
         await _updatePois();

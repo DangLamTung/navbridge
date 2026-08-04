@@ -295,6 +295,7 @@ class _NavigationPageState extends State<NavigationPage> {
   /// Shared by real GPS and the simulated drive: snap, update the card,
   /// push to the clock and keep the camera on the car.
   void _handleNav(LatLng pos, {required double speedMps}) {
+    _current = pos; // keep the vector map + POI search on the live fix
     final nav = _engine!.update(pos, speedMps: speedMps);
     _progress = nav;
     debugPrint('SIM: handleNav dist=$_simDist meter=${nav.meter} icon=${nav.iconCode}');
