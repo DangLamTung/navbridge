@@ -57,8 +57,10 @@ class OfflineRouter {
   Future<Map<String, dynamic>?> roadInfo(LatLng pos) async {
     if (!_loaded) return null;
     try {
-      final raw = await _channel.invokeMethod<Object?>(
-          'roadInfo', {'lat': pos.latitude, 'lng': pos.longitude});
+      final raw = await _channel.invokeMethod<Object?>('roadInfo', {
+        'lat': pos.latitude,
+        'lng': pos.longitude,
+      });
       if (raw == null) return null;
       return Map<String, dynamic>.from(raw as Map);
     } catch (e) {
@@ -67,9 +69,16 @@ class OfflineRouter {
     }
   }
 
-  /// Compute a route through [points] (2+) entirely on-device.
-  Future<OsrmRoute?> route(List<LatLng> points) async {
-    if (points.length < 2 || !_loaded) return null;
+  /// Compute up to [maxAlternatives] routes through [points] (2+) entirely
+  /// on-device (best first). [avoidMotorway]/[avoidFerry] block those road
+  /// classes via a GraphHopper custom model. Returns [] when unavailable.
+  Future<List<OsrmRoute>> route(
+    List<LatLng> points, {
+    int maxAlternatives = 1,
+    bool avoidMotorway = false,
+    bool avoidFerry = false,
+  }) async {
+    if (points.length < 2 || !_loaded) return const [];
     try {
       final flat = <double>[];
       for (final p in points) {
@@ -78,13 +87,21 @@ class OfflineRouter {
       }
       // Platform-channel maps decode as Map<Object?, Object?>, so a typed
       // invokeMapMethod<String, dynamic> cast throws. Convert explicitly.
-      final raw = await _channel.invokeMethod<Object?>('route', {'points': flat});
-      if (raw == null) return null;
-      final res = Map<String, dynamic>.from(raw as Map);
-      return _parse(res);
+      final raw = await _channel.invokeMethod<Object?>('route', {
+        'points': flat,
+        'alternatives': maxAlternatives,
+        'avoidMotorway': avoidMotorway,
+        'avoidFerry': avoidFerry,
+      });
+      if (raw == null) return const [];
+      // Kotlin returns a plain List of Maps (best first).
+      final rawList = (raw as List).cast<Object?>();
+      return [
+        for (final r in rawList) _parse(Map<String, dynamic>.from(r as Map)),
+      ];
     } catch (e) {
       debugPrint('ROUTER: route error: $e');
-      return null;
+      return const [];
     }
   }
 
@@ -103,15 +120,19 @@ class OfflineRouter {
     for (final s in rawSteps) {
       final sign = ((s['sign'] ?? 0) as num).toInt();
       final (type, modifier) = _maneuverForSign(sign);
-      steps.add(OsrmStep(
-        name: (s['name'] ?? '') as String,
-        distance: ((s['distance'] ?? 0) as num).toDouble(),
-        duration: ((s['duration'] ?? 0) as num).toDouble(),
-        type: type,
-        modifier: modifier,
-        maneuver: LatLng(((s['lat'] ?? 0) as num).toDouble(),
-            ((s['lng'] ?? 0) as num).toDouble()),
-      ));
+      steps.add(
+        OsrmStep(
+          name: (s['name'] ?? '') as String,
+          distance: ((s['distance'] ?? 0) as num).toDouble(),
+          duration: ((s['duration'] ?? 0) as num).toDouble(),
+          type: type,
+          modifier: modifier,
+          maneuver: LatLng(
+            ((s['lat'] ?? 0) as num).toDouble(),
+            ((s['lng'] ?? 0) as num).toDouble(),
+          ),
+        ),
+      );
     }
     // Stop boundaries: instructions with sign 5 (REACHED_VIA) / 4 (FINISH).
     final stopCum = <double>[];
@@ -133,19 +154,19 @@ class OfflineRouter {
 
   // GraphHopper instruction sign → OSRM-style maneuver.
   (String, String?) _maneuverForSign(int sign) => switch (sign) {
-        -8 || -98 => ('turn', 'uturn'),
-        -3 => ('turn', 'sharp left'),
-        -2 => ('turn', 'left'),
-        -1 => ('turn', 'slight left'),
-        0 => ('continue', 'straight'),
-        1 => ('turn', 'slight right'),
-        2 => ('turn', 'right'),
-        3 => ('turn', 'sharp right'),
-        8 => ('turn', 'uturn'),
-        4 || 5 => ('arrive', null),
-        6 || 7 => ('roundabout', 'left'),
-        _ => ('continue', 'straight'),
-      };
+    -8 || -98 => ('turn', 'uturn'),
+    -3 => ('turn', 'sharp left'),
+    -2 => ('turn', 'left'),
+    -1 => ('turn', 'slight left'),
+    0 => ('continue', 'straight'),
+    1 => ('turn', 'slight right'),
+    2 => ('turn', 'right'),
+    3 => ('turn', 'sharp right'),
+    8 => ('turn', 'uturn'),
+    4 || 5 => ('arrive', null),
+    6 || 7 => ('roundabout', 'left'),
+    _ => ('continue', 'straight'),
+  };
 }
 
 // ---- graph storage / download -------------------------------------------
@@ -178,8 +199,11 @@ Future<bool> downloadToFile(
   final client = http.Client();
   try {
     final req = http.Request('GET', Uri.parse(url));
-    req.headers['User-Agent'] = 'navbridge/1.0 (BLE portable navigation; graph)';
-    final streamed = await client.send(req).timeout(const Duration(seconds: 30));
+    req.headers['User-Agent'] =
+        'navbridge/1.0 (BLE portable navigation; graph)';
+    final streamed = await client
+        .send(req)
+        .timeout(const Duration(seconds: 30));
     final total = streamed.contentLength ?? 0;
     if (streamed.statusCode != 200) return false;
     final file = File(target);
@@ -202,6 +226,13 @@ Future<bool> downloadToFile(
 
 /// Best route source: on-device GraphHopper when loaded, OSRM otherwise.
 /// In forced-offline mode only the on-device graph is used (never OSRM).
+/// Snap a GPS trace to the road with OSRM's match API — but ONLY when online
+/// (the on-device graph has no matching). Returns the snapped point or null.
+Future<LatLng?> fetchAnyMatch(List<LatLng> trace) async {
+  if (forceOffline) return null;
+  return matchGpsTrace(trace);
+}
+
 /// Throws when no source is available (fully offline without a graph).
 ///
 /// [profile] selects the road type (car / motorbike / bicycle / walking).
@@ -213,23 +244,30 @@ Future<OsrmRoute> fetchAnyRoute(
   List<LatLng> points, {
   RouteProfile profile = RouteProfile.car,
   bool avoidHighway = false,
+  bool avoidFerry = false,
 }) async {
-  final routes =
-      await fetchAnyRoutes(points, profile: profile, avoidHighway: avoidHighway);
+  final routes = await fetchAnyRoutes(
+    points,
+    profile: profile,
+    avoidHighway: avoidHighway,
+    avoidFerry: avoidFerry,
+  );
   return routes.first;
 }
 
 /// Like [fetchAnyRoute] but returns up to [maxAlternatives] route options
-/// (best first) when the active source can produce alternatives (Vietmap
-/// `alternative=true`). Non-Vietmap sources return a single-element list.
-/// [avoidHighway] re-routes without motorways (OSRM `exclude=motorway`;
-/// the on-device car graph and Vietmap don't support exclusions, so it's
-/// ignored there).
+/// (best first) when the active source can produce alternatives (OSRM
+/// `alternatives=` or Vietmap `alternative=true`). The on-device car graph
+/// returns a single route.
+/// [avoidHighway] / [avoidFerry] re-route without motorways / ferries
+/// (OSRM `exclude=motorway,ferry`); the on-device car graph and Vietmap
+/// don't support exclusions, so they're ignored there.
 Future<List<OsrmRoute>> fetchAnyRoutes(
   List<LatLng> points, {
   RouteProfile profile = RouteProfile.car,
   int maxAlternatives = 3,
   bool avoidHighway = false,
+  bool avoidFerry = false,
 }) async {
   if (dataSource == 'vietmap' &&
       !forceOffline &&
@@ -245,19 +283,26 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
     }
   }
   if (profile == RouteProfile.car && OfflineRouter.instance.isLoaded) {
-    final local = await OfflineRouter.instance.route(points);
-    if (local != null) return [local];
+    final local = await OfflineRouter.instance.route(
+      points,
+      maxAlternatives: maxAlternatives,
+      avoidMotorway: avoidHighway,
+      avoidFerry: avoidFerry,
+    );
+    if (local.isNotEmpty) return local;
   }
   if (forceOffline) {
-    throw StateError(profile == RouteProfile.car
-        ? 'Ngoại tuyến: chưa tải bộ dữ liệu chỉ đường'
-        : 'Ngoại tuyến: bộ dữ liệu chỉ hỗ trợ ô tô');
+    throw StateError(
+      profile == RouteProfile.car
+          ? 'Ngoại tuyến: chưa tải bộ dữ liệu chỉ đường'
+          : 'Ngoại tuyến: bộ dữ liệu chỉ hỗ trợ ô tô',
+    );
   }
-  return [
-    await fetchOsrmRoute(
-      points,
-      profile: profile.osrm,
-      exclude: avoidHighway ? 'motorway' : null,
-    )
-  ];
+  // Online OSRM returns up to [maxAlternatives] tap-to-choose routes.
+  return fetchOsrmRoutes(
+    points,
+    profile: profile.osrm,
+    exclude: osrmExclude(avoidHighway: avoidHighway, avoidFerry: avoidFerry),
+    maxAlternatives: maxAlternatives,
+  );
 }

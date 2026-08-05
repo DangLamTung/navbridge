@@ -35,6 +35,8 @@ class RoutePreviewCard extends StatelessWidget {
     this.onAlternative,
     this.avoidHighway = false,
     this.onToggleAvoidHighway,
+    this.avoidFerry = false,
+    this.onToggleAvoidFerry,
     this.elevation,
   });
 
@@ -69,6 +71,10 @@ class RoutePreviewCard extends StatelessWidget {
   final bool avoidHighway;
   final VoidCallback? onToggleAvoidHighway;
 
+  /// Re-route without ferries (route criteria).
+  final bool avoidFerry;
+  final VoidCallback? onToggleAvoidFerry;
+
   /// Route ascent/descent (best-effort; null = unknown).
   final ElevationInfo? elevation;
 
@@ -101,14 +107,15 @@ class RoutePreviewCard extends StatelessWidget {
                         '$etaText • $distanceText'
                         '${stopCount > 1 ? ' • $stopCount điểm dừng' : ''}',
                         style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w700),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       Text(
                         destination,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style:
-                            TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                       ),
                     ],
                   ),
@@ -120,7 +127,9 @@ class RoutePreviewCard extends StatelessWidget {
               const SizedBox(height: 8),
               Container(
                 padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 6),
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFFFFF3CD),
                   borderRadius: BorderRadius.circular(10),
@@ -134,9 +143,10 @@ class RoutePreviewCard extends StatelessWidget {
                       child: Text(
                         'Phí cầu đường: ${_formatVnd(tollCost!)}',
                         style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF7A4F00)),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF7A4F00),
+                        ),
                       ),
                     ),
                   ],
@@ -144,7 +154,7 @@ class RoutePreviewCard extends StatelessWidget {
               ),
             ],
             // Alternative routes (Vietmap `alternative=true`).
-            if (alternativeLabels.length > 1) ...[  
+            if (alternativeLabels.length > 1) ...[
               const SizedBox(height: 8),
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
@@ -153,7 +163,8 @@ class RoutePreviewCard extends StatelessWidget {
                     for (var i = 0; i < alternativeLabels.length; i++)
                       Padding(
                         padding: EdgeInsets.only(
-                            right: i == alternativeLabels.length - 1 ? 0 : 6),
+                          right: i == alternativeLabels.length - 1 ? 0 : 6,
+                        ),
                         child: _AlternativeChip(
                           index: i,
                           label: alternativeLabels[i],
@@ -167,8 +178,10 @@ class RoutePreviewCard extends StatelessWidget {
                 ),
               ),
             ],
-            // Route criteria: elevation (ascent/descent) + avoid motorways.
-            if (elevation != null || onToggleAvoidHighway != null) ...[
+            // Route criteria: elevation + avoid motorways / ferries.
+            if (elevation != null ||
+                onToggleAvoidHighway != null ||
+                onToggleAvoidFerry != null) ...[
               const SizedBox(height: 8),
               Row(
                 children: [
@@ -176,7 +189,9 @@ class RoutePreviewCard extends StatelessWidget {
                     Flexible(
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 6),
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFFE8F0FE),
                           borderRadius: BorderRadius.circular(10),
@@ -184,8 +199,11 @@ class RoutePreviewCard extends StatelessWidget {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.terrain,
-                                size: 16, color: Color(0xFF1A73E8)),
+                            const Icon(
+                              Icons.terrain,
+                              size: 16,
+                              color: Color(0xFF1A73E8),
+                            ),
                             const SizedBox(width: 6),
                             Flexible(
                               child: Text(
@@ -194,9 +212,10 @@ class RoutePreviewCard extends StatelessWidget {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF174EA6)),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF174EA6),
+                                ),
                               ),
                             ),
                           ],
@@ -204,6 +223,13 @@ class RoutePreviewCard extends StatelessWidget {
                       ),
                     ),
                   const Spacer(),
+                  if (onToggleAvoidFerry != null)
+                    _CriteriaChip(
+                      icon: Icons.directions_boat_outlined,
+                      label: 'Tránh phà',
+                      selected: avoidFerry,
+                      onTap: onToggleAvoidFerry!,
+                    ),
                   if (onToggleAvoidHighway != null)
                     _CriteriaChip(
                       icon: Icons.directions_car_outlined,
@@ -238,7 +264,8 @@ class RoutePreviewCard extends StatelessWidget {
                   backgroundColor: kAppBlue,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
                 onPressed: onStart,
                 icon: const Icon(Icons.navigation, size: 20),

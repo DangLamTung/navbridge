@@ -12,7 +12,7 @@
 library;
 
 import 'dart:async';
-import 'dart:math' show Point;
+import 'dart:math' show Point, Random, max;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -40,7 +40,6 @@ import 'trip_plan.dart';
 import 'trips_screen.dart';
 import 'ui/arrival_card.dart';
 import 'vector_nav_map.dart';
-import 'vietmap_nav_view.dart';
 import 'vietmap_api.dart';
 import 'vietmap_config.dart';
 import 'voice_commands.dart';
@@ -84,6 +83,11 @@ class _NavigationPageState extends State<NavigationPage> {
   TurnByTurnEngine? _engine;
   LatLng? _origin;
   LatLng? _destination;
+
+  /// Index into the route polyline where the DRAWN route starts — the driven
+  /// part is "consumed" (not drawn), Google-Maps style. Updated on every nav
+  /// fix from `engine.snappedSegmentIndex`.
+  int _routeStartIndex = 0;
   LatLng? _current;
   double? _heading;
   bool _headingUp = true; // rotate map so travel direction points up
@@ -105,22 +109,29 @@ class _NavigationPageState extends State<NavigationPage> {
   List<LatLng> _dragHandles = [];
   final ValueNotifier<MapCamera?> _camNotifier = ValueNotifier(null);
 
-  // --- route criteria: traffic / elevation / avoid highway ---------------
+  // --- route criteria: traffic / elevation / avoid highway / ferry -------
   bool _avoidHighway = false; // re-plan without motorways (OSRM)
+  bool _avoidFerry = false; // re-plan without ferries (OSRM)
   ElevationInfo? _elevation; // ascent/descent of the current route
   final Map<String, ElevationInfo> _elevationCache = {};
 
+  // --- nav map: 3D perspective tilt (Google-style) ----------------------
+  bool _tilt3d = true; // tilted perspective camera (turn off = flat 2D)
+
   // --- quick POI search (gas / food / hotel / … during navigation) ------
-  final GlobalKey<VietmapNavViewState> _vmNavKey =
-      GlobalKey<VietmapNavViewState>();
   List<PoiResult> _pois = [];
   PoiType? _poiType;
+  PoiResult? _selectedPoi; // tapped POI — shown on the map until "Đi đến"
   bool _poiBusy = false;
+
+  // --- nav-map camera follow (drives the auto-center button) -------------
+  final VectorNavMapController _vmFollow = VectorNavMapController();
 
   // --- simulated drive (test mode) ---
   Timer? _simTimer;
   bool _simulating = false;
   double _simDist = 0;
+  bool _simOffRoute = false; // NAVTEST: drive off-route to exercise re-routing
 
   // --- road info (Overpass) ---
   RoadInfo? _roadInfo;
@@ -162,11 +173,18 @@ class _NavigationPageState extends State<NavigationPage> {
   final VoiceCommands _commands = VoiceCommands();
   bool _listening = false;
   bool _voiceOn = true; // spoken turn-by-turn guidance enabled
-  int _lastMeter = 0;
-  bool _spoken300 = false;
-  bool _spoken50 = false;
+  bool _spokenFar = false;
+  bool _spokenNear = false;
+  bool _spokenFinal = false;
   bool _arrivedSpoken = false;
+  String? _lastManeuverSig; // icon+road of the maneuver we last announced
   DateTime? _lastReRoute; // cooldown for off-route re-routing
+
+  // --- online GPS road-snapping (OSRM match) + off-route timing ----------
+  final List<LatLng> _gpsWindow = []; // rolling trace for /match
+  DateTime? _lastGpsMatch; // throttle: match at most every 5 s
+  double _lastSpeedMps = 0;
+  DateTime? _offRouteSince; // when the car first went >50 m off-route
 
   @override
   void initState() {
@@ -210,15 +228,19 @@ class _NavigationPageState extends State<NavigationPage> {
       dataSource = s.dataSource;
       setState(() => _offline = _offline || forceOffline);
     });
+    // Opt-in simulator test harness (see [_maybeRunNavTest]).
+    unawaited(_maybeRunNavTest());
     // Voice: spoken turn-by-turn (→ Bluetooth speaker) + mic commands.
     _voice.init();
-    _commands.init(onStatus: (s) {
-      // Speech session ended (final result / silence / error) → release mic.
-      if (s == 'done' || s == 'notListening') {
-        _listening = false;
-        if (mounted) setState(() {});
-      }
-    });
+    _commands.init(
+      onStatus: (s) {
+        // Speech session ended (final result / silence / error) → release mic.
+        if (s == 'done' || s == 'notListening') {
+          _listening = false;
+          if (mounted) setState(() {});
+        }
+      },
+    );
   }
 
   @override
@@ -241,46 +263,147 @@ class _NavigationPageState extends State<NavigationPage> {
     super.dispose();
   }
 
+  // ---- opt-in simulator test harness -----------------------------------
+
+  /// With `--dart-define=NAVTEST=true` the app auto-builds a route and starts
+  /// the SIM drive, so the full turn-by-turn pipeline (voice announcements,
+  /// nav UI, clock frames, road info) can be exercised from logcat without UI
+  /// taps:
+  ///   - `NAVTEST=true`      → Chợ Bến Thành (~10 km) + drives off-route at
+  ///                           20 s to exercise re-routing.
+  ///   - `NAVTEST_LONG=true` → Hà Nội (~1 600 km) to verify long-distance
+  ///                           planning + engine.
+  /// Normal builds (no defines) are completely unaffected.
+  Future<void> _maybeRunNavTest() async {
+    const long = bool.fromEnvironment('NAVTEST_LONG');
+    if (!const bool.fromEnvironment('NAVTEST') && !long) return;
+    await Future<void>.delayed(const Duration(seconds: 4));
+    if (!mounted) return;
+    debugPrint(
+      'NAVTEST: building route to ${long ? 'Hà Nội (~1600km)' : 'Chợ Bến Thành'}',
+    );
+    setState(() {
+      dataSource = 'osm'; // public OSRM routing (works from the emulator)
+      _stops.add(
+        long
+            ? TripStop(name: 'Hà Nội', lat: 21.0285, lng: 105.8542)
+            : TripStop(name: 'Chợ Bến Thành', lat: 10.7725, lng: 106.6980),
+      );
+    });
+    try {
+      await _buildPlanRoute();
+    } catch (e) {
+      debugPrint('NAVTEST: plan failed: $e');
+      return;
+    }
+    if (!mounted) return;
+    _toggleSimulation();
+    debugPrint(
+      'NAVTEST: SIM drive started (${long ? 'LONG' : 'short + re-route'})',
+    );
+    if (!long) {
+      // 20 s in, drive off-route to exercise the re-route path (expect
+      // `SIM: REROUTE` + a fresh `PLAN: BUILD ok`).
+      Future<void>.delayed(const Duration(seconds: 20), () {
+        if (!mounted || !_simulating) return;
+        debugPrint('NAVTEST: going off-route to test re-routing');
+        _simOffRoute = true;
+      });
+    }
+  }
+
   // ---- GPS -------------------------------------------------------------
 
   Future<void> _requestPermission() async {
     final p = await Geolocator.checkPermission();
-    if (p == LocationPermission.denied || p == LocationPermission.deniedForever) {
+    if (p == LocationPermission.denied ||
+        p == LocationPermission.deniedForever) {
       await Geolocator.requestPermission();
     }
   }
 
   void _startGps() {
     _gpsSub?.cancel();
-    _gpsSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        // Every fix (no distance filter) → the nav UI, voice and the clock
-        // update as fast as the sensor reports, instead of every 3 m.
-        distanceFilter: 0,
-      ),
-    ).listen(
-      (p) {
-        final pos = LatLng(p.latitude, p.longitude);
-        _current = pos;
-        _heading = p.heading.isNaN ? null : p.heading;
-        if (_engine == null || !_navigating) return;
-        // The Vietmap SDK drives its own navigation (location, route, voice);
-        // here we only keep the raw position for POI search / reroute.
-        if (_useVietmapNav) return;
-        // Off the route? Re-route to the destination (re-navigation).
-        if (_engine!.offRouteDistance(pos) > 45) {
-          _reRoute(pos, speedMps: p.speed);
-          return;
-        }
-        _handleNav(pos, speedMps: p.speed);
-      },
-      onError: (Object e) {
-        debugPrint('GPS: stream error: $e — restarting');
-        _restartGps();
-      },
-      onDone: _restartGps,
-    );
+    _gpsSub =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            // Every fix (no distance filter) → the nav UI, voice and the clock
+            // update as fast as the sensor reports, instead of every 3 m.
+            distanceFilter: 0,
+          ),
+        ).listen(
+          (p) {
+            // During the simulated drive the SIM owns the position — the real
+            // GPS stream (e.g. a stationary phone sitting at the origin) was
+            // overwriting `_current` back to the origin and re-running the
+            // engine/OSRM-snap, which made the map keep "returning to start".
+            if (_simulating) return;
+            final pos = LatLng(p.latitude, p.longitude);
+            _current = pos;
+            _heading = p.heading.isNaN ? null : p.heading;
+            if (_engine == null || !_navigating) return;
+            // Keep a short trace for online OSRM /match road-snapping.
+            _gpsWindow.add(pos);
+            if (_gpsWindow.length > 15) _gpsWindow.removeAt(0);
+            _lastSpeedMps = p.speed;
+            unawaited(_maybeSnapToRoad());
+            // Off the route? Re-route once the car stays off-path (>50 m)
+            // for 10 s (or immediately when it's clearly far gone, >250 m).
+            final off = _engine!.offRouteDistance(pos);
+            if (off > 50) {
+              final now = DateTime.now();
+              final since = _offRouteSince ??= now;
+              if (off > 250 ||
+                  now.difference(since) >= const Duration(seconds: 10)) {
+                _offRouteSince = null;
+                _reRoute(pos, speedMps: p.speed);
+                return;
+              }
+            } else {
+              _offRouteSince = null;
+            }
+            _handleNav(pos, speedMps: p.speed);
+          },
+          onError: (Object e) {
+            debugPrint('GPS: stream error: $e — restarting');
+            _restartGps();
+          },
+          onDone: _restartGps,
+        );
+  }
+
+  /// Online GPS road-snapping: send the rolling trace to OSRM /match
+  /// (throttled to 5 s) to refine the on-route position when online. The
+  /// matched point is projected onto the route polyline and only accepted
+  /// when it's close — between matches (and fully offline) the always-on
+  /// `engine.snapToRoute` projection keeps the car on the road, so the match
+  /// never causes the puck to bounce off/on the route (the old flicker).
+  Future<void> _maybeSnapToRoad() async {
+    if (forceOffline || _gpsWindow.length < 3 || !_navigating) return;
+    final now = DateTime.now();
+    if (_lastGpsMatch != null &&
+        now.difference(_lastGpsMatch!) < const Duration(seconds: 5)) {
+      return;
+    }
+    _lastGpsMatch = now;
+    final matched = await fetchAnyMatch(List.of(_gpsWindow));
+    if (!mounted || !_navigating || matched == null) return;
+    final engine = _engine;
+    if (engine == null) return;
+    // Only trust the match when it's on/near our route — otherwise it could
+    // yank the car onto a parallel road (e.g. after a wrong turn).
+    if (engine.offRouteDistance(matched) > 50) return;
+    final projected = engine.snapToRoute(matched);
+    // Drop a stale result: if the car moved well beyond where the trace was
+    // captured while /match was in flight, the next GPS fix re-snaps anyway.
+    final cur = _current;
+    if (cur != null && distanceMeters(cur, projected) > 30) return;
+    _current = projected;
+    final nav = engine.update(projected, speedMps: _lastSpeedMps);
+    _progress = nav;
+    _sendToClock(nav);
+    if (mounted) setState(() {});
   }
 
   /// Restart the GPS stream shortly after it ends/errors — some devices
@@ -295,15 +418,51 @@ class _NavigationPageState extends State<NavigationPage> {
   /// Shared by real GPS and the simulated drive: snap, update the card,
   /// push to the clock and keep the camera on the car.
   void _handleNav(LatLng pos, {required double speedMps}) {
-    _current = pos; // keep the vector map + POI search on the live fix
-    final nav = _engine!.update(pos, speedMps: speedMps);
+    // Off-route re-route uses the RAW fix — a snapped point is always on the
+    // route, so it could never trigger. Stays >50 m off-path for 10 s, or
+    // re-routes immediately when clearly far gone.
+    final off = _engine!.offRouteDistance(pos);
+    if (off > 50) {
+      final now = DateTime.now();
+      final since = _offRouteSince ??= now;
+      if (off > 250 || now.difference(since) >= const Duration(seconds: 10)) {
+        _offRouteSince = null;
+        unawaited(_reRoute(pos, speedMps: speedMps));
+        return;
+      }
+    } else {
+      _offRouteSince = null;
+    }
+    // Project the raw fix onto the route polyline so the car RIDES the road:
+    // the puck, the camera bearing and the turn meter all stay stable even
+    // when the real GPS fix wanders a few meters off the road (this is what
+    // kept the arrow flickering — the raw fix fed the nearest-vertex bearing).
+    final snapped = _engine!.snapToRoute(pos);
+    _current = snapped; // keep the vector map + POI search on the route
+    final nav = _engine!.update(snapped, speedMps: speedMps);
     _progress = nav;
-    debugPrint('SIM: handleNav dist=$_simDist meter=${nav.meter} icon=${nav.iconCode}');
+    // Consume the driven part of the route (the map only draws from here on).
+    _routeStartIndex = _engine!.snappedSegmentIndex;
+    debugPrint(
+      'SIM: handleNav dist=$_simDist meter=${nav.meter} icon=${nav.iconCode} '
+      'start=$_routeStartIndex',
+    );
+    // SIM verification aid: show how much the road-snapping corrected the raw
+    // (noisy, in NAVTEST) fix back onto the route.
+    if (_simulating) {
+      debugPrint(
+        'NAVTEST: gps raw=${pos.latitude.toStringAsFixed(5)},'
+        '${pos.longitude.toStringAsFixed(5)} → '
+        'snapped=${snapped.latitude.toStringAsFixed(5)},'
+        '${snapped.longitude.toStringAsFixed(5)} '
+        'correct=${distanceMeters(pos, snapped).toStringAsFixed(1)}m',
+      );
+    }
     _sendToClock(nav);
     _maybeSpeakManeuver(nav);
-    _refreshRoad(pos);
+    _refreshRoad(snapped);
     _logFix(pos, speedMps);
-    _map.move(pos, 17);
+    _map.move(snapped, 17);
     if (mounted) setState(() {});
   }
 
@@ -346,10 +505,14 @@ class _NavigationPageState extends State<NavigationPage> {
   Future<RoadInfo?> _roadInfoFromGraph(LatLng pos) async {
     final g = await OfflineRouter.instance.roadInfo(pos);
     if (g == null) return null;
+    debugPrint('ROAD: graph highway=${g['highway']} maxspeed=${g['maxspeed']}');
     final highway = (g['highway'] ?? '') as String;
     if (highway.isEmpty) return null;
     final (label, fallback) = classInfo(highway);
-    final ms = (g['maxspeed'] as num?)?.toInt();
+    // GraphHopper sends Infinity for `maxspeed=none` — treat any non-finite
+    // value as "no tagged limit" and fall back to the statutory class default.
+    final msRaw = g['maxspeed'];
+    final ms = (msRaw is num && msRaw.isFinite) ? msRaw.toInt() : null;
     return RoadInfo(
       name: (g['name'] ?? '') as String,
       highway: highway,
@@ -389,9 +552,11 @@ class _NavigationPageState extends State<NavigationPage> {
       final f = await saveTrip(t);
       debugPrint('TRIP: saved ${f.path}');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Đã lưu chuyến đi: ${f.uri.pathSegments.last}'),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Đã lưu chuyến đi: ${f.uri.pathSegments.last}'),
+          ),
+        );
       }
     } catch (e) {
       debugPrint('TRIP: save failed $e');
@@ -417,6 +582,7 @@ class _NavigationPageState extends State<NavigationPage> {
         [from, dest],
         profile: _routeProfile,
         avoidHighway: _avoidHighway,
+        avoidFerry: _avoidFerry,
       );
       if (!mounted || _destination == null) return;
       setState(() {
@@ -444,9 +610,9 @@ class _NavigationPageState extends State<NavigationPage> {
     }
     final engine = _engine;
     if (engine == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Hãy chọn địa điểm trước.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Hãy chọn địa điểm trước.')));
       return;
     }
     setState(() {
@@ -461,11 +627,34 @@ class _NavigationPageState extends State<NavigationPage> {
       final e = _engine;
       if (e == null) return;
       _simDist += 8;
-      _handleNav(e.positionAtDistance(_simDist), speedMps: 16);
+      var pos = e.positionAtDistance(_simDist);
+      if (_simOffRoute) {
+        // Drive ~300 m east of the route — far enough (>250 m) to trigger an
+        // immediate off-route re-route so NAVTEST can verify it.
+        pos = LatLng(pos.latitude, pos.longitude + 0.004);
+      }
+      if (const bool.fromEnvironment('NAVTEST')) {
+        // Inject realistic GPS error so the road-snapping (`snapToRoute`) is
+        // exercised — the raw fix lands a few metres off the road and is
+        // pulled back onto the polyline (see the `NAVTEST: gps` log).
+        pos = _addGpsNoise(pos);
+      }
+      _handleNav(pos, speedMps: 16);
       if (_simDist % 80 == 0) {
-        debugPrint('SIM: tick dist=$_simDist');
+        debugPrint('SIM: tick dist=$_simDist offRoute=$_simOffRoute');
       }
     });
+  }
+
+  /// Inject realistic GPS error (±~12 m) into a SIM fix so road-snapping is
+  /// exercised. The error is CROSS-TRACK (perpendicular to the road) — that's
+  /// the component the snapping must correct; along-track error just slides
+  /// the car forward/back on the road and adds no value. Only used by the
+  /// NAVTEST harness (no effect on normal builds).
+  LatLng _addGpsNoise(LatLng p) {
+    final r = Random();
+    final crossMeters = (r.nextDouble() * 2 - 1) * 12.0;
+    return _engine!.lateralOffset(p, crossMeters);
   }
 
   Future<void> _sendToClock(NavProgress nav) async {
@@ -496,7 +685,8 @@ class _NavigationPageState extends State<NavigationPage> {
         // nothing (they want to CHOOSE to go online if needed).
         if (r.isEmpty && forceOffline && !_searchOfflineDeclined) {
           final goOnline = await _confirmGoOnline(
-              'Không có kết quả ngoại tuyến cho “${text.trim()}”.');
+            'Không có kết quả ngoại tuyến cho “${text.trim()}”.',
+          );
           if (goOnline) {
             r = await osmAutocomplete(text.trim());
           } else {
@@ -525,7 +715,8 @@ class _NavigationPageState extends State<NavigationPage> {
       builder: (ctx) => AlertDialog(
         title: const Text('Cần kết nối mạng'),
         content: Text(
-            '$reason\n\nBạn có muốn bật trực tuyến (tạm thời) không?'),
+          '$reason\n\nBạn có muốn bật trực tuyến (tạm thời) không?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -544,11 +735,13 @@ class _NavigationPageState extends State<NavigationPage> {
         setState(() => _offline = false);
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
-          ..showSnackBar(const SnackBar(
-            content: Text('Đã bật trực tuyến (phiên này)'),
-            duration: Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-          ));
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Đã bật trực tuyến (phiên này)'),
+              duration: Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
       }
     }
     return goOnline == true;
@@ -568,8 +761,9 @@ class _NavigationPageState extends State<NavigationPage> {
       final p = await vietmapPlace(s.refId);
       if (p == null) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Không lấy được tọa độ địa điểm.')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không lấy được tọa độ địa điểm.')),
+          );
         }
         return;
       }
@@ -589,9 +783,9 @@ class _NavigationPageState extends State<NavigationPage> {
       await _buildPlanRoute();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Không tìm được địa điểm: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Không tìm được địa điểm: $e')));
       }
     } finally {
       if (mounted) setState(() => _building = false);
@@ -616,11 +810,12 @@ class _NavigationPageState extends State<NavigationPage> {
     OsrmRoute route;
     List<OsrmRoute> alternatives = [];
     try {
-      // Vietmap can return up to 3 route options (best first).
+      // OSRM / Vietmap can return up to 3 route options (best first).
       final routes = await fetchAnyRoutes(
         points,
         profile: _routeProfile,
         avoidHighway: _avoidHighway,
+        avoidFerry: _avoidFerry,
       );
       route = routes.first;
       alternatives = routes.length > 1 ? routes : [];
@@ -636,12 +831,17 @@ class _NavigationPageState extends State<NavigationPage> {
       route = await fetchOsrmRoute(
         points,
         profile: _routeProfile.osrm,
-        exclude: _avoidHighway ? 'motorway' : null,
+        exclude: osrmExclude(
+          avoidHighway: _avoidHighway,
+          avoidFerry: _avoidFerry,
+        ),
       );
     }
-    debugPrint('PLAN: BUILD ok pts=${points.length} '
-        'dist=${route.distance}m stops=${route.stopCumulative.length} '
-        'alts=${alternatives.length}');
+    debugPrint(
+      'PLAN: BUILD ok pts=${points.length} '
+      'dist=${route.distance}m stops=${route.stopCumulative.length} '
+      'alts=${alternatives.length}',
+    );
     if (!mounted) return;
     setState(() {
       _route = route;
@@ -652,21 +852,26 @@ class _NavigationPageState extends State<NavigationPage> {
       _destination = _stops.last.pos;
       _navigating = false;
       _progress = null;
+      _routeStartIndex = 0; // brand-new route → draw the whole thing
       _updateDragHandles(route);
     });
     unawaited(_loadElevation(route));
-    _map.fitCamera(CameraFit.bounds(
-      bounds: LatLngBounds.fromPoints(points),
-      padding: const EdgeInsets.all(60),
-    ));
+    _map.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds.fromPoints(points),
+        padding: const EdgeInsets.all(60),
+      ),
+    );
   }
 
   /// Switch to alternative route [i] (Google's tap-to-choose preview).
   void _selectAlternative(int i) {
     if (i < 0 || i >= _alternativeRoutes.length || i == _selectedRoute) return;
     final route = _alternativeRoutes[i];
-    debugPrint('PLAN: alternative $i selected '
-        'dist=${route.distance}m');
+    debugPrint(
+      'PLAN: alternative $i selected '
+      'dist=${route.distance}m',
+    );
     setState(() {
       _selectedRoute = i;
       _route = route;
@@ -675,17 +880,19 @@ class _NavigationPageState extends State<NavigationPage> {
     });
     unawaited(_loadElevation(route));
     if (_planPoints.length >= 2) {
-      _map.fitCamera(CameraFit.bounds(
-        bounds: LatLngBounds.fromPoints(_planPoints),
-        padding: const EdgeInsets.all(60),
-      ));
+      _map.fitCamera(
+        CameraFit.bounds(
+          bounds: LatLngBounds.fromPoints(_planPoints),
+          padding: const EdgeInsets.all(60),
+        ),
+      );
     }
   }
 
   List<String> _engineStopNames(OsrmRoute route) =>
       route.stopCumulative.length == _stops.length
-          ? [for (final s in _stops) s.name]
-          : const [];
+      ? [for (final s in _stops) s.name]
+      : const [];
 
   /// Switch the road type (ô tô / xe máy / xe đạp / đi bộ) and re-plan.
   void _setRouteProfile(RouteProfile p) {
@@ -779,10 +986,14 @@ class _NavigationPageState extends State<NavigationPage> {
     _progress = nav;
     _logFix(origin, 0);
     _sendToClock(nav);
-    _lastMeter = 0;
-    _spoken300 = false;
-    _spoken50 = false;
+    _spokenFar = false;
+    _spokenNear = false;
+    _spokenFinal = false;
     _arrivedSpoken = false;
+    _lastManeuverSig = null;
+    _offRouteSince = null;
+    _routeStartIndex = 0; // full route at the start of navigation
+    _gpsWindow.clear();
     if (mounted) setState(() {});
   }
 
@@ -796,6 +1007,7 @@ class _NavigationPageState extends State<NavigationPage> {
       _engine = null;
       _destination = null;
       _progress = null;
+      _routeStartIndex = 0;
       _roadInfo = null;
       _stops.clear();
       _showSteps = false;
@@ -806,7 +1018,10 @@ class _NavigationPageState extends State<NavigationPage> {
       _elevation = null;
       _pois = [];
       _poiType = null;
+      _selectedPoi = null;
     });
+    _offRouteSince = null;
+    _gpsWindow.clear();
     await _finishTrip(); // save the recorded trip
   }
 
@@ -838,8 +1053,9 @@ class _NavigationPageState extends State<NavigationPage> {
     } catch (e) {
       if (mounted) {
         setState(() => _clockStatus = 'off');
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('BLE: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('BLE: $e')));
       }
     }
   }
@@ -865,9 +1081,12 @@ class _NavigationPageState extends State<NavigationPage> {
 
   // ---- voice: spoken turn-by-turn (Bluetooth speaker) ------------------
 
-  /// Speak the upcoming maneuver right when it becomes current, then again
-  /// at 300 m / 80 m (important turns are never missed — the 300 m/80 m
-  /// thresholds only repeat what the fresh-maneuver announcement said).
+  /// Speak the upcoming maneuver AHEAD of the turn at speed-aware distances
+  /// so the Bluetooth-speaker announcement always lands before the maneuver
+  /// (never after it): first heads-up ~`max(150, speed×20)` m out, a closer
+  /// heads-up ~`max(80, speed×8)` m, then a final "rẽ trái" at ~40 m. At
+  /// speed, the callouts move earlier; the fixed fallbacks keep them sane
+  /// when stationary.
   void _maybeSpeakManeuver(NavProgress nav) {
     if (!_voiceOn || !_voice.ready) return;
     if (nav.iconCode == iconArrive) {
@@ -877,29 +1096,55 @@ class _NavigationPageState extends State<NavigationPage> {
       return;
     }
     final m = nav.meter;
-    // The engine advanced to a new maneuver when the distance jumps up.
-    final isNew = m > _lastMeter + 50;
+    final speed = nav.speedMps.isFinite ? nav.speedMps : 0.0;
+    // Head-up callouts are timed in SECONDS before the maneuver so they ALWAYS
+    // sound ahead of the turn (never after — even with TTS + Bluetooth
+    // latency): far ≈ 20 s out, near ≈ 12 s out, final ≈ 8 s out. On a long
+    // straight stretch nothing repeats until the next maneuver gets close.
+    final far = max(200.0, speed * 20.0); // first heads-up (20 s out)
+    final near = max(120.0, speed * 12.0); // closer heads-up (12 s out)
+    final finalM = max(80.0, speed * 8.0); // final "rẽ trái" (8 s out)
+    // A maneuver is new when the turn instruction changes. The signature
+    // includes the street you turn INTO (`nextText`) + the maneuver's
+    // coordinates so two CONSECUTIVE turns that share the same icon + road
+    // name (complex multi-turn areas) still count as different and each is
+    // announced. (The old "distance jumped up by 50 m" test misfired on
+    // GPS/SIM jitter, re-announcing the same turn.)
+    final mv = nav.maneuver;
+    final sig =
+        '${nav.iconCode}|${nav.nextText}|'
+        '${mv?.latitude.toStringAsFixed(5) ?? '0'},'
+        '${mv?.longitude.toStringAsFixed(5) ?? '0'}';
+    final isNew = sig != _lastManeuverSig;
     if (isNew) {
-      _spoken300 = false;
-      _spoken50 = false;
+      _lastManeuverSig = sig;
+      _spokenFar = false;
+      _spokenNear = false;
+      _spokenFinal = false;
     }
-    _lastMeter = m;
-    if (isNew && m > 80) {
-      // Fresh turn → announce it immediately.
-      _spoken300 = true;
+    if (isNew && m > far) {
+      // Fresh turn → announce it immediately with its distance.
+      _spokenFar = true;
       _voice.speak(_announce(nav, m));
-    } else if (!_spoken300 && m <= 300 && m > 80) {
-      _spoken300 = true;
+    } else if (!_spokenFar && m <= far && m > near) {
+      _spokenFar = true;
       _voice.speak(_announce(nav, m));
-    } else if (!_spoken50 && m <= 80) {
-      _spoken50 = true;
+    } else if (!_spokenNear && m <= near && m > finalM) {
+      _spokenNear = true;
+      _voice.speak(_announce(nav, m));
+    } else if (!_spokenFinal && m <= finalM) {
+      _spokenFinal = true;
       _voice.speak(_announce(nav, m, now: true));
     }
   }
 
   String _announce(NavProgress nav, int m, {bool now = false}) {
     final verb = maneuverVerb(nav.iconCode);
-    final road = nav.text.isNotEmpty ? ' vào ${nav.text}' : '';
+    // Announce the street you turn INTO (the upcoming step's road), not the
+    // current one — "rẽ trái vào <incoming street>". Falls back to the
+    // current road only when the next street is unknown (e.g. arrival).
+    final target = nav.nextText.isNotEmpty ? nav.nextText : nav.text;
+    final road = target.isNotEmpty ? ' vào $target' : '';
     return now ? '$verb$road' : 'Sau $m mét, $verb$road';
   }
 
@@ -914,16 +1159,22 @@ class _NavigationPageState extends State<NavigationPage> {
     }
     if (!_commands.available) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Thiết bị này không hỗ trợ nhận diện giọng nói.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Thiết bị này không hỗ trợ nhận diện giọng nói.'),
+          ),
+        );
       }
       return;
     }
     final mic = await Permission.microphone.request();
     if (!mic.isGranted) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Cần quyền micro để điều khiển bằng giọng nói.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Cần quyền micro để điều khiển bằng giọng nói.'),
+          ),
+        );
       }
       return;
     }
@@ -958,7 +1209,8 @@ class _NavigationPageState extends State<NavigationPage> {
         setState(() => _voiceOn = false);
       case VoiceCommandType.help:
         _voice.speak(
-            'Bạn có thể nói: chỉ đường tới chợ Bến Thành, bắt đầu, dừng lại, phóng to, thu nhỏ, bật tiếng, tắt tiếng.');
+          'Bạn có thể nói: chỉ đường tới chợ Bến Thành, bắt đầu, dừng lại, phóng to, thu nhỏ, bật tiếng, tắt tiếng.',
+        );
       case VoiceCommandType.none:
         _voice.speak('Xin lỗi, tôi không hiểu lệnh.');
     }
@@ -997,65 +1249,6 @@ class _NavigationPageState extends State<NavigationPage> {
 
   // ---- Vietmap's own navigation SDK ------------------------------------
 
-  /// Use Vietmap's official turn-by-turn navigation view only when the user
-  /// picked the Vietmap source AND real keys were provided + online. The
-  /// default navigation is our own custom UI (which now mirrors the Vietmap
-  /// navigation look) — this SDK path stays optional.
-  bool get _useVietmapNav =>
-      dataSource == 'vietmap' &&
-      VietmapConfig.hasKeys &&
-      !_offline &&
-      _stops.isNotEmpty;
-
-  /// Origin + planned stops for the Vietmap navigation SDK.
-  List<LatLng> _navWaypoints() {
-    final pts = <LatLng>[
-      if (_origin != null)
-        _origin!
-      else if (_current != null)
-        _current!
-      else
-        const LatLng(10.8231, 106.6297),
-      for (final s in _stops) s.pos,
-    ];
-    return pts;
-  }
-
-  /// Feed the BLE clock + trip logger from the Vietmap SDK's progress events
-  /// (their UI + native voice are full-screen, so only the clock/logging
-  /// hooks are needed here — our own TTS is skipped to avoid double voice).
-  void _handleVietmapProgress(NavProgress nav, LatLng pos) {
-    _progress = nav;
-    _current = pos;
-    if (mounted) setState(() {});
-    _sendToClock(nav);
-    _logFix(pos, nav.speedMps);
-  }
-
-  /// The SDK reached the destination — push an arrive frame + finish the
-  /// trip (the SDK's own voice announces arrival, so we don't double-speak).
-  void _handleVietmapArrived() {
-    final nav = _progress;
-    if (nav != null) {
-      _sendToClock(NavProgress(
-        meter: 0,
-        iconCode: iconArrive,
-        etaHour: nav.etaHour,
-        etaMinute: nav.etaMinute,
-        text: nav.text,
-        speedMps: 0,
-        progress: 1,
-      ));
-    }
-    unawaited(_finishTrip());
-  }
-
-  /// Stop / cancel from the Vietmap UI (idempotent).
-  void _handleVietmapExit() {
-    if (!_navigating) return;
-    _exitNavigation();
-  }
-
   /// Long-press the map to insert a via point and re-plan (interactive
   /// route editing on the OSM/offline map).
   void _addViaPoint(LatLng pos) {
@@ -1067,7 +1260,9 @@ class _NavigationPageState extends State<NavigationPage> {
       );
     }
     setState(() {
-      _stops..clear()..addAll(stops);
+      _stops
+        ..clear()
+        ..addAll(stops);
     });
     _buildPlanRoute();
   }
@@ -1116,7 +1311,9 @@ class _NavigationPageState extends State<NavigationPage> {
       TripStop(name: 'Điểm giữa', lat: via.latitude, lng: via.longitude),
     );
     setState(() {
-      _stops..clear()..addAll(stops);
+      _stops
+        ..clear()
+        ..addAll(stops);
     });
     _buildPlanRoute();
   }
@@ -1141,15 +1338,21 @@ class _NavigationPageState extends State<NavigationPage> {
     if (_stops.isNotEmpty) _buildPlanRoute();
   }
 
+  /// Re-plan avoiding ferries.
+  void _toggleAvoidFerry() {
+    setState(() => _avoidFerry = !_avoidFerry);
+    if (_stops.isNotEmpty) _buildPlanRoute();
+  }
+
+  /// Toggle the 3D perspective tilt on the navigation map (2D flat ↔ 3D).
+  void _toggle3d() {
+    setState(() => _tilt3d = !_tilt3d);
+  }
+
   // ---- quick POI search (gas / food / hotel / …) -----------------------
 
   Widget _poiArea() {
-    // Above the Vietmap SDK's own ETA bar when that nav UI is active.
-    final pad = _useVietmapNav ? 110.0 : 0.0;
-    return Padding(
-      padding: EdgeInsets.only(bottom: pad),
-      child: _pois.isEmpty ? _poiTypeBar() : _poiResults(),
-    );
+    return _pois.isEmpty ? _poiTypeBar() : _poiResults();
   }
 
   Widget _poiTypeBar() {
@@ -1172,7 +1375,9 @@ class _NavigationPageState extends State<NavigationPage> {
                   onTap: () => _searchPoi(t),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1188,7 +1393,9 @@ class _NavigationPageState extends State<NavigationPage> {
                         Text(
                           t.label,
                           style: const TextStyle(
-                              fontSize: 12, fontWeight: FontWeight.w700),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ],
                     ),
@@ -1213,16 +1420,34 @@ class _NavigationPageState extends State<NavigationPage> {
               Text(
                 '${_poiType?.label ?? ''} gần đây',
                 style: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w800),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
               const Spacer(),
+              if (_selectedPoi != null)
+                TextButton(
+                  onPressed: () => _rerouteToPoi(_selectedPoi!),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    backgroundColor: const Color(0xFFFF6F00),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
+                  ),
+                  child: const Text('Đi đến', style: TextStyle(fontSize: 12)),
+                ),
               TextButton(
                 onPressed: () => setState(() {
                   _pois = [];
                   _poiType = null;
+                  _selectedPoi = null;
                 }),
                 style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact),
+                  visualDensity: VisualDensity.compact,
+                ),
                 child: const Text('Đóng', style: TextStyle(fontSize: 12)),
               ),
             ],
@@ -1252,7 +1477,7 @@ class _NavigationPageState extends State<NavigationPage> {
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
-        onTap: () => _rerouteToPoi(p),
+        onTap: () => _showPoiOnMap(p),
         child: Container(
           width: 180,
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -1270,7 +1495,9 @@ class _NavigationPageState extends State<NavigationPage> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w700),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ],
@@ -1295,6 +1522,7 @@ class _NavigationPageState extends State<NavigationPage> {
     setState(() {
       _poiBusy = true;
       _poiType = type;
+      _selectedPoi = null;
     });
     try {
       final r = await searchPois(type, c);
@@ -1302,51 +1530,89 @@ class _NavigationPageState extends State<NavigationPage> {
       setState(() => _pois = r);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     } finally {
       if (mounted) setState(() => _poiBusy = false);
     }
   }
 
+  /// Show a tapped POI on the map: center the camera on it (pausing the
+  /// follow) so the user can see where it is before deciding to go there.
+  void _showPoiOnMap(PoiResult p) {
+    setState(() => _selectedPoi = p);
+  }
+
   /// Navigate to a picked POI, keeping the current navigation running.
+  ///
+  /// When a destination is already planned (the user is driving somewhere),
+  /// the POI is ADDED as a stop / waypoint just before the destination —
+  /// the final destination (and any other planned stops) is never dropped:
+  /// origin → … → gas station → destination. With no planned destination the
+  /// POI simply becomes the destination.
   Future<void> _rerouteToPoi(PoiResult p) async {
-    if (_useVietmapNav) {
-      // Ask the Vietmap SDK to re-route to the POI.
-      await _vmNavKey.currentState?.rerouteTo(p.lat, p.lng);
-      if (mounted) {
-        setState(() {
-          _pois = [];
-          _poiType = null;
-        });
-      }
-      return;
-    }
     final from = _current ?? _origin;
     if (from == null) return;
     try {
-      final route = await fetchAnyRoute(
-        [from, p.pos],
+      final poiStop = TripStop(name: p.name, lat: p.lat, lng: p.lng);
+      final alreadyPlanned = _stops.any(
+        (s) => (s.lat - p.lat).abs() < 1e-5 && (s.lng - p.lng).abs() < 1e-5,
+      );
+      final List<TripStop> newStops;
+      if (alreadyPlanned) {
+        newStops = List.of(_stops); // same stop again → no change
+      } else if (_stops.isEmpty) {
+        newStops = [poiStop]; // no destination yet → POI becomes destination
+      } else {
+        newStops = [
+          ..._stops.sublist(0, _stops.length - 1), // planned stops (kept)
+          poiStop, // gas station waypoint (added)
+          _stops.last, // final destination — never forgotten
+        ];
+      }
+      final points = [from, for (final s in newStops) s.pos];
+      final routes = await fetchAnyRoutes(
+        points,
         profile: _routeProfile,
         avoidHighway: _avoidHighway,
+        avoidFerry: _avoidFerry,
       );
+      final route = routes.first;
       if (!mounted) return;
       setState(() {
-        _destination = p.pos;
         _stops
           ..clear()
-          ..add(TripStop(name: p.name, lat: p.lat, lng: p.lng));
+          ..addAll(newStops);
+        _destination = newStops.last.pos;
         _route = route;
         _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
-        _alternativeRoutes = [];
+        _alternativeRoutes = routes.length > 1 ? routes : [];
         _selectedRoute = 0;
-        _planPoints = [from, p.pos];
+        _planPoints = points;
         _pois = [];
         _poiType = null;
+        _selectedPoi = null;
         _updateDragHandles(route);
       });
       unawaited(_loadElevation(route));
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              alreadyPlanned
+                  ? 'Đã có “${p.name}” trong hành trình.'
+                  : _stops.length == 1
+                  ? 'Đi đến “${p.name}”.'
+                  : 'Đã thêm “${p.name}” vào điểm dừng — giữ điểm đến '
+                        '${_stops.last.name}.',
+            ),
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       if (_current != null) {
         final nav = _engine!.update(_current!);
         _progress = nav;
@@ -1354,8 +1620,9 @@ class _NavigationPageState extends State<NavigationPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Không định tuyến được: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Không định tuyến được: $e')));
       }
     }
   }
@@ -1370,11 +1637,13 @@ class _NavigationPageState extends State<NavigationPage> {
     });
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(
-        content: Text('Bản đồ: $_tileSource'),
-        duration: const Duration(seconds: 1),
-        behavior: SnackBarBehavior.floating,
-      ));
+      ..showSnackBar(
+        SnackBar(
+          content: Text('Bản đồ: $_tileSource'),
+          duration: const Duration(seconds: 1),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
   }
 
   void _locateMe() {
@@ -1391,12 +1660,14 @@ class _NavigationPageState extends State<NavigationPage> {
   }
 
   Future<void> _openTrips() async {
-    final plan = await Navigator.of(context).push<TripPlan>(
-      MaterialPageRoute(builder: (_) => const TripsScreen()),
-    );
+    final plan = await Navigator.of(
+      context,
+    ).push<TripPlan>(MaterialPageRoute(builder: (_) => const TripsScreen()));
     if (plan != null && mounted) {
       setState(() {
-        _stops..clear()..addAll(plan.stops);
+        _stops
+          ..clear()
+          ..addAll(plan.stops);
         _destination = plan.stops.isEmpty ? null : plan.stops.last.pos;
       });
       _buildPlanRoute();
@@ -1404,9 +1675,9 @@ class _NavigationPageState extends State<NavigationPage> {
   }
 
   Future<void> _openOffline() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const OfflineScreen()),
-    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const OfflineScreen()));
     // The user may have changed the data source — reload it.
     if (!mounted) return;
     final s = await loadSettings();
@@ -1423,30 +1694,24 @@ class _NavigationPageState extends State<NavigationPage> {
     return Scaffold(
       body: Stack(
         children: [
-          // Navigation mode: with the Vietmap source + keys + online, use
-          // Vietmap's own turn-by-turn SDK (full screen); otherwise render
-          // the Google-Maps-style offline VECTOR map; browsing/search keeps
-          // the raster map.
-          _navigating && _useVietmapNav
-              ? VietmapNavView(
-                  key: _vmNavKey,
-                  waypoints: _navWaypoints(),
-                  profile: _routeProfile,
-                  onProgress: _handleVietmapProgress,
-                  onArrived: _handleVietmapArrived,
-                  onExit: _handleVietmapExit,
+          // Navigation mode renders the offline VECTOR map with the
+          // Vietmap-navigation-style banner + ETA bar (ui/nav_top_bar.dart +
+          // ui/navigation_card.dart). Browsing/search keeps the raster map.
+          _navigating
+              ? VectorNavMap(
+                  routeGeometry: route?.geometry ?? const [],
+                  routeSteps: route?.steps ?? const [],
+                  routeStartIndex: _routeStartIndex,
+                  current: current,
+                  heading: _heading,
+                  headingUp: _headingUp,
+                  tilt3D: _tilt3d,
+                  carIcon: _carIcon,
+                  pois: _pois,
+                  selectedPoi: _selectedPoi,
+                  controller: _vmFollow,
                 )
-              : _navigating
-                  ? VectorNavMap(
-                      routeGeometry: route?.geometry ?? const [],
-                      routeSteps: route?.steps ?? const [],
-                      current: current,
-                      heading: _heading,
-                      headingUp: _headingUp,
-                      carIcon: _carIcon,
-                      pois: _pois,
-                    )
-                  : _buildMap(route, current),
+              : _buildMap(route, current),
           Positioned.fill(
             child: SafeArea(
               child: Stack(
@@ -1463,12 +1728,8 @@ class _NavigationPageState extends State<NavigationPage> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        _navigating
-                            ? (_useVietmapNav
-                                ? const SizedBox.shrink()
-                                : _navTopBar())
-                            : _topBar(),
-                        if (_navigating && !_useVietmapNav)
+                        _navigating ? _navTopBar() : _topBar(),
+                        if (_navigating)
                           Padding(
                             padding: const EdgeInsets.fromLTRB(12, 6, 10, 0),
                             child: Row(
@@ -1491,7 +1752,18 @@ class _NavigationPageState extends State<NavigationPage> {
                                           ? kAppBlue
                                           : const Color(0xFF5F6368),
                                       onTap: () => setState(
-                                          () => _headingUp = !_headingUp),
+                                        () => _headingUp = !_headingUp,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    RoundActionButton(
+                                      icon: _tilt3d
+                                          ? Icons.threed_rotation
+                                          : Icons.map,
+                                      color: _tilt3d
+                                          ? kAppBlue
+                                          : const Color(0xFF5F6368),
+                                      onTap: _toggle3d,
                                     ),
                                     const SizedBox(height: 8),
                                     RoundActionButton(
@@ -1507,8 +1779,8 @@ class _NavigationPageState extends State<NavigationPage> {
                                       color: _voiceOn
                                           ? const Color(0xFF34A853)
                                           : const Color(0xFF5F6368),
-                                      onTap: () => setState(
-                                          () => _voiceOn = !_voiceOn),
+                                      onTap: () =>
+                                          setState(() => _voiceOn = !_voiceOn),
                                     ),
                                     const SizedBox(height: 8),
                                     RoundActionButton(
@@ -1540,17 +1812,24 @@ class _NavigationPageState extends State<NavigationPage> {
                         color: const Color(0xFF5F6368),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 8),
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
                           child: Row(
                             children: const [
-                              Icon(Icons.cloud_off,
-                                  size: 16, color: Colors.white),
+                              Icon(
+                                Icons.cloud_off,
+                                size: 16,
+                                color: Colors.white,
+                              ),
                               SizedBox(width: 8),
                               Expanded(
                                 child: Text(
                                   'Đang ngoại tuyến — bản đồ & lộ trình đã tải vẫn hoạt động',
                                   style: TextStyle(
-                                      color: Colors.white, fontSize: 12),
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                  ),
                                 ),
                               ),
                             ],
@@ -1569,61 +1848,100 @@ class _NavigationPageState extends State<NavigationPage> {
                               onSelected: _selectSuggestion,
                             )
                           : (_stops.isNotEmpty
-                              ? StopsPanel(
-                                  stops: _stops,
-                                  onAdd: () {
-                                    _searchCtrl.clear();
-                                    _searchFocus.requestFocus();
-                                  },
-                                  onMoveUp: (i) => _moveStop(i, -1),
-                                  onMoveDown: (i) => _moveStop(i, 1),
-                                  onRemove: _removeStop,
-                                  onSave: _savePlan,
-                                )
-                              : const SizedBox.shrink()),
+                                ? StopsPanel(
+                                    stops: _stops,
+                                    onAdd: () {
+                                      _searchCtrl.clear();
+                                      _searchFocus.requestFocus();
+                                    },
+                                    onMoveUp: (i) => _moveStop(i, -1),
+                                    onMoveDown: (i) => _moveStop(i, 1),
+                                    onRemove: _removeStop,
+                                    onSave: _savePlan,
+                                  )
+                                : const SizedBox.shrink()),
                     ),
                   // Raster-only controls (zoom/locate target the raster map
                   // controller) — hide during vector navigation mode.
                   if (!_navigating)
                     Positioned(
-                    right: 10,
-                    top: 64,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        MapControls(
-                          onZoomIn: () => _zoomBy(1),
-                          onZoomOut: () => _zoomBy(-1),
-                          onLocate: _locateMe,
-                          hasPosition: current != null,
-                        ),
-                        const SizedBox(height: 8),
-                        RoundActionButton(
-                          icon: _simulating ? Icons.stop : Icons.play_arrow,
-                          color:
-                              _simulating ? Colors.orange : const Color(0xFF34A853),
-                          onTap: _toggleSimulation,
-                        ),
-                        const SizedBox(height: 8),
-                        RoundActionButton(
-                          icon: Icons.download_for_offline_outlined,
-                          color: kAppBlue,
-                          onTap: _openOffline,
-                        ),
-                        const SizedBox(height: 8),
-                        RoundActionButton(
-                          icon: Icons.layers_outlined,
-                          color: const Color(0xFF7B1FA2),
-                          onTap: _cycleTileLayer,
-                        ),
-                      ],
+                      right: 10,
+                      top: 64,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          MapControls(
+                            onZoomIn: () => _zoomBy(1),
+                            onZoomOut: () => _zoomBy(-1),
+                            onLocate: _locateMe,
+                            hasPosition: current != null,
+                          ),
+                          const SizedBox(height: 8),
+                          RoundActionButton(
+                            icon: _simulating ? Icons.stop : Icons.play_arrow,
+                            color: _simulating
+                                ? Colors.orange
+                                : const Color(0xFF34A853),
+                            onTap: _toggleSimulation,
+                          ),
+                          const SizedBox(height: 8),
+                          RoundActionButton(
+                            icon: Icons.download_for_offline_outlined,
+                            color: kAppBlue,
+                            onTap: _openOffline,
+                          ),
+                          const SizedBox(height: 8),
+                          RoundActionButton(
+                            icon: Icons.layers_outlined,
+                            color: const Color(0xFF7B1FA2),
+                            onTap: _cycleTileLayer,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
                   Positioned(
                     left: 0,
                     right: 0,
                     bottom: 0,
                     child: _bottomArea(),
+                  ),
+                  // Auto-center button — rendered in this overlay so it sits
+                  // ABOVE the MapLibre platform view (a sibling inside the
+                  // map's own Stack is occluded by it). Blue when the user
+                  // has panned/zoomed away (follow paused); tapping recenters
+                  // the camera on the car and resumes auto-follow. `bottom`
+                  // is logical dp: the POI bar + ETA card are ~110dp tall, so
+                  // 140dp clears them (a value like 340dp would sit mid-screen).
+                  Positioned(
+                    right: 14,
+                    bottom: 140,
+                    child: ListenableBuilder(
+                      listenable: _vmFollow,
+                      builder: (context, child) {
+                        final following = _vmFollow.following;
+                        return Material(
+                          color: following
+                              ? Colors.white
+                              : const Color(0xFF1A73E8),
+                          shape: const CircleBorder(),
+                          elevation: 6,
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: _vmFollow.recenter,
+                            child: Padding(
+                              padding: const EdgeInsets.all(11),
+                              child: Icon(
+                                Icons.my_location,
+                                color: following
+                                    ? const Color(0xFF1A73E8)
+                                    : Colors.white,
+                                size: 24,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   ),
                 ],
               ),
@@ -1655,7 +1973,7 @@ class _NavigationPageState extends State<NavigationPage> {
               for (var i = 0; i < _alternativeRoutes.length; i++) {
                 if (i == _selectedRoute) continue;
                 if (_distToLine(tapPos, _alternativeRoutes[i].geometry) <
-                    0.05 /* ~50m */) {
+                    0.05 /* ~50m */ ) {
                   _selectAlternative(i);
                   return;
                 }
@@ -1678,92 +1996,101 @@ class _NavigationPageState extends State<NavigationPage> {
               tileProvider: _tileProvider,
             ),
             if (route != null)
-              PolylineLayer(polylines: [
-                // Alternative routes drawn dimmed (Google's tap-to-compare).
-                for (var i = 0; i < _alternativeRoutes.length; i++)
-                  if (i != _selectedRoute)
-                    Polyline(
-                      points: _alternativeRoutes[i].geometry,
-                      color: const Color(0xFF9BB2E8),
-                      strokeWidth: 5,
-                    ),
-                // white casing under the blue route (Google look)
-                Polyline(
+              PolylineLayer(
+                polylines: [
+                  // Alternative routes drawn dimmed (Google's tap-to-compare).
+                  for (var i = 0; i < _alternativeRoutes.length; i++)
+                    if (i != _selectedRoute)
+                      Polyline(
+                        points: _alternativeRoutes[i].geometry,
+                        color: const Color(0xFF9BB2E8),
+                        strokeWidth: 5,
+                      ),
+                  // white casing under the blue route (Google look)
+                  Polyline(
                     points: route.geometry,
                     color: Colors.white,
-                    strokeWidth: 9),
-                Polyline(
+                    strokeWidth: 9,
+                  ),
+                  Polyline(
                     points: route.geometry,
                     color: kAppBlue,
-                    strokeWidth: 6),
-              ]),
-            MarkerLayer(markers: [
-              if (_origin != null)
-                Marker(
-                  point: _origin!,
-                  width: 30,
-                  height: 30,
-                  child: const OriginMarker(),
-                ),
-              // numbered markers for intermediate stops (the last stop is
-              // the red destination pin below)
-              for (var i = 0; i < _stops.length - 1; i++)
-                Marker(
-                  point: _stops[i].pos,
-                  width: 28,
-                  height: 28,
-                  child: Container(
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: kAppBlue,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                    ),
-                    child: Text('${i + 1}',
+                    strokeWidth: 6,
+                  ),
+                ],
+              ),
+            MarkerLayer(
+              markers: [
+                if (_origin != null)
+                  Marker(
+                    point: _origin!,
+                    width: 30,
+                    height: 30,
+                    child: const OriginMarker(),
+                  ),
+                // numbered markers for intermediate stops (the last stop is
+                // the red destination pin below)
+                for (var i = 0; i < _stops.length - 1; i++)
+                  Marker(
+                    point: _stops[i].pos,
+                    width: 28,
+                    height: 28,
+                    child: Container(
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: kAppBlue,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: Text(
+                        '${i + 1}',
                         style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700)),
-                  ),
-                ),
-              if (_destination != null)
-                Marker(
-                  point: _destination!,
-                  width: 44,
-                  height: 44,
-                  child: const Icon(
-                    Icons.location_pin,
-                    color: Colors.red,
-                    size: 44,
-                    shadows: [Shadow(color: Colors.black38, blurRadius: 4)],
-                  ),
-                ),
-              if (current != null)
-                Marker(
-                  point: current,
-                  width: 26,
-                  height: 26,
-                  child: const CurrentMarker(),
-                ),
-              // POI quick-search highlights.
-              for (final p in _pois)
-                Marker(
-                  point: p.pos,
-                  width: 26,
-                  height: 26,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: poiColor(p.type),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                      boxShadow: const [
-                        BoxShadow(color: Colors.black38, blurRadius: 4),
-                      ],
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
-                    child: Icon(p.type.icon, size: 14, color: Colors.white),
                   ),
-                ),
-            ]),
+                if (_destination != null)
+                  Marker(
+                    point: _destination!,
+                    width: 44,
+                    height: 44,
+                    child: const Icon(
+                      Icons.location_pin,
+                      color: Colors.red,
+                      size: 44,
+                      shadows: [Shadow(color: Colors.black38, blurRadius: 4)],
+                    ),
+                  ),
+                if (current != null)
+                  Marker(
+                    point: current,
+                    width: 26,
+                    height: 26,
+                    child: const CurrentMarker(),
+                  ),
+                // POI quick-search highlights.
+                for (final p in _pois)
+                  Marker(
+                    point: p.pos,
+                    width: 26,
+                    height: 26,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: poiColor(p.type),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                        boxShadow: const [
+                          BoxShadow(color: Colors.black38, blurRadius: 4),
+                        ],
+                      ),
+                      child: Icon(p.type.icon, size: 14, color: Colors.white),
+                    ),
+                  ),
+              ],
+            ),
           ],
         ),
         // Google-style draggable route handles (preview mode only): one per
@@ -1778,7 +2105,8 @@ class _NavigationPageState extends State<NavigationPage> {
                 final cam = _map.camera;
                 final cur = cam.latLngToScreenPoint(_dragHandles[i]);
                 final next = cam.pointToLatLng(
-                    Point(cur.x + delta.dx, cur.y + delta.dy));
+                  Point(cur.x + delta.dx, cur.y + delta.dy),
+                );
                 setState(() => _dragHandles[i] = next);
               },
               onDragEnd: () => _commitDragHandle(i),
@@ -1832,7 +2160,6 @@ class _NavigationPageState extends State<NavigationPage> {
       recording: _trip != null,
       clockConnected: _clock.isConnected,
       stopLabel: _stopLabel(nav),
-      tripProgress: nav?.progress ?? 0,
       steps: _route?.steps ?? const [],
       expanded: _showSteps,
       onToggle: () => setState(() => _showSteps = !_showSteps),
@@ -1845,10 +2172,9 @@ class _NavigationPageState extends State<NavigationPage> {
     final nav = _progress;
     final stopLabel = _stopLabel(nav);
     final Widget? card;
-    if (_navigating && _useVietmapNav) {
-      card = null; // the Vietmap SDK draws its own banner + ETA bar
-    } else if (_navigating) {
-      // Google-style arrival card when the destination is reached.
+    if (_navigating) {
+      // Google-style arrival card when the destination is reached, otherwise
+      // the Vietmap-style ETA bar (ui/navigation_card.dart).
       if (nav != null && nav.iconCode == iconArrive) {
         card = ArrivalCard(
           progress: nav,
@@ -1882,6 +2208,8 @@ class _NavigationPageState extends State<NavigationPage> {
         onAlternative: _selectAlternative,
         avoidHighway: _avoidHighway,
         onToggleAvoidHighway: _toggleAvoidHighway,
+        avoidFerry: _avoidFerry,
+        onToggleAvoidFerry: _toggleAvoidFerry,
         elevation: _elevation,
       );
     } else {

@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 
 import '../nav_engine.dart';
 import '../nav_protocol.dart';
-import 'widgets.dart';
 
 class NavigationCard extends StatelessWidget {
   const NavigationCard({
@@ -49,7 +48,7 @@ class NavigationCard extends StatelessWidget {
     return Material(
       elevation: 10,
       shadowColor: Colors.black26,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
       color: Colors.white,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -73,8 +72,8 @@ class NavigationCard extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 25,
+                      fontWeight: FontWeight.w600,
                       color: Color(0xFFFF6F00), // amber[900], Vietmap-style
                     ),
                   ),
@@ -89,7 +88,7 @@ class NavigationCard extends StatelessWidget {
                           ].join(' • '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    style: const TextStyle(fontSize: 18, color: Colors.black45),
                   ),
                 ],
               ),
@@ -129,14 +128,14 @@ class _RoundAction extends StatelessWidget {
         customBorder: const CircleBorder(),
         onTap: onTap,
         child: Container(
-          width: 46,
-          height: 46,
+          width: 50,
+          height: 50,
           decoration: BoxDecoration(
             color: Colors.white,
             shape: BoxShape.circle,
-            border: Border.all(color: kAppBlue, width: 1.5),
+            border: Border.all(color: Colors.black45, width: 1),
           ),
-          child: Icon(icon, color: kAppBlue, size: 22),
+          child: Icon(icon, color: Colors.black45, size: 30),
         ),
       ),
     );

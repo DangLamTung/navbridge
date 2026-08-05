@@ -66,8 +66,23 @@ class GraphHopperRouting {
         }
     }
 
-    /** Route through [points] (each a [GHPoint]); returns a JSON route. */
-    fun route(points: List<GHPoint>, result: MethodChannel.Result) {
+    /**
+     * Route through [points] (each a [GHPoint]). Returns a LIST of route maps
+     * (best first) — [maxPaths] > 1 requests tap-to-choose alternatives
+     * (`alternative_route.max_paths`). [avoidMotorway]/[avoidFerry] are
+     * accepted but NOT applied here: the GraphHopper core 7.0 jar does not
+     * expose the custom-model classes (they live in graphhopper-web-api,
+     * which conflicts with core), and the public OSRM server rejects
+     * `exclude=` — so road-class avoidance is only honored by OSRM servers
+     * that support it (see the Dart `osrmExclude` best-effort retry).
+     */
+    fun route(
+        points: List<GHPoint>,
+        maxPaths: Int,
+        avoidMotorway: Boolean,
+        avoidFerry: Boolean,
+        result: MethodChannel.Result
+    ) {
         executor.execute {
             try {
                 val gh = hopper
@@ -75,13 +90,35 @@ class GraphHopperRouting {
                 val req = GHRequest()
                 for (p in points) req.addPoint(p)
                 req.setProfile("car")
-                val rsp = gh.route(req)
+                if (maxPaths > 1) {
+                    req.putHint("alternative_route.max_paths", maxPaths)
+                    req.putHint("alternative_route.max_weight_factor", 3)
+                    req.putHint("alternative_route.max_share_factor", 0.8)
+                    // AlternativeRoute runs on the flex (Dijkstra) algorithm —
+                    // a CH-prepared graph silently returns 1 path otherwise.
+                    req.putHint("ch.disable", true)
+                }
+                var rsp = gh.route(req)
+                // Some algorithms/weights don't support alternatives — fall
+                // back to the single best route rather than failing.
+                if (rsp.hasErrors() && maxPaths > 1) {
+                    val plain = GHRequest()
+                    for (p in points) plain.addPoint(p)
+                    plain.setProfile("car")
+                    rsp = gh.route(plain)
+                }
                 if (rsp.hasErrors()) {
                     throw IllegalStateException(rsp.errors.toString())
                 }
+                android.util.Log.i(
+                    "NavBridgeRouter",
+                    "route: paths=${rsp.all.size} maxPaths=$maxPaths"
+                )
                 // Flutter's StandardMethodCodec only accepts primitives /
-                // List / Map — NOT JSONObject. Send a plain Map.
-                result.success(toMap(rsp.best))
+                // List / Map — NOT JSONObject. Send a plain list of maps.
+                val out = ArrayList<Map<String, Any?>>()
+                for (path in rsp.all) out.add(toMap(path))
+                result.success(out)
             } catch (e: Throwable) {
                 result.error("route_error", e.message ?: "route failed", null)
             }
@@ -102,18 +139,43 @@ class GraphHopperRouting {
                 val roadClass = em.getEncodedValue(
                     "road_class", EnumEncodedValue::class.java
                 ) as EnumEncodedValue<RoadClass>
-                val maxSpeed = em.getIntEncodedValue("max_speed")
+                // GraphHopper 7.x stores max_speed as a DecimalEncodedValue in
+                // km/h; older graphs/tooling exposed it as an IntEncodedValue.
+                // Reading the WRONG registry yields garbage (e.g. a 50 km/h
+                // limit showing as 31). Try the decimal registry first, then
+                // fall back to the int one.
+                val maxSpeedDec = try {
+                    em.getDecimalEncodedValue("max_speed")
+                } catch (_: Exception) {
+                    null
+                }
+                val maxSpeedInt = try {
+                    em.getIntEncodedValue("max_speed")
+                } catch (_: Exception) {
+                    null
+                }
                 val snap = gh.locationIndex.findClosest(lat, lng, EdgeFilter.ALL_EDGES)
                 if (snap == null || !snap.isValid) {
                     result.success(null)
                     return@execute
                 }
                 val edge = snap.closestEdge
-                val ms = edge.get(maxSpeed)
+                val ms = when {
+                    maxSpeedDec != null -> edge.get(maxSpeedDec)
+                    maxSpeedInt != null -> edge.get(maxSpeedInt).toDouble()
+                    else -> 0.0
+                }
                 val out = HashMap<String, Any?>()
                 out["name"] = edge.name ?: ""
                 out["highway"] = edge.get(roadClass)?.name?.lowercase() ?: ""
-                out["maxspeed"] = if (ms > 0) ms else null
+                // GraphHopper encodes `maxspeed=none` (no posted limit) as
+                // +Infinity — that means "no limit", so send null and let the
+                // Dart side apply the statutory class default.
+                out["maxspeed"] = if (ms.isFinite() && ms > 0) ms else null
+                android.util.Log.i(
+                    "NavBridgeRouter",
+                    "roadInfo: name=${edge.name} highway=${out["highway"]} maxspeed=$ms"
+                )
                 result.success(out)
             } catch (e: Throwable) {
                 result.error("road_info_error", e.message ?: "road info failed", null)

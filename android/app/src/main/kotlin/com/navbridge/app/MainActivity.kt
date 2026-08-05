@@ -21,7 +21,10 @@ class MainActivity : FlutterActivity() {
                     "route" -> {
                         val flat = call.argument<List<Double>>("points") ?: emptyList()
                         val points = flat.chunked(2).map { GHPoint(it[0], it[1]) }
-                        routing.route(points, result)
+                        val maxPaths = (call.argument<Int>("alternatives") ?: 1).coerceAtLeast(1)
+                        val avoidMotorway = call.argument<Boolean>("avoidMotorway") ?: false
+                        val avoidFerry = call.argument<Boolean>("avoidFerry") ?: false
+                        routing.route(points, maxPaths, avoidMotorway, avoidFerry, result)
                     }
                     "isLoaded" -> result.success(routing.isLoaded())
                     "roadInfo" -> {

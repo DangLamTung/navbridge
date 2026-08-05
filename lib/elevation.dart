@@ -38,8 +38,10 @@ Future<ElevationInfo?> fetchRouteElevation(List<LatLng> poly) async {
     final locs = pts.map((p) => '${p.latitude},${p.longitude}').join('|');
     final url = 'https://api.opentopodata.org/v1/srtm90m?locations=$locs';
     final res = await http
-        .get(Uri.parse(url),
-            headers: const {'User-Agent': 'navbridge/1.0 (elevation)'})
+        .get(
+          Uri.parse(url),
+          headers: const {'User-Agent': 'navbridge/1.0 (elevation)'},
+        )
         .timeout(const Duration(seconds: 15));
     if (res.statusCode != 200) return null;
     final data = jsonDecode(utf8.decode(res.bodyBytes));
@@ -72,8 +74,8 @@ double _dist(LatLng a, LatLng b) {
   final la2 = b.latitude * math.pi / 180;
   final dLat = (b.latitude - a.latitude) * math.pi / 180;
   final dLng = (b.longitude - a.longitude) * math.pi / 180;
-  final h = math.pow(math.sin(dLat / 2), 2) +
+  final h =
+      math.pow(math.sin(dLat / 2), 2) +
       math.cos(la1) * math.cos(la2) * math.pow(math.sin(dLng / 2), 2);
   return 2 * r * math.asin(math.sqrt(h));
 }
-

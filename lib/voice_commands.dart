@@ -36,7 +36,8 @@ VoiceCommand parseVoiceCommand(String raw) {
   if (s.isEmpty) return const VoiceCommand(VoiceCommandType.none);
 
   final nav = RegExp(
-      r'^(chỉ đường tới|chỉ đường đến|chỉ đường|đi đến|đi tới|navigate to|go to|take me to|direction to)\b');
+    r'^(chỉ đường tới|chỉ đường đến|chỉ đường|đi đến|đi tới|navigate to|go to|take me to|direction to)\b',
+  );
   final search = RegExp(r'^(tìm kiếm|tìm|search for|search)\b');
   if (nav.hasMatch(s)) {
     return VoiceCommand(
@@ -55,8 +56,8 @@ VoiceCommand parseVoiceCommand(String raw) {
     return const VoiceCommand(VoiceCommandType.start);
   }
   if (RegExp(
-          r'^(dừng|dừng lại|hủy|hủy bỏ|thoát|kết thúc|stop|cancel|quit|end)\b')
-      .hasMatch(s)) {
+    r'^(dừng|dừng lại|hủy|hủy bỏ|thoát|kết thúc|stop|cancel|quit|end)\b',
+  ).hasMatch(s)) {
     return const VoiceCommand(VoiceCommandType.stop);
   }
   if (s.contains('phóng to') || s.contains('zoom in')) {
@@ -65,11 +66,13 @@ VoiceCommand parseVoiceCommand(String raw) {
   if (s.contains('thu nhỏ') || s.contains('zoom out')) {
     return const VoiceCommand(VoiceCommandType.zoomOut);
   }
+  // Check "unmute" BEFORE "mute": "unmute" contains the substring "mute",
+  // so the off-check must not run first.
+  if (s.contains('unmute') || s.contains('bật tiếng') || s.contains('bật âm')) {
+    return const VoiceCommand(VoiceCommandType.voiceOn);
+  }
   if (s.contains('tắt tiếng') || s.contains('im lặng') || s.contains('mute')) {
     return const VoiceCommand(VoiceCommandType.voiceOff);
-  }
-  if (s.contains('bật tiếng') || s.contains('bật âm') || s.contains('unmute')) {
-    return const VoiceCommand(VoiceCommandType.voiceOn);
   }
   if (s.contains('giúp') || s.contains('help')) {
     return const VoiceCommand(VoiceCommandType.help);

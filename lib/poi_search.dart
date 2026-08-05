@@ -11,13 +11,25 @@ import 'package:latlong2/latlong.dart';
 /// A POI category shown as a quick button during navigation.
 enum PoiType {
   fuel('fuel', 'Xăng', Icons.local_gas_station, 'amenity=fuel'),
-  food('food', 'Ăn uống', Icons.restaurant,
-      'amenity in restaurant,cafe,fast_food,food_court'),
-  hotel('hotel', 'Khách sạn', Icons.hotel,
-      'tourism in hotel,motel,hostel,guest_house'),
+  food(
+    'food',
+    'Ăn uống',
+    Icons.restaurant,
+    'amenity in restaurant,cafe,fast_food,food_court',
+  ),
+  hotel(
+    'hotel',
+    'Khách sạn',
+    Icons.hotel,
+    'tourism in hotel,motel,hostel,guest_house',
+  ),
   atm('atm', 'ATM', Icons.local_atm, 'amenity in atm,bank'),
-  hospital('hospital', 'Y tế', Icons.local_hospital,
-      'amenity in hospital,clinic,pharmacy'),
+  hospital(
+    'hospital',
+    'Y tế',
+    Icons.local_hospital,
+    'amenity in hospital,clinic,pharmacy',
+  ),
   parking('parking', 'Đỗ xe', Icons.local_parking, 'amenity=parking');
 
   const PoiType(this.key, this.label, this.icon, this.overpassFilter);
@@ -47,13 +59,13 @@ class PoiResult {
 
 /// Brand color used to highlight a POI type (markers + cards).
 Color poiColor(PoiType t) => switch (t) {
-      PoiType.fuel => const Color(0xFFF4B400),
-      PoiType.food => const Color(0xFFEA4335),
-      PoiType.hotel => const Color(0xFF1A73E8),
-      PoiType.atm => const Color(0xFF9334E6),
-      PoiType.hospital => const Color(0xFF34A853),
-      PoiType.parking => const Color(0xFF5F6368),
-    };
+  PoiType.fuel => const Color(0xFFF4B400),
+  PoiType.food => const Color(0xFFEA4335),
+  PoiType.hotel => const Color(0xFF1A73E8),
+  PoiType.atm => const Color(0xFF9334E6),
+  PoiType.hospital => const Color(0xFF34A853),
+  PoiType.parking => const Color(0xFF5F6368),
+};
 
 const _mirrors = [
   'https://overpass-api.de/api/interpreter',
@@ -69,10 +81,14 @@ Future<List<PoiResult>> searchPois(
   double radius = 5000,
   int limit = 8,
 }) async {
-  final q = '[out:json][timeout:15];'
-      '(node[${type.overpassFilter}]'
+  // `nwr` covers nodes + ways + relations (many fuel/food POIs are ways);
+  // `out <limit> center;` — the count must come BEFORE `center` (the old
+  // `out center 8;` form is rejected by the Overpass parser → search failed).
+  final q =
+      '[out:json][timeout:20];'
+      '(nwr[${type.overpassFilter}]'
       '(around:${radius.round()},${center.latitude},${center.longitude}););'
-      'out center $limit;';
+      'out $limit center;';
   Object? last;
   for (final mirror in _mirrors) {
     try {
@@ -90,12 +106,19 @@ Future<List<PoiResult>> searchPois(
       for (final e in elements) {
         if (e is! Map) continue;
         final tags = (e['tags'] as Map?) ?? const {};
-        final name = (tags['name'] as String?)?.trim() ?? '';
         final lat = (e['lat'] ?? e['center']?['lat']) as num?;
         final lon = (e['lon'] ?? e['center']?['lon']) as num?;
         if (lat == null || lon == null) continue;
-        if (name.isEmpty) continue; // skip unnamed POIs
-        out.add(PoiResult(name: name, lat: lat.toDouble(), lng: lon.toDouble(), type: type));
+        // Unnamed stations are common → fall back to the category label.
+        final name = (tags['name'] as String?)?.trim() ?? type.label;
+        out.add(
+          PoiResult(
+            name: name,
+            lat: lat.toDouble(),
+            lng: lon.toDouble(),
+            type: type,
+          ),
+        );
         if (out.length >= limit) break;
       }
       if (out.isNotEmpty) return out;

@@ -2,6 +2,8 @@
 /// the data needed for the E-ink nav frame (distance, icon, ETA, text).
 library;
 
+import 'dart:math' as math;
+
 import 'package:latlong2/latlong.dart';
 
 import 'nav_protocol.dart';
@@ -16,6 +18,11 @@ class NavProgress {
   final int etaHour;
   final int etaMinute;
   final String text; // road name / instruction
+
+  /// Coordinates of the upcoming maneuver — used to tell apart consecutive
+  /// turns that share the same icon + road name (complex multi-turn areas).
+  final LatLng? maneuver;
+
   final double speedMps;
   final int stopIndex; // 0-based stop we're approaching (0 when none)
   final int totalStops; // number of stops incl. the final destination
@@ -31,6 +38,7 @@ class NavProgress {
     required this.etaHour,
     required this.etaMinute,
     required this.text,
+    this.maneuver,
     required this.speedMps,
     this.nextIconCode = 0,
     this.nextText = '',
@@ -50,10 +58,12 @@ class TurnByTurnEngine {
   final List<double> _stopCum; // cumulative meters at each stop
   int _curIdx = 0; // last snapped polyline index (optimization window)
   int _nextStep = 0; // index of the upcoming maneuver step
+  int _curSeg =
+      0; // segment index the car projects onto (for route "consuming")
 
   TurnByTurnEngine(this.route, {List<String>? stopNames})
-      : stopNames = stopNames ?? const [],
-        _stopCum = List.of(route.stopCumulative) {
+    : stopNames = stopNames ?? const [],
+      _stopCum = List.of(route.stopCumulative) {
     var c = 0.0;
     _cum.add(0);
     for (var i = 1; i < route.geometry.length; i++) {
@@ -72,6 +82,125 @@ class TurnByTurnEngine {
   /// Distance from [pos] to the nearest route point (off-route detection).
   double offRouteDistance(LatLng pos) =>
       distanceMeters(pos, route.geometry[_nearestIndex(pos)]);
+
+  /// Project [pos] onto the route polyline — the closest point on the nearest
+  /// segment (not just the nearest vertex). This is the "car on the road"
+  /// position: feeding it (instead of the raw GPS fix) to the engine/map keeps
+  /// the puck glued to the route and the route-bearing camera steady, so GPS
+  /// noise never pulls the car off the road or makes the arrow flicker.
+  ///
+  /// Searches a window around the last snapped index first (the car moves
+  /// continuously along the route) and falls back to a full scan when the
+  /// window finds nothing close (e.g. a brand-new route after a re-route).
+  LatLng snapToRoute(LatLng pos) {
+    final pts = route.geometry;
+    if (pts.length < 2) return pos;
+    const win = 80;
+    var bestSeg = -1;
+    var bestD = double.infinity;
+    final start = _curIdx.clamp(0, pts.length - 2);
+    final lo = (start - win).clamp(0, pts.length - 2);
+    final hi = (start + win).clamp(0, pts.length - 2);
+    for (var i = lo; i <= hi; i++) {
+      final (_, d) = _closestOnSegment(pos, pts[i], pts[i + 1]);
+      if (d < bestD) {
+        bestD = d;
+        bestSeg = i;
+      }
+    }
+    if (bestSeg < 0 || bestD > 25 * 25) {
+      for (var i = 0; i < pts.length - 1; i++) {
+        final (_, d) = _closestOnSegment(pos, pts[i], pts[i + 1]);
+        if (d < bestD) {
+          bestD = d;
+          bestSeg = i;
+        }
+      }
+    }
+    if (bestSeg < 0) return pos;
+    // Monotonic: the car only ever drives forward, so the consumed start must
+    // never move backward (GPS noise could make the nearest segment flip to an
+    // earlier one → the drawn route would briefly "grow back").
+    _curSeg = math.max(_curSeg, bestSeg);
+    final (proj, _) = _closestOnSegment(pos, pts[bestSeg], pts[bestSeg + 1]);
+    return proj;
+  }
+
+  /// Index of the route segment the car currently projects onto — the car is
+  /// between vertex [snappedSegmentIndex] and [snappedSegmentIndex]+1. The
+  /// driven part of the route (vertices before this) can be dropped from the
+  /// drawn polyline.
+  int get snappedSegmentIndex => _curSeg;
+
+  /// Offset [pos] laterally — perpendicular to the route at [pos] — by
+  /// [meters] (positive = right of the travel direction). Used to inject
+  /// realistic GPS error that is mostly CROSS-TRACK: that is the component
+  /// the road-snapping ([snapToRoute]) must correct (along-track error just
+  /// slides the car forward/back on the road and adds no value).
+  LatLng lateralOffset(LatLng pos, double meters) {
+    final pts = route.geometry;
+    if (pts.length < 2) return pos;
+    // Nearest segment to [pos] (search around the car's current segment).
+    var seg = _curSeg.clamp(0, pts.length - 2);
+    var bestD = double.infinity;
+    const win = 20;
+    final lo = (seg - win).clamp(0, pts.length - 2);
+    final hi = (seg + win).clamp(0, pts.length - 2);
+    for (var i = lo; i <= hi; i++) {
+      final (_, d) = _closestOnSegment(pos, pts[i], pts[i + 1]);
+      if (d < bestD) {
+        bestD = d;
+        seg = i;
+      }
+    }
+    final a = pts[seg];
+    final b = pts[seg + 1];
+    // Perpendicular to the travel direction (right side = bearing + 90°).
+    final rad = (_bearingBetween(a, b) + 90) * math.pi / 180;
+    final dLat = meters * math.cos(rad) / 111320.0;
+    final dLng =
+        meters *
+        math.sin(rad) /
+        (111320.0 * math.cos(pos.latitude * math.pi / 180));
+    return LatLng(pos.latitude + dLat, pos.longitude + dLng);
+  }
+
+  /// Bearing (0=N, clockwise) of the straight line from [a] to [b].
+  double _bearingBetween(LatLng a, LatLng b) {
+    final y =
+        math.sin((b.longitude - a.longitude) * math.pi / 180) *
+        math.cos(b.latitude * math.pi / 180);
+    final x =
+        math.cos(a.latitude * math.pi / 180) *
+            math.sin(b.latitude * math.pi / 180) -
+        math.sin(a.latitude * math.pi / 180) *
+            math.cos(b.latitude * math.pi / 180) *
+            math.cos((b.longitude - a.longitude) * math.pi / 180);
+    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+  }
+
+  /// Closest point on segment [a]-[b] to [p], plus its squared distance
+  /// (equirectangular meters about [p]) — used by [snapToRoute].
+  (LatLng, double) _closestOnSegment(LatLng p, LatLng a, LatLng b) {
+    const mPerLat = 111320.0;
+    final mPerLng = 111320.0 * math.cos(p.latitude * math.pi / 180);
+    // Local meters with p at the origin.
+    final ax = (a.longitude - p.longitude) * mPerLng;
+    final ay = (a.latitude - p.latitude) * mPerLat;
+    final bx = (b.longitude - p.longitude) * mPerLng;
+    final by = (b.latitude - p.latitude) * mPerLat;
+    final abx = bx - ax;
+    final aby = by - ay;
+    final len2 = abx * abx + aby * aby;
+    // t = -(a·(b−a))/|b−a|²  clamped to [0,1] → closest point on the segment.
+    var t = len2 == 0 ? 0.0 : -(ax * abx + ay * aby) / len2;
+    t = t.clamp(0.0, 1.0);
+    final cLat = a.latitude + t * (b.latitude - a.latitude);
+    final cLng = a.longitude + t * (b.longitude - a.longitude);
+    final cx = ax + t * abx;
+    final cy = ay + t * aby;
+    return (LatLng(cLat, cLng), cx * cx + cy * cy);
+  }
 
   /// Interpolate a point at [d] meters along the route polyline.
   /// Used by the simulated-drive mode.
@@ -124,19 +253,22 @@ class TurnByTurnEngine {
     while (passed < _stopCum.length && _stopCum[passed] < cum) {
       passed++;
     }
-    final stopIndex =
-        _stopCum.isEmpty ? 0 : passed.clamp(0, _stopCum.length - 1);
+    final stopIndex = _stopCum.isEmpty
+        ? 0
+        : passed.clamp(0, _stopCum.length - 1);
     final stopName = stopIndex < stopNames.length ? stopNames[stopIndex] : '';
 
     return NavProgress(
       meter: meter,
       iconCode: icon,
-      nextIconCode:
-          next == null ? 0 : iconForManeuver(next.type, next.modifier),
+      nextIconCode: next == null
+          ? 0
+          : iconForManeuver(next.type, next.modifier),
       nextText: next?.name ?? '',
       etaHour: eta.hour,
       etaMinute: eta.minute,
       text: text,
+      maneuver: step.maneuver,
       speedMps: speedMps,
       stopIndex: stopIndex,
       totalStops: _stopCum.length,

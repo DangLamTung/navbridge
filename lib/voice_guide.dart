@@ -16,7 +16,7 @@ class VoiceGuide {
   Future<void> init() async {
     try {
       await _tts.setLanguage('vi-VN');
-      await _tts.setSpeechRate(0.5); // slightly slower, clearer
+      await _tts.setSpeechRate(0.55); // fast enough to finish before the turn
       await _tts.setPitch(1.0);
       await _tts.setVolume(1.0);
       // Core engine is ready — optional audio attributes below must never

@@ -12,6 +12,7 @@ import 'package:latlong2/latlong.dart';
 
 import 'offline_router.dart';
 import 'offline_tiles.dart';
+import 'nav_map_store.dart';
 import 'settings.dart';
 import 'ui/widgets.dart';
 import 'vietmap_config.dart' show dataSource;
@@ -32,8 +33,10 @@ class OfflineScreen extends StatefulWidget {
 
 class _OfflineScreenState extends State<OfflineScreen> {
   List<OfflineRegion> _regions = [];
-  LatLngBounds _bounds =
-      LatLngBounds(const LatLng(10.70, 106.60), const LatLng(10.85, 106.80)); // HCMC core
+  LatLngBounds _bounds = LatLngBounds(
+    const LatLng(10.70, 106.60),
+    const LatLng(10.85, 106.80),
+  ); // HCMC core
   int _maxZoom = 16;
   bool _online = true;
   bool _forceOffline = false;
@@ -41,6 +44,13 @@ class _OfflineScreenState extends State<OfflineScreen> {
   RegionDownloader? _dl;
   int _done = 0;
   int _total = 1;
+
+  // --- offline vector nav map (PMTiles, downloadable) ---
+  int _navBytes = 0;
+  bool _navDownloaded = false;
+  bool _navDownloading = false;
+  int _navDone = 0;
+  int _navTotal = 1;
 
   // --- on-device routing graph (GraphHopper) ---
   bool _graphHas = false;
@@ -54,6 +64,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
     super.initState();
     _reload();
     _refreshGraph();
+    _refreshNavMap();
     onlineStream().listen((o) => setState(() => _online = o));
     isOnline().then((o) => setState(() => _online = o));
     // The global reflects the persisted choice AND any session override (the
@@ -104,10 +115,13 @@ class _OfflineScreenState extends State<OfflineScreen> {
         _graphLoading = false;
         _graphLoaded = ok;
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(ok
-              ? 'Đã nạp bộ dữ liệu chỉ đường.'
-              : 'Không nạp được bộ dữ liệu.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            ok ? 'Đã nạp bộ dữ liệu chỉ đường.' : 'Không nạp được bộ dữ liệu.',
+          ),
+        ),
+      );
     }
   }
 
@@ -127,8 +141,63 @@ class _OfflineScreenState extends State<OfflineScreen> {
     if (mounted) {
       setState(() => _cacheBytes = 0);
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Đã xoá bộ nhớ đệm bản đồ.')));
+        const SnackBar(content: Text('Đã xoá bộ nhớ đệm bản đồ.')),
+      );
     }
+  }
+
+  Future<void> _refreshNavMap() async {
+    final bytes = await navMapBytes();
+    final downloaded = await navMapDownloaded();
+    if (mounted) {
+      setState(() {
+        _navBytes = bytes;
+        _navDownloaded = downloaded;
+      });
+    }
+  }
+
+  Future<void> _downloadNavMap() async {
+    if (_navDownloading) return;
+    setState(() {
+      _navDownloading = true;
+      _navDone = 0;
+      _navTotal = 1;
+    });
+    try {
+      await downloadNavMap((done, total) {
+        if (mounted) {
+          setState(() {
+            _navDone = done;
+            _navTotal = total;
+          });
+        }
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Đã tải xong bản đồ dẫn đường.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Tải bản đồ thất bại: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _navDownloading = false);
+      await _refreshNavMap();
+    }
+  }
+
+  Future<void> _deleteNavMap() async {
+    await deleteNavMap();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đã xoá bản đồ dẫn đường đã tải.')),
+      );
+    }
+    await _refreshNavMap();
   }
 
   void _preset(LatLngBounds b) => setState(() => _bounds = b);
@@ -137,7 +206,8 @@ class _OfflineScreenState extends State<OfflineScreen> {
     LatLng? pos;
     try {
       final p = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.medium);
+        desiredAccuracy: LocationAccuracy.medium,
+      );
       pos = LatLng(p.latitude, p.longitude);
     } catch (_) {
       try {
@@ -148,14 +218,18 @@ class _OfflineScreenState extends State<OfflineScreen> {
     if (pos == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Không lấy được vị trí hiện tại.')));
+          const SnackBar(content: Text('Không lấy được vị trí hiện tại.')),
+        );
       }
       return;
     }
     const km = 0.009; // ~1 km per degree
-    _preset(LatLngBounds(
+    _preset(
+      LatLngBounds(
         LatLng(pos.latitude - 5 * km, pos.longitude - 5 * km),
-        LatLng(pos.latitude + 5 * km, pos.longitude + 5 * km)));
+        LatLng(pos.latitude + 5 * km, pos.longitude + 5 * km),
+      ),
+    );
   }
 
   Future<void> _pickOnMap() async {
@@ -170,7 +244,8 @@ class _OfflineScreenState extends State<OfflineScreen> {
   Future<void> _download() async {
     if (_downloading) return;
     final region = OfflineRegion(
-      name: '${_bounds.southWest.latitude.toStringAsFixed(2)},'
+      name:
+          '${_bounds.southWest.latitude.toStringAsFixed(2)},'
           '${_bounds.southWest.longitude.toStringAsFixed(2)}',
       swLat: _bounds.southWest.latitude,
       swLon: _bounds.southWest.longitude,
@@ -202,9 +277,13 @@ class _OfflineScreenState extends State<OfflineScreen> {
         _downloading = false;
         _dl = null;
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
           content: Text(
-              'OSM đã giới hạn tải (429). Thử lại sau hoặc giảm độ chi tiết.')));
+            'Nguồn tải tile đã giới hạn (HTTP 429/403). Thử lại sau hoặc giảm độ chi tiết.',
+          ),
+        ),
+      );
       return;
     }
     // Only remember the region if it actually got tiles.
@@ -216,8 +295,11 @@ class _OfflineScreenState extends State<OfflineScreen> {
       _regions = downloaded;
     });
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Đã tải xong vùng bản đồ (${region.tileCount} ô).')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Đã tải xong vùng bản đồ (${region.tileCount} ô).'),
+        ),
+      );
     }
   }
 
@@ -244,8 +326,10 @@ class _OfflineScreenState extends State<OfflineScreen> {
       backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: Colors.white,
-        title: const Text('Bản đồ ngoại tuyến',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
+        title: const Text(
+          'Bản đồ ngoại tuyến',
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(14),
@@ -256,18 +340,29 @@ class _OfflineScreenState extends State<OfflineScreen> {
             borderRadius: BorderRadius.circular(12),
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Row(children: [
-                Icon(_online ? Icons.wifi : Icons.cloud_off,
+              child: Row(
+                children: [
+                  Icon(
+                    _online ? Icons.wifi : Icons.cloud_off,
                     size: 18,
-                    color: _online ? const Color(0xFF34A853) : const Color(0xFFEA4335)),
-                const SizedBox(width: 8),
-                Text(_online ? 'Đang trực tuyến' : 'Đang ngoại tuyến',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              ]),
+                    color: _online
+                        ? const Color(0xFF34A853)
+                        : const Color(0xFFEA4335),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _online ? 'Đang trực tuyến' : 'Đang ngoại tuyến',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 12),
-          // forced offline/online mode for long navigation
+          // offline mode (uses only downloaded data, no internet)
           Material(
             color: const Color(0xFFE8F0FE),
             borderRadius: BorderRadius.circular(12),
@@ -275,12 +370,18 @@ class _OfflineScreenState extends State<OfflineScreen> {
               value: _forceOffline,
               onChanged: _toggleForceOffline,
               activeThumbColor: kAppBlue,
-              title: const Text('Chế độ ngoại tuyến (bắt buộc)',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              secondary: Icon(
+                _forceOffline ? Icons.cloud_off : Icons.public,
+                color: _forceOffline ? kAppBlue : Colors.grey[600],
+              ),
+              title: const Text(
+                'Chế độ ngoại tuyến',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
               subtitle: Text(
                 _forceOffline
-                    ? 'Chỉ dùng dữ liệu trên máy (bản đồ đã lưu + chỉ đường ngoại tuyến).'
-                    : 'Bật để khoá ngoại tuyến khi đi đường dài: không dùng mạng.',
+                    ? 'Đang bật — chỉ dùng dữ liệu đã tải, không gọi internet.'
+                    : 'Chỉ dùng bản đồ và chỉ đường đã tải, không dùng internet.',
                 style: TextStyle(fontSize: 12, color: Colors.grey[700]),
               ),
             ),
@@ -295,9 +396,10 @@ class _OfflineScreenState extends State<OfflineScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Nguồn dữ liệu (tìm kiếm & chỉ đường)',
-                      style: TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  const Text(
+                    'Nguồn dữ liệu (tìm kiếm & chỉ đường)',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -327,8 +429,10 @@ class _OfflineScreenState extends State<OfflineScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          const Text('Bản đồ ngoại tuyến (tự động)',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const Text(
+            'Bản đồ ngoại tuyến (tự động)',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 8),
           Material(
             color: const Color(0xFFF1F3F4),
@@ -347,7 +451,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
                           'Bản đồ đã xem được lưu tự động: '
                           '${formatBytes(_cacheBytes)}',
                           style: const TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w600),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                     ],
@@ -364,8 +470,10 @@ class _OfflineScreenState extends State<OfflineScreen> {
                     child: TextButton.icon(
                       onPressed: _cacheBytes > 0 ? _clearCache : null,
                       icon: const Icon(Icons.delete_sweep, size: 18),
-                      label: const Text('Xoá bộ nhớ đệm',
-                          style: TextStyle(fontSize: 13)),
+                      label: const Text(
+                        'Xoá bộ nhớ đệm',
+                        style: TextStyle(fontSize: 13),
+                      ),
                     ),
                   ),
                 ],
@@ -373,78 +481,11 @@ class _OfflineScreenState extends State<OfflineScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          const Text('Tải cả vùng',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          if (tileDownloadBaseUrl.isEmpty)
-            Material(
-              color: const Color(0xFFFCE8E6),
-              borderRadius: BorderRadius.circular(12),
-              child: const Padding(
-                padding: EdgeInsets.all(12),
-                child: Text(
-                  'Tải khối lượng lớn từ tile.openstreetmap.org bị tắt để tuân '
-                  'thủ chính sách sử dụng OSM (không được tải trước/bulk).\n\n'
-                  'Muốn tải cả vùng cho ngoại tuyến, hãy trỏ ứng dụng tới một '
-                  'máy chủ tile của riêng bạn — đặt hằng số tileDownloadBaseUrl '
-                  'trong lib/offline_tiles.dart (hoặc dùng gói bản đồ MBTiles '
-                  'tự tạo từ dữ liệu OSM).',
-                  style: TextStyle(fontSize: 12.5, color: Color(0xFFB3261E)),
-                ),
-              ),
-            )
-          else ...[
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ChoiceChip(
-                label: const Text('TP.HCM'),
-                selected: _bounds.northEast == const LatLng(10.85, 106.80),
-                onSelected: (_) => _preset(
-                    LatLngBounds(const LatLng(10.70, 106.60), const LatLng(10.85, 106.80))),
-              ),
-              ChoiceChip(
-                label: const Text('Hà Nội'),
-                selected: _bounds.northEast == const LatLng(21.10, 105.90),
-                onSelected: (_) => _preset(
-                    LatLngBounds(const LatLng(20.95, 105.75), const LatLng(21.10, 105.90))),
-              ),
-              ChoiceChip(
-                label: const Text('Đà Nẵng'),
-                selected: _bounds.northEast == const LatLng(16.10, 108.28),
-                onSelected: (_) => _preset(
-                    LatLngBounds(const LatLng(15.98, 108.10), const LatLng(16.10, 108.28))),
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.my_location, size: 16),
-                label: const Text('Vị trí hiện tại'),
-                onPressed: _pickCurrentLocation,
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.map, size: 16),
-                label: const Text('Chọn trên bản đồ'),
-                onPressed: _pickOnMap,
-              ),
-            ],
+          const Text(
+            'Bản đồ dẫn đường (vector)',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
           ),
-          const SizedBox(height: 12),
-          Row(children: [
-            const Text('Độ chi tiết: ',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            for (final z in [14, 15, 16, 17])
-              Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: ChoiceChip(
-                  label: Text('z$z'),
-                  selected: _maxZoom == z,
-                  visualDensity: VisualDensity.compact,
-                  onSelected: (_) => setState(() => _maxZoom = z),
-                ),
-              ),
-          ]),
-          const SizedBox(height: 12),
-          // estimate + download
+          const SizedBox(height: 8),
           Material(
             color: const Color(0xFFF1F3F4),
             borderRadius: BorderRadius.circular(12),
@@ -453,57 +494,244 @@ class _OfflineScreenState extends State<OfflineScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '${preview.tileCount} ô • ~${formatBytes(preview.estimatedBytes)}',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                  Row(
+                    children: [
+                      Icon(
+                        _navBytes > 0
+                            ? Icons.map
+                            : Icons.download_for_offline_outlined,
+                        size: 18,
+                        color: kAppBlue,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _navBytes > 0
+                              ? 'Bản đồ dẫn đường (${formatBytes(_navBytes)})'
+                              : 'Chưa có bản đồ dẫn đường',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Vùng: ${_bounds.southWest.latitude.toStringAsFixed(3)},'
-                    '${_bounds.southWest.longitude.toStringAsFixed(3)} → '
-                    '${_bounds.northEast.latitude.toStringAsFixed(3)},'
-                    '${_bounds.northEast.longitude.toStringAsFixed(3)}',
+                    _navBytes > 0
+                        ? 'Dùng trong chế độ dẫn đường — hiển thị bản đồ vector '
+                              'ngoại tuyến sắc nét.'
+                        : 'Tải bản đồ dẫn đường (vector) để dùng khi chỉ đường — '
+                              'khoảng 29 MB cho TP.HCM. Cần cấu hình URL tải khi build '
+                              '(--dart-define=NAVMAP_URL).',
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
-                  const SizedBox(height: 10),
-                  if (_downloading) ...[
-                    LinearProgressIndicator(value: _total == 0 ? 0 : _done / _total),
+                  const SizedBox(height: 8),
+                  if (_navDownloading) ...[
+                    LinearProgressIndicator(
+                      value: _navTotal == 0 ? 0 : _navDone / _navTotal,
+                    ),
                     const SizedBox(height: 6),
-                    Row(children: [
-                      Text(
-                        '$_done / $_total ô • ~'
-                        '${(((_total - _done) * 1.05 / 60).ceil()).clamp(1, 999)} ph',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () => _dl?.cancel(),
-                        child: const Text('Huỷ'),
-                      ),
-                    ]),
+                    Text(
+                      '${_navTotal == 0 ? 0 : (_navDone * 100 / _navTotal).toStringAsFixed(0)}% '
+                      '(${formatBytes(_navDone)} / ${formatBytes(_navTotal)})',
+                      style: const TextStyle(fontSize: 12),
+                    ),
                   ] else
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: kAppBlue,
-                          foregroundColor: Colors.white,
-                          minimumSize: const Size.fromHeight(44),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _online ? _downloadNavMap : null,
+                            icon: const Icon(Icons.download, size: 18),
+                            label: Text(
+                              _navBytes > 0 ? 'Tải lại' : 'Tải xuống',
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
                         ),
-                        onPressed: _online ? _download : null,
-                        icon: const Icon(Icons.download),
-                        label: const Text('Tải xuống vùng này',
-                            style: TextStyle(fontWeight: FontWeight.w700)),
-                      ),
+                        if (_navDownloaded) ...[
+                          const SizedBox(width: 8),
+                          IconButton(
+                            onPressed: _deleteNavMap,
+                            icon: const Icon(Icons.delete_outline),
+                            tooltip: 'Xoá bản đồ đã tải',
+                          ),
+                        ],
+                      ],
                     ),
                 ],
               ),
             ),
           ),
+          const SizedBox(height: 16),
+          const Text(
+            'Tải cả vùng',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          if (tileDownloadBaseUrl.isEmpty)
+            Material(
+              color: const Color(0xFFFCE8E6),
+              borderRadius: BorderRadius.circular(12),
+              child: const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text(
+                  'Chưa có nguồn tải tile (tileDownloadBaseUrl trống).\n\n'
+                  'Bản đồ cả vùng chỉ tải được từ máy chủ tile KHÔNG phải '
+                  'OpenStreetMap (để tránh bị chặn IP). Hãy trỏ nguồn khi build: '
+                  'flutter build apk --dart-define=TILE_URL=https://<host>/{z}/{x}/{y}.png',
+                  style: TextStyle(fontSize: 12.5, color: Color(0xFFB3261E)),
+                ),
+              ),
+            )
+          else ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ChoiceChip(
+                  label: const Text('TP.HCM'),
+                  selected: _bounds.northEast == const LatLng(10.85, 106.80),
+                  onSelected: (_) => _preset(
+                    LatLngBounds(
+                      const LatLng(10.70, 106.60),
+                      const LatLng(10.85, 106.80),
+                    ),
+                  ),
+                ),
+                ChoiceChip(
+                  label: const Text('Hà Nội'),
+                  selected: _bounds.northEast == const LatLng(21.10, 105.90),
+                  onSelected: (_) => _preset(
+                    LatLngBounds(
+                      const LatLng(20.95, 105.75),
+                      const LatLng(21.10, 105.90),
+                    ),
+                  ),
+                ),
+                ChoiceChip(
+                  label: const Text('Đà Nẵng'),
+                  selected: _bounds.northEast == const LatLng(16.10, 108.28),
+                  onSelected: (_) => _preset(
+                    LatLngBounds(
+                      const LatLng(15.98, 108.10),
+                      const LatLng(16.10, 108.28),
+                    ),
+                  ),
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.my_location, size: 16),
+                  label: const Text('Vị trí hiện tại'),
+                  onPressed: _pickCurrentLocation,
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.map, size: 16),
+                  label: const Text('Chọn trên bản đồ'),
+                  onPressed: _pickOnMap,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Text(
+                  'Độ chi tiết: ',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                for (final z in [14, 15, 16, 17])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text('z$z'),
+                      selected: _maxZoom == z,
+                      visualDensity: VisualDensity.compact,
+                      onSelected: (_) => setState(() => _maxZoom = z),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // estimate + download
+            Material(
+              color: const Color(0xFFF1F3F4),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${preview.tileCount} ô • ~${formatBytes(preview.estimatedBytes)}',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Vùng: ${_bounds.southWest.latitude.toStringAsFixed(3)},'
+                      '${_bounds.southWest.longitude.toStringAsFixed(3)} → '
+                      '${_bounds.northEast.latitude.toStringAsFixed(3)},'
+                      '${_bounds.northEast.longitude.toStringAsFixed(3)}',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                    const SizedBox(height: 6),
+                    // Download source — deliberately NOT OpenStreetMap (bulk
+                    // OSM downloads got this app IP-banned before).
+                    Text(
+                      'Nguồn tải: $tileDownloadSourceLabel '
+                      '(không phải OpenStreetMap)',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                    const SizedBox(height: 10),
+                    if (_downloading) ...[
+                      LinearProgressIndicator(
+                        value: _total == 0 ? 0 : _done / _total,
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Text(
+                            '$_done / $_total ô • ~'
+                            '${(((_total - _done) * 1.05 / 60).ceil()).clamp(1, 999)} ph',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          const Spacer(),
+                          TextButton(
+                            onPressed: () => _dl?.cancel(),
+                            child: const Text('Huỷ'),
+                          ),
+                        ],
+                      ),
+                    ] else
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: kAppBlue,
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size.fromHeight(44),
+                          ),
+                          onPressed: _online ? _download : null,
+                          icon: const Icon(Icons.download),
+                          label: const Text(
+                            'Tải xuống vùng này',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
           ],
           const SizedBox(height: 20),
-          const Text('Chỉ đường ngoại tuyến',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const Text(
+            'Chỉ đường ngoại tuyến',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 8),
           Material(
             color: const Color(0xFFF1F3F4),
@@ -530,10 +758,12 @@ class _OfflineScreenState extends State<OfflineScreen> {
                           _graphLoaded
                               ? 'Đã nạp — định tuyến ngoại tuyến sẵn sàng'
                               : (_graphHas
-                                  ? 'Bộ dữ liệu đã có (${formatBytes(_graphBytes)})'
-                                  : 'Chưa có bộ dữ liệu chỉ đường'),
+                                    ? 'Bộ dữ liệu đã có (${formatBytes(_graphBytes)})'
+                                    : 'Chưa có bộ dữ liệu chỉ đường'),
                           style: const TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w600),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                     ],
@@ -549,16 +779,22 @@ class _OfflineScreenState extends State<OfflineScreen> {
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: _graphHas && !_graphLoading ? _loadGraph : null,
+                          onPressed: _graphHas && !_graphLoading
+                              ? _loadGraph
+                              : null,
                           icon: _graphLoading
                               ? const SizedBox(
                                   width: 14,
                                   height: 14,
                                   child: CircularProgressIndicator(
-                                      strokeWidth: 2))
+                                    strokeWidth: 2,
+                                  ),
+                                )
                               : const Icon(Icons.upload_file, size: 18),
-                          label: const Text('Nạp bộ dữ liệu',
-                              style: TextStyle(fontSize: 13)),
+                          label: const Text(
+                            'Nạp bộ dữ liệu',
+                            style: TextStyle(fontSize: 13),
+                          ),
                         ),
                       ),
                     ],
@@ -568,12 +804,16 @@ class _OfflineScreenState extends State<OfflineScreen> {
             ),
           ),
           const SizedBox(height: 20),
-          const Text('Đã tải xuống',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const Text(
+            'Đã tải xuống',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 8),
           if (_regions.isEmpty)
-            Text('Chưa có vùng nào được tải.',
-                style: TextStyle(fontSize: 13, color: Colors.grey[600]))
+            Text(
+              'Chưa có vùng nào được tải.',
+              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            )
           else
             for (final r in _regions)
               Card(
@@ -582,12 +822,17 @@ class _OfflineScreenState extends State<OfflineScreen> {
                 child: ListTile(
                   dense: true,
                   leading: const Icon(Icons.map, color: kAppBlue),
-                  title: Text(r.name,
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  title: Text(
+                    r.name,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                   subtitle: Text(
-                      '${r.tileCount} ô • ~${formatBytes(r.estimatedBytes)} • '
-                      '${r.downloadedAt.toLocal()}'),
+                    '${r.tileCount} ô • ~${formatBytes(r.estimatedBytes)} • '
+                    '${r.downloadedAt.toLocal()}',
+                  ),
                   trailing: IconButton(
                     icon: const Icon(Icons.delete_outline),
                     onPressed: () => _delete(r),
@@ -633,15 +878,23 @@ class _SourceChoice extends StatelessWidget {
           children: [
             Icon(icon, size: 20, color: fg),
             const SizedBox(height: 4),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: fg)),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: fg,
+              ),
+            ),
             const SizedBox(height: 2),
-            Text(subtitle,
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 10, color: selected ? Colors.white70 : Colors.grey[600])),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 10,
+                color: selected ? Colors.white70 : Colors.grey[600],
+              ),
+            ),
           ],
         ),
       ),
@@ -666,8 +919,10 @@ class _RegionPickerState extends State<_RegionPicker> {
       backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: Colors.white,
-        title: const Text('Chọn vùng',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
+        title: const Text(
+          'Chọn vùng',
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+        ),
       ),
       body: Stack(
         children: [
@@ -677,7 +932,8 @@ class _RegionPickerState extends State<_RegionPicker> {
               initialCenter: const LatLng(10.82, 106.63),
               initialZoom: 13,
               interactionOptions: const InteractionOptions(
-                  flags: InteractiveFlag.all & ~InteractiveFlag.rotate),
+                flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+              ),
             ),
             children: [
               TileLayer(
@@ -717,8 +973,10 @@ class _RegionPickerState extends State<_RegionPicker> {
               onPressed: () =>
                   Navigator.pop(context, _map.camera.visibleBounds),
               icon: const Icon(Icons.check),
-              label: const Text('Dùng vùng này',
-                  style: TextStyle(fontWeight: FontWeight.w700)),
+              label: const Text(
+                'Dùng vùng này',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
             ),
           ),
         ],

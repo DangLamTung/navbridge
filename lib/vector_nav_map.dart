@@ -38,16 +38,39 @@ const List<String> kCarIcons = [
   'plane',
 ];
 
+/// Notifies the page about the nav-map camera follow state so it can render
+/// the auto-center button in a layer above the platform view (a sibling
+/// widget inside the map's Stack is occluded by the MapLibre platform view).
+class VectorNavMapController extends ChangeNotifier {
+  bool _following = true;
+  bool get following => _following;
+  VoidCallback? _recenter;
+
+  void attachRecenter(VoidCallback cb) => _recenter = cb;
+  void recenter() => _recenter?.call();
+
+  void setFollowing(bool v) {
+    if (_following != v) {
+      _following = v;
+      notifyListeners();
+    }
+  }
+}
+
 class VectorNavMap extends StatefulWidget {
   const VectorNavMap({
     super.key,
     this.routeGeometry = const [],
     this.routeSteps = const [],
+    this.routeStartIndex = 0,
     this.current,
     this.heading,
     this.headingUp = true,
+    this.tilt3D = true,
     this.carIcon = 'arrow',
     this.pois = const [],
+    this.selectedPoi,
+    this.controller,
   });
 
   /// Route polyline to draw (latlong2 points).
@@ -56,6 +79,11 @@ class VectorNavMap extends StatefulWidget {
   /// Route steps (maneuvers) — used for the traffic-colored route and the
   /// intersection (traffic-light) dots.
   final List<OsrmStep> routeSteps;
+
+  /// Index into [routeGeometry] where the DRAWN route starts. The part of the
+  /// route already driven (vertices before this) is "consumed" and not drawn,
+  /// Google-Maps style. 0 = draw the whole route.
+  final int routeStartIndex;
 
   /// Live position to follow.
   final ll.LatLng? current;
@@ -66,11 +94,21 @@ class VectorNavMap extends StatefulWidget {
   /// Rotate the map so the travel direction points up (Google-style).
   final bool headingUp;
 
+  /// Tilted 3D perspective camera (Google-style). Turn off for a flat 2D map.
+  final bool tilt3D;
+
   /// Car marker icon name (from [kCarIcons]).
   final String carIcon;
 
   /// Nearby POIs to highlight (gas/food/hotel/…) during navigation.
   final List<PoiResult> pois;
+
+  /// The POI the user tapped — the camera centers on it (follow pauses).
+  final PoiResult? selectedPoi;
+
+  /// Camera-follow controller for the auto-center button (rendered by the
+  /// page so it sits above the platform view).
+  final VectorNavMapController? controller;
 
   @override
   State<VectorNavMap> createState() => _VectorNavMapState();
@@ -89,23 +127,39 @@ class _VectorNavMapState extends State<VectorNavMap> {
   String? _lastPoiSig;
   Symbol? _carMarker;
   bool _hasPosition = false;
-  final double _zoom = 15; // Vietmap SimpleCamera.DEFAULT_ZOOM (15.0)
-  ll.LatLng? _lastRouteSig;
+  // Vietmap-style nav camera: start at max zoom with the car centered. The
+  // user can pinch to a different zoom — it's adopted (see [_onCamMove]) so
+  // follow keeps the map at the zoom the user chose instead of snapping back
+  // to 19 (that's what made it feel "zoom in only").
+  double _zoom = 19;
+  String? _lastRouteSig;
   ll.LatLng? _lastCarPos;
   double? _lastIconRotate;
   String? _lastIconName;
-  // Per-frame camera easing (Google feel): the camera AND the car icon glide
-  // together toward the target so the icon stays locked to its screen anchor
-  // instead of the camera lagging behind a jumping icon.
-  ll.LatLng? _camPos; // current (eased) camera target
-  double _camBearing = 0;
-  ll.LatLng? _wantPos; // desired camera target (car + anchor offset)
-  double _wantBearing = 0;
-  Timer? _camTimer;
 
-  /// True while the user is touching the map — pause the auto-follow camera
-  /// so a rotate/pan gesture isn't fought by the 33 ms ease timer.
-  bool _userInteracting = false;
+  /// True when the nav-map tiles (PMTiles) are not on disk yet — either they
+  /// were never bundled or the user hasn't downloaded them. Show a prompt to
+  /// download instead of a blank/error map.
+  bool _mapMissing = false;
+
+  /// Last computed route bearing — reused (instead of the raw phone compass)
+  /// when the route geometry is momentarily absent (e.g. during a re-route),
+  /// so the camera/arrow never snap to the noisy compass heading.
+  double _lastRouteBearing = 0;
+  bool _hasRouteBearing = false;
+
+  /// 10 s idle → auto-center back on the car after the user pans away.
+  Timer? _recenterTimer;
+
+  /// Camera auto-follow is enabled. Turned off after the user pans/zooms the
+  /// map (Vietmap behavior: the map stays where the user left it) and turned
+  /// back on by the recenter button or after 10 s of no interaction.
+  bool _followEnabled = true;
+
+  /// The camera we last requested for the follow ease — used in [_onCamMove]
+  /// to tell our own moves from the user's pan/zoom (no pointer wrapper, so
+  /// the platform view keeps full pan + pinch control).
+  CameraPosition? _lastFollowCam;
 
   /// Icon scale. The navigation puck (arrow) is Vietmap's exact 75dp puck
   /// (white circle + #2a5dff arrow), rasterized at 4x (300px); MapLibre
@@ -121,6 +175,8 @@ class _VectorNavMapState extends State<VectorNavMap> {
   @override
   void initState() {
     super.initState();
+    widget.controller?.attachRecenter(_recenter);
+    widget.controller?.setFollowing(true);
     _prepare();
   }
 
@@ -135,15 +191,28 @@ class _VectorNavMapState extends State<VectorNavMap> {
       if (!dir.existsSync()) dir.createSync(recursive: true);
 
       // --- manifest-driven copy of bundled assets -----------------------
-      final manifest = jsonDecode(await rootBundle
-          .loadString('assets/offline_map/manifest.json')) as Map<String, dynamic>;
+      final manifest =
+          jsonDecode(
+                await rootBundle.loadString('assets/offline_map/manifest.json'),
+              )
+              as Map<String, dynamic>;
 
       final pmtilesFile = File('${dir.path}/${manifest['pmtiles']}');
       if (!pmtilesFile.existsSync()) {
-        final data = await rootBundle
-            .load('assets/offline_map/${manifest['pmtiles']}');
-        await pmtilesFile
-            .writeAsBytes(data.buffer.asUint8List(), flush: true);
+        // The tiles may be bundled OR downloaded on demand (offline screen).
+        // Try the bundled copy; if it isn't bundled, the nav map is simply
+        // not downloaded yet → the placeholder below is shown instead.
+        try {
+          final data = await rootBundle.load(
+            'assets/offline_map/${manifest['pmtiles']}',
+          );
+          await pmtilesFile.writeAsBytes(
+            data.buffer.asUint8List(),
+            flush: true,
+          );
+        } catch (_) {
+          // not bundled — leave it missing
+        }
       }
       // Drop any tileset from an older build that is no longer the active
       // one (e.g. the old z14 archive) so device storage isn't wasted.
@@ -155,6 +224,13 @@ class _VectorNavMapState extends State<VectorNavMap> {
             debugPrint('VECTORMAP: removed stale $old');
           } catch (_) {}
         }
+      }
+      // If after all that there is still no tile source, tell the user to
+      // download the nav map (no blank/error map).
+      if (!pmtilesFile.existsSync()) {
+        debugPrint('VECTORMAP: nav-map tiles not present — download needed');
+        if (mounted) setState(() => _mapMissing = true);
+        return;
       }
 
       final spriteDir = Directory('${dir.path}/sprite');
@@ -183,16 +259,20 @@ class _VectorNavMapState extends State<VectorNavMap> {
       }
 
       // --- build the style with absolute file:// paths ------------------
-      final styleRaw =
-          await rootBundle.loadString('assets/offline_map/nav_style.json');
+      final styleRaw = await rootBundle.loadString(
+        'assets/offline_map/nav_style.json',
+      );
       final style = jsonDecode(styleRaw) as Map<String, dynamic>;
       final src = style['sources'] as Map<String, dynamic>;
-      src['openmaptiles']['url'] =
-          'pmtiles://file://${pmtilesFile.path}';
-      style['glyphs'] =
-          (style['glyphs'] as String).replaceAll('__NAV_FONTS__', fontsDir.path);
-      style['sprite'] =
-          (style['sprite'] as String).replaceAll('__NAV_SPRITE__', spriteDir.path);
+      src['openmaptiles']['url'] = 'pmtiles://file://${pmtilesFile.path}';
+      style['glyphs'] = (style['glyphs'] as String).replaceAll(
+        '__NAV_FONTS__',
+        fontsDir.path,
+      );
+      style['sprite'] = (style['sprite'] as String).replaceAll(
+        '__NAV_SPRITE__',
+        spriteDir.path,
+      );
       if (mounted) setState(() => _styleString = jsonEncode(style));
     } catch (e) {
       debugPrint('VECTORMAP: prepare failed: $e');
@@ -203,7 +283,9 @@ class _VectorNavMapState extends State<VectorNavMap> {
   Future<void> _loadIcons(MapLibreMapController ctrl) async {
     for (final name in kCarIcons) {
       try {
-        final data = await rootBundle.load('assets/offline_map/icons/$name.png');
+        final data = await rootBundle.load(
+          'assets/offline_map/icons/$name.png',
+        );
         await ctrl.addImage(name, data.buffer.asUint8List());
       } catch (e) {
         debugPrint('VECTORMAP: icon $name failed: $e');
@@ -214,111 +296,48 @@ class _VectorNavMapState extends State<VectorNavMap> {
   Future<void> _addRoute() async {
     final ctrl = _controller;
     if (ctrl == null) return;
-    final pts = widget.routeGeometry
+    final pts = _drawnRoute()
         .map((p) => LatLng(p.latitude, p.longitude))
         .toList();
     if (pts.length < 2) return;
-    // White casing under the whole route (Google look).
-    _casing = await ctrl.addLine(LineOptions(
-      geometry: pts,
-      lineColor: '#ffffff',
-      lineWidth: 9.5,
-    ));
-    final steps = widget.routeSteps;
-    if (steps.length >= 2) {
-      // Google-Maps-style traffic overlay: split the route at each maneuver
-      // and color every segment green/yellow/red by its implied speed.
-      final segs = _splitAtSteps(pts, steps);
-      for (var i = 0; i < segs.length; i++) {
-        final lvl = _trafficLevel(steps[(i + 1).clamp(0, steps.length - 1)]);
-        _trafficLines.add(await ctrl.addLine(LineOptions(
-          geometry: segs[i],
-          lineColor: _trafficColors[lvl],
-          lineWidth: 6.5,
-        )));
-      }
-      // Traffic-light dots at each intersection (skip start/end maneuvers).
-      for (var i = 1; i < steps.length - 1; i++) {
-        final m = steps[i].maneuver;
-        final lvl = _trafficLevel(steps[i]);
-        _trafficLights.add(await ctrl.addCircle(CircleOptions(
-          geometry: LatLng(m.latitude, m.longitude),
-          circleColor: _trafficColors[lvl],
-          circleRadius: 5.0,
-          circleStrokeColor: '#202124',
-          circleStrokeWidth: 2.0,
-          circleOpacity: 0.95,
-        )));
-      }
-    } else {
-      // No maneuver data → plain blue route line.
-      _routeLine = await ctrl.addLine(LineOptions(
-        geometry: pts,
-        lineColor: '#4285F4',
-        lineWidth: 6.0,
-      ));
-    }
-    _lastRouteSig = _routeSignature(widget.routeGeometry);
+    // Bold Vietmap-style route: thick white casing under a solid blue line
+    // (the navigation route is drawn large so it reads clearly at 320dpi).
+    _casing = await ctrl.addLine(
+      LineOptions(geometry: pts, lineColor: '#ffffff', lineWidth: 14),
+    );
+    _routeLine = await ctrl.addLine(
+      LineOptions(geometry: pts, lineColor: '#1A73E8', lineWidth: 10),
+    );
+    _lastRouteSig = _routeSignature();
   }
 
-  /// Traffic level 0 (green) / 1 (yellow) / 2 (red). Uses the backend's live
-  /// congestion level when available (Vietmap), else the step's implied speed
-  /// as an offline stand-in.
-  static int _trafficLevel(OsrmStep s) {
-    if (s.congestion != null) return s.congestion!;
-    if (s.type == 'arrive' || s.type == 'depart' || s.duration <= 0) {
-      return 0;
+  /// The portion of the route still ahead of the car — the part already
+  /// driven is "consumed" and not drawn (Google-style). Starts at the car's
+  /// snapped position once part of the route is behind it, so the drawn line
+  /// begins right at the puck.
+  List<ll.LatLng> _drawnRoute() {
+    final g = widget.routeGeometry;
+    if (g.isEmpty) return g;
+    final start = widget.routeStartIndex.clamp(0, g.length - 1);
+    if (start <= 0) return g; // full route (nothing consumed yet)
+    final c = widget.current;
+    if (c != null) {
+      return [c, for (var k = start + 1; k < g.length; k++) g[k]];
     }
-    final kmh = s.distance / s.duration * 3.6;
-    if (kmh >= 35) return 0; // free flow
-    if (kmh >= 20) return 1; // slow
-    return 2; // congested
+    return g.sublist(start);
   }
 
-  static const List<String> _trafficColors = [
-    '#34A853', // green
-    '#FBBC05', // yellow
-    '#EA4335', // red
-  ];
-
-  /// Split the route polyline at each step-maneuver point so every segment
-  /// can be colored independently.
-  List<List<LatLng>> _splitAtSteps(List<LatLng> pts, List<OsrmStep> steps) {
-    final cuts = <int>[0];
-    for (var i = 1; i < steps.length - 1; i++) {
-      final idx = _nearestIndex(pts, steps[i].maneuver);
-      if (idx > cuts.last && idx < pts.length - 1) cuts.add(idx);
-    }
-    if (cuts.last < pts.length - 1) cuts.add(pts.length - 1);
-    final out = <List<LatLng>>[];
-    for (var i = 0; i < cuts.length - 1; i++) {
-      out.add(pts.sublist(cuts[i], cuts[i + 1] + 1));
-    }
-    return out;
-  }
-
-  int _nearestIndex(List<LatLng> pts, ll.LatLng p) {
-    var best = 0;
-    var bd = double.infinity;
-    for (var i = 0; i < pts.length; i++) {
-      final d = _dist2(pts[i], p);
-      if (d < bd) {
-        bd = d;
-        best = i;
-      }
-    }
-    return best;
-  }
-
-  double _dist2(LatLng a, ll.LatLng b) {
-    final dLat = a.latitude - b.latitude;
-    final dLng = a.longitude - b.longitude;
-    return dLat * dLat + dLng * dLng;
-  }
-
-  ll.LatLng? _routeSignature(List<ll.LatLng> pts) {
-    if (pts.isEmpty) return null;
-    return pts.first; // route changes are always a brand-new geometry
+  /// Stable signature of the drawn route: how much has been consumed (start
+  /// index) + full geometry length + destination. Changes only when the car
+  /// passes a route vertex (more gets consumed) or a brand-new route is set —
+  /// NOT every GPS fix (the consumed start point moves continuously and the
+  /// drawn line only needs rebuilding when the vertex list actually changes).
+  String _routeSignature() {
+    final g = widget.routeGeometry;
+    if (g.isEmpty) return '';
+    final last = g.last;
+    return '${widget.routeStartIndex}|${g.length}|'
+        '${last.latitude.toStringAsFixed(5)},${last.longitude.toStringAsFixed(5)}';
   }
 
   /// POI markers (colored dot + name label). Rebuilt when the list changes.
@@ -352,26 +371,31 @@ class _VectorNavMapState extends State<VectorNavMap> {
         PoiType.hospital => '#34A853',
         PoiType.parking => '#5F6368',
       };
+      final sel = identical(p, widget.selectedPoi);
       try {
-        final c = await ctrl.addCircle(CircleOptions(
-          geometry: LatLng(p.lat, p.lng),
-          circleColor: col,
-          circleRadius: 9.0,
-          circleStrokeColor: '#FFFFFF',
-          circleStrokeWidth: 2.5,
-          circleOpacity: 0.95,
-        ));
+        final c = await ctrl.addCircle(
+          CircleOptions(
+            geometry: LatLng(p.lat, p.lng),
+            circleColor: sel ? '#FF6F00' : col,
+            circleRadius: sel ? 16.0 : 9.0,
+            circleStrokeColor: sel ? '#202124' : '#FFFFFF',
+            circleStrokeWidth: sel ? 3.0 : 2.5,
+            circleOpacity: 0.95,
+          ),
+        );
         _poiCircles.add(c);
-        final s = await ctrl.addSymbol(SymbolOptions(
-          geometry: LatLng(p.lat, p.lng),
-          textField: p.name,
-          textSize: 12,
-          textColor: '#202124',
-          textHaloColor: '#FFFFFF',
-          textHaloWidth: 1.8,
-          textAnchor: 'bottom',
-          textOffset: const Offset(0, -0.4),
-        ));
+        final s = await ctrl.addSymbol(
+          SymbolOptions(
+            geometry: LatLng(p.lat, p.lng),
+            textField: p.name,
+            textSize: 12,
+            textColor: '#202124',
+            textHaloColor: '#FFFFFF',
+            textHaloWidth: 1.8,
+            textAnchor: 'bottom',
+            textOffset: const Offset(0, -0.4),
+          ),
+        );
         _poiSymbols.add(s);
       } catch (_) {}
     }
@@ -380,7 +404,7 @@ class _VectorNavMapState extends State<VectorNavMap> {
   void _updateRoute() {
     final ctrl = _controller;
     if (ctrl == null) return;
-    if (_lastRouteSig != _routeSignature(widget.routeGeometry)) {
+    if (_lastRouteSig != _routeSignature()) {
       // Drop the old overlays and rebuild (route change = new geometry).
       for (final l in _trafficLines) {
         ctrl.removeLine(l);
@@ -399,168 +423,219 @@ class _VectorNavMapState extends State<VectorNavMap> {
         _routeLine = null;
       }
       _addRoute();
-      _lastRouteSig = _routeSignature(widget.routeGeometry);
+      _lastRouteSig = _routeSignature();
     }
   }
 
   /// Vietmap's SimpleCamera: the map rotates to the ROUTE direction (not the
   /// phone compass), so the road ahead is always vertical in heading-up mode.
-  /// Falls back to the compass heading when there's no route.
+  /// Once a route bearing has been computed it is always reused — never the
+  /// raw phone heading (which is noisy and made the arrow spin/flicker).
   double _bearing() {
     if (!widget.headingUp) return 0; // north-up
-    if (widget.routeGeometry.length >= 2) return _routeBearing();
-    return widget.heading ?? 0;
+    return _routeBearing();
   }
 
   /// On-screen puck rotation (viewport-aligned, MapLibre's default). In
   /// heading-up mode the camera bearing already equals the route bearing, so
   /// the puck needs no extra rotation and points straight up (Vietmap). In
   /// north-up mode it rotates to the route bearing to show travel direction.
+  /// The phone compass is never used to orient the arrow.
   double _puckRotate() {
-    if (!widget.headingUp) {
-      if (widget.routeGeometry.length >= 2) return _routeBearing();
-      return widget.heading ?? 0;
-    }
+    if (!widget.headingUp) return _routeBearing();
     return 0;
   }
 
   /// Bearing of the route at the car: direction of the nearest polyline
-  /// segment (the same source Vietmap's camera uses for its initial bearing).
+  /// SEGMENT (perpendicular distance, not the nearest vertex — vertices flip
+  /// between adjacent segments as the car moves, which made the bearing — and
+  /// therefore the arrow — jump). The result is cached and reused when the
+  /// route is briefly absent so the camera never falls back to the compass.
   double _routeBearing() {
     final c = widget.current;
     final g = widget.routeGeometry;
-    if (c == null || g.length < 2) return widget.heading ?? 0;
+    if (c == null || g.length < 2) {
+      return _hasRouteBearing ? _lastRouteBearing : (widget.heading ?? 0);
+    }
     var bi = 0;
     var bd = double.infinity;
-    for (var i = 0; i < g.length; i++) {
-      final d = _distMeters(g[i], c);
+    for (var i = 0; i < g.length - 1; i++) {
+      final d = _distToSegment(c, g[i], g[i + 1]);
       if (d < bd) {
         bd = d;
         bi = i;
       }
     }
-    final i = bi < g.length - 1 ? bi : g.length - 2;
-    final a = g[i];
-    final b = g[i + 1];
-    final y = math.sin((b.longitude - a.longitude) * math.pi / 180) *
+    final a = g[bi];
+    final b = g[bi + 1];
+    final y =
+        math.sin((b.longitude - a.longitude) * math.pi / 180) *
         math.cos(b.latitude * math.pi / 180);
-    final x = math.cos(a.latitude * math.pi / 180) *
+    final x =
+        math.cos(a.latitude * math.pi / 180) *
             math.sin(b.latitude * math.pi / 180) -
         math.sin(a.latitude * math.pi / 180) *
             math.cos(b.latitude * math.pi / 180) *
             math.cos((b.longitude - a.longitude) * math.pi / 180);
-    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+    final bearing = (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+    _lastRouteBearing = bearing;
+    _hasRouteBearing = true;
+    return bearing;
+  }
+
+  /// Perpendicular distance (meters) from [p] to segment [a]-[b].
+  double _distToSegment(ll.LatLng p, ll.LatLng a, ll.LatLng b) {
+    // Equirectangular local meters about p (fine within a route window).
+    const mPerLat = 111320.0;
+    final mPerLng = 111320.0 * math.cos(p.latitude * math.pi / 180);
+    final ax = (a.longitude - p.longitude) * mPerLng;
+    final ay = (a.latitude - p.latitude) * mPerLat;
+    final bx = (b.longitude - p.longitude) * mPerLng;
+    final by = (b.latitude - p.latitude) * mPerLat;
+    final abx = bx - ax;
+    final aby = by - ay;
+    final len2 = abx * abx + aby * aby;
+    var t = len2 == 0 ? 0.0 : -(ax * abx + ay * aby) / len2;
+    t = t.clamp(0.0, 1.0);
+    final cx = ax + t * abx;
+    final cy = ay + t * aby;
+    return math.sqrt(cx * cx + cy * cy);
   }
 
   /// 3D perspective angle — Vietmap SimpleCamera.DEFAULT_TILT (50).
   static const double _tilt = 50;
 
   /// Where the car sits on screen, as a fraction of the visible map height
-  /// measured from the camera center. 0.0 = dead center. (A positive value
-  /// would place the car lower on screen to show more road ahead; the user
-  /// asked for the object to be centered, so this stays 0.)
+  /// measured from the camera center. 0 = dead center (the user wants the car
+  /// centered; at [_zoom] 19 there's still ~290 m of road visible ahead).
   static const double _carAnchor = 0.0;
 
   void _followPosition() {
     final ctrl = _controller;
     final c = widget.current;
-    debugPrint('VECTORMAP: follow current=${c != null} ctrl=${ctrl != null} '
-        'hasPos=$_hasPosition');
     if (ctrl == null || c == null) return;
+    // User is free on the map (follow paused): keep the puck glued to the
+    // REAL fix so it stays at the car's position while they pan/zoom.
+    if (!_followEnabled) {
+      _updateCarMarker();
+      return;
+    }
+    // Adopt the live camera zoom (whatever the user pinched to) so follow
+    // never forces the zoom back to the initial max.
+    final live = ctrl.cameraPosition;
+    if (live != null && live.zoom >= 3) _zoom = live.zoom.clamp(3.0, 19.0);
+    // While following, the puck is painted ONLY from onCameraMove/onCameraIdle
+    // at the camera target — painting the raw fix here too made the puck jump
+    // ahead of the glide and then snap back every tick (the flicker).
+    if (ctrl.isCameraMoving) return;
     final bearing = _bearing();
     final car = ll.LatLng(c.latitude, c.longitude);
-    // Google-style framing: shift the camera ahead of the travel direction so
-    // the car sits ~1/3 from the bottom and the road ahead is visible. The
-    // user wants the car centered → [_carAnchor] = 0 keeps the camera on the
-    // car itself.
     final ahead = _followTarget(car, bearing > 0 ? bearing : 0, _zoom);
-    if (!_hasPosition) {
-      _camPos = ahead;
-      _camBearing = bearing;
-      ctrl.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(
-        target: LatLng(ahead.latitude, ahead.longitude),
-        zoom: _zoom,
-        bearing: bearing,
-        tilt: _tilt,
-      )));
-      _hasPosition = true;
-    } else {
-      final turned = ((bearing - _camBearing) % 360).abs() > 1.0;
-      final moved = _camPos == null || _distMeters(_camPos!, ahead) > 2.0;
-      if ((turned || moved) && !_userInteracting) {
-        _wantPos = ahead;
-        _wantBearing = bearing;
-        _camTimer ??= Timer.periodic(
-            const Duration(milliseconds: 33), _tickCamera);
-      }
-    }
-    _updateCarMarker();
-  }
-
-  /// One easing step toward the desired camera target. The camera AND the car
-  /// icon glide together, so the icon stays locked to its screen anchor
-  /// (Google feel) instead of the camera lagging behind a jumping icon.
-  void _tickCamera(Timer t) {
-    if (!mounted) {
-      _stopCameraEase();
-      return;
-    }
-    if (_userInteracting) {
-      _stopCameraEase(); // user is rotating/panning — don't fight them
-      return;
-    }
-    final ctrl = _controller;
-    final want = _wantPos;
-    final cur = _camPos;
-    if (ctrl == null || want == null || cur == null) {
-      _stopCameraEase();
-      return;
-    }
-    const k = 0.30; // per-tick ease factor (~30fps → converges in ~200ms)
-    // (0.20 was too floaty for a live drive; 0.30 still glides but follows
-    // the car quickly)
-    if (_distMeters(cur, want) < 0.5) {
-      // Settled on the target.
-      ctrl.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(
-        target: LatLng(want.latitude, want.longitude),
-        zoom: _zoom,
-        bearing: _wantBearing,
-        tilt: _tilt,
-      )));
-      _camPos = want;
-      _camBearing = _wantBearing;
-      _stopCameraEase();
-      return;
-    }
-    final lat = cur.latitude + (want.latitude - cur.latitude) * k;
-    final lng = cur.longitude + (want.longitude - cur.longitude) * k;
-    final bearing = _lerpBearing(_camBearing, _wantBearing, k);
-    _camPos = ll.LatLng(lat, lng);
-    _camBearing = bearing;
-    ctrl.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(
-      target: LatLng(lat, lng),
+    final want = CameraPosition(
+      target: LatLng(ahead.latitude, ahead.longitude),
       zoom: _zoom,
       bearing: bearing,
-      tilt: _tilt,
-    )));
-    // Glide the icon with the camera: it sits offset BEHIND the camera
-    // target, so place it at the eased position to keep it glued to the
-    // anchor (no visible lag between camera and icon).
-    final carPos = _followTarget(_camPos!, _wantBearing + 180, _zoom);
-    _paintCar(carPos);
+      tilt: widget.tilt3D ? _tilt : 0,
+    );
+    final last = _lastFollowCam;
+    final lastTarget = last == null
+        ? null
+        : ll.LatLng(last.target.latitude, last.target.longitude);
+    final moved = lastTarget == null || _distMeters(lastTarget, ahead) > 1.0;
+    final turned = last == null || ((bearing - last.bearing) % 360).abs() > 1.0;
+    final zoomChanged = last == null || (want.zoom - last.zoom).abs() > 0.01;
+    if (moved || turned || zoomChanged) {
+      _lastFollowCam = want;
+      _hasPosition = true;
+      // Native smooth animation (the Google-Maps / Vietmap approach) — it is
+      // automatically cancelled the instant the user touches the map, so a
+      // pan / pinch / rotate never fights the follow camera.
+      unawaited(
+        ctrl.animateCamera(
+          CameraUpdate.newCameraPosition(want),
+          duration: const Duration(milliseconds: 500),
+        ),
+      );
+    }
   }
 
-  void _stopCameraEase() {
-    _camTimer?.cancel();
-    _camTimer = null;
+  /// Glue the car icon to the camera while the follow animation glides, so
+  /// the arrow never detaches from the screen anchor / jumps / flickers
+  /// (with a fixed 300 px puck at max zoom even a few meters of lag looks
+  /// like the marker blinking out). `_paintCar`'s 0.3 m guard keeps this
+  /// cheap — it only calls `updateSymbol` when the puck actually moves.
+  ///
+  /// MapLibre can occasionally report a `cam.target` that has drifted well
+  /// off the road mid-animation (a tilted bearing-change pivot) — painting
+  /// that would teleport the puck off-route for a frame (the flicker). Clamp:
+  /// if the camera target is far from the snapped car, keep the puck on the
+  /// car instead.
+  void _onCamMove(CameraPosition cam) {
+    if (!_followEnabled) return;
+    final t = cam.target;
+    final cur = widget.current;
+    if (cur != null &&
+        _distMeters(
+              ll.LatLng(cur.latitude, cur.longitude),
+              ll.LatLng(t.latitude, t.longitude),
+            ) >
+            50) {
+      _paintCar(ll.LatLng(cur.latitude, cur.longitude));
+    } else {
+      _paintCar(ll.LatLng(t.latitude, t.longitude));
+    }
   }
 
-  /// Shortest-path bearing interpolation (350→10 goes through 0, not 340°).
-  double _lerpBearing(double a, double b, double k) {
-    var diff = (b - a) % 360;
-    if (diff > 180) diff -= 360;
-    if (diff < -180) diff += 360;
-    return a + diff * k;
+  /// Fires when the camera stops moving: either our follow animation finished
+  /// (camera sits on [_lastFollowCam] → keep following) or the user
+  /// interrupted it with a pan / pinch / rotate (camera deviated → pause
+  /// follow, show the recenter button, auto-center after 10 s).
+  void _onCamIdle() {
+    final last = _lastFollowCam;
+    final ctrl = _controller;
+    if (last == null || ctrl == null || !_followEnabled || !_hasPosition) {
+      return;
+    }
+    final cam = ctrl.cameraPosition;
+    if (cam == null) return;
+    final t = cam.target;
+    // Final puck placement: glue the arrow onto the SETTLED CAMERA target so
+    // it never detaches from the screen anchor. (Painting the LIVE snapped
+    // fix here made the puck jump ~500 ms of travel ahead of the camera at
+    // every settle and snap back each tick — the original flicker.) Only when
+    // MapLibre settles on a target that has drifted far off the road (a
+    // tilted bearing-change pivot) do we paint the real snapped position
+    // instead, so the puck stays on the route.
+    final cur = widget.current;
+    if (cur != null &&
+        _distMeters(
+              ll.LatLng(cur.latitude, cur.longitude),
+              ll.LatLng(t.latitude, t.longitude),
+            ) >
+            50) {
+      _paintCar(ll.LatLng(cur.latitude, cur.longitude));
+    } else {
+      _paintCar(ll.LatLng(t.latitude, t.longitude));
+    }
+    final targetClose =
+        _distMeters(
+          ll.LatLng(last.target.latitude, last.target.longitude),
+          ll.LatLng(t.latitude, t.longitude),
+        ) <
+        8;
+    final zoomClose = (cam.zoom - last.zoom).abs() < 0.15;
+    final b = (cam.bearing - last.bearing) % 360;
+    final bearingClose = b.abs() < 5 || b.abs() > 355;
+    if (!targetClose || !zoomClose || !bearingClose) {
+      _userPanned(); // the user took over the map
+    }
+  }
+
+  /// Apply a camera move we own (focus a POI) so [_onCamIdle] can tell it
+  /// apart from a user gesture.
+  void _followMove(MapLibreMapController ctrl, CameraPosition p) {
+    _lastFollowCam = p;
+    ctrl.moveCamera(CameraUpdate.newCameraPosition(p));
   }
 
   /// Camera target for [car]: the car itself when [_carAnchor] is 0 (centered)
@@ -568,7 +643,8 @@ class _VectorNavMapState extends State<VectorNavMap> {
   /// car sits lower on screen (more road ahead, classic Google framing).
   ll.LatLng _followTarget(ll.LatLng car, double bearingDeg, double zoom) {
     // Approx ground meters per pixel at this zoom (Web Mercator).
-    final mpp = 156543.03392 *
+    final mpp =
+        156543.03392 *
         math.cos(car.latitude * math.pi / 180) /
         math.pow(2, zoom);
     // Visible vertical ground extent: viewport px × m/px × 3D-tilt extension
@@ -578,7 +654,9 @@ class _VectorNavMapState extends State<VectorNavMap> {
     if (offset <= 0) return car; // dead-center follow
     final rad = bearingDeg * math.pi / 180;
     final dLat = offset * math.cos(rad) / 111320.0;
-    final dLng = offset * math.sin(rad) /
+    final dLng =
+        offset *
+        math.sin(rad) /
         (111320.0 * math.cos(car.latitude * math.pi / 180));
     return ll.LatLng(car.latitude + dLat, car.longitude + dLng);
   }
@@ -586,7 +664,9 @@ class _VectorNavMapState extends State<VectorNavMap> {
   /// Approximate ground distance in meters between two points.
   double _distMeters(ll.LatLng a, ll.LatLng b) {
     final dLat = (b.latitude - a.latitude) * 111320.0;
-    final dLng = (b.longitude - a.longitude) * 111320.0 *
+    final dLng =
+        (b.longitude - a.longitude) *
+        111320.0 *
         math.cos(a.latitude * math.pi / 180);
     return math.sqrt(dLat * dLat + dLng * dLng);
   }
@@ -602,13 +682,15 @@ class _VectorNavMapState extends State<VectorNavMap> {
     if (_carMarker == null) {
       await _loadIcons(ctrl);
       try {
-        _carMarker = await ctrl.addSymbol(SymbolOptions(
-          geometry: LatLng(c.latitude, c.longitude),
-          iconImage: widget.carIcon,
-          iconSize: _iconSize(widget.carIcon),
-          iconRotate: _puckRotate(),
-          iconAnchor: 'center',
-        ));
+        _carMarker = await ctrl.addSymbol(
+          SymbolOptions(
+            geometry: LatLng(c.latitude, c.longitude),
+            iconImage: widget.carIcon,
+            iconSize: _iconSize(widget.carIcon),
+            iconRotate: _puckRotate(),
+            iconAnchor: 'center',
+          ),
+        );
         debugPrint('VECTORMAP: car marker created (${widget.carIcon})');
       } catch (e) {
         debugPrint('VECTORMAP: car marker failed: $e');
@@ -637,33 +719,62 @@ class _VectorNavMapState extends State<VectorNavMap> {
     final rotate = _puckRotate();
     final rotChanged = (rotate - (_lastIconRotate ?? 0)).abs() > 0.5;
     if (!posChanged && !rotChanged && !iconChanged) return;
-    debugPrint('VECTORMAP: paint car @'
-        '${pos.latitude.toStringAsFixed(5)},${pos.longitude.toStringAsFixed(5)} '
-        'rot=$rotate');
+    debugPrint(
+      'VECTORMAP: paint car @'
+      '${pos.latitude.toStringAsFixed(5)},${pos.longitude.toStringAsFixed(5)} '
+      'rot=$rotate',
+    );
     _lastCarPos = pos;
     _lastIconRotate = rotate;
     _lastIconName = widget.carIcon;
-    ctrl.updateSymbol(_carMarker!, SymbolOptions(
-      geometry: LatLng(pos.latitude, pos.longitude),
-      iconImage: widget.carIcon,
-      iconSize: _iconSize(widget.carIcon),
-      iconRotate: _puckRotate(),
-      iconAnchor: 'center',
-    ));
+    ctrl.updateSymbol(
+      _carMarker!,
+      SymbolOptions(
+        geometry: LatLng(pos.latitude, pos.longitude),
+        iconImage: widget.carIcon,
+        iconSize: _iconSize(widget.carIcon),
+        iconRotate: _puckRotate(),
+        iconAnchor: 'center',
+      ),
+    );
   }
 
   @override
   void didUpdateWidget(VectorNavMap old) {
     super.didUpdateWidget(old);
-    if (old.headingUp != widget.headingUp) {
-      // Force a re-follow with the new north/heading-up bearing.
-      _camBearing = 0;
-      _camPos = null;
-      _wantPos = null;
+    if (old.headingUp != widget.headingUp || old.tilt3D != widget.tilt3D) {
+      // Force a re-follow with the new north/heading-up bearing or tilt.
+      _hasPosition = false;
+      _lastFollowCam = null;
+    }
+    if (old.selectedPoi != widget.selectedPoi && widget.selectedPoi != null) {
+      _focusPoi(widget.selectedPoi!);
     }
     _followPosition();
     _updateRoute();
     _updatePois();
+  }
+
+  /// Center the camera on the tapped POI and pause auto-follow so the user
+  /// can inspect it; the recenter button / 10 s idle brings the camera back
+  /// to the car.
+  void _focusPoi(PoiResult p) {
+    final ctrl = _controller;
+    if (ctrl == null) return;
+    _followEnabled = false;
+    widget.controller?.setFollowing(false);
+    _recenterTimer?.cancel();
+    _recenterTimer = Timer(const Duration(seconds: 10), _recenter);
+    _followMove(
+      ctrl,
+      CameraPosition(
+        target: LatLng(p.lat, p.lng),
+        zoom: 17,
+        bearing: 0,
+        tilt: 0,
+      ),
+    );
+    if (mounted) setState(() {});
   }
 
   @override
@@ -671,53 +782,101 @@ class _VectorNavMapState extends State<VectorNavMap> {
     if (_styleError != null) {
       return const ColoredBox(color: Color(0xFFE8EAED));
     }
+    if (_mapMissing) {
+      return ColoredBox(
+        color: const Color(0xFFE8EAED),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.map_outlined, size: 52, color: Colors.grey),
+                const SizedBox(height: 14),
+                const Text(
+                  'Bản đồ dẫn đường chưa được tải',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Vào ⚙ Cài đặt → Bản đồ ngoại tuyến → "Bản đồ dẫn đường"\n'
+                  'để tải bản đồ vector dùng khi chỉ đường.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     final style = _styleString;
     if (style == null) {
       // Preparing the offline map.
       return const ColoredBox(color: Color(0xFFE8EAED));
     }
     final c = widget.current;
-    return Listener(
-      onPointerDown: (_) => _onUserTouch(true),
-      onPointerUp: (_) => _onUserTouch(false),
-      onPointerCancel: (_) => _onUserTouch(false),
-      child: MapLibreMap(
-        styleString: style,
-        initialCameraPosition: CameraPosition(
-          target: c == null
-              ? const LatLng(10.8231, 106.6297)
-              : LatLng(c.latitude, c.longitude),
-          zoom: 15,
-        ),
-        minMaxZoomPreference:
-            const MinMaxZoomPreference(3, 19), // pinch up to z19 (overzoom)
-        compassEnabled: true,
-        onMapCreated: (ctrl) => _controller = ctrl,
-        onStyleLoadedCallback: () async {
-          await _addRoute();
-          await _ensureCarMarker();
-          _followPosition();
-          await _updatePois();
-        },
+    // No pointer wrapper around MapLibreMap — an ancestor Listener interferes
+    // with the platform view's multitouch. Follow uses MapLibre's native
+    // `animateCamera` (auto-cancelled on user touch) and user takeover is
+    // detected in [_onCamIdle] (camera stops somewhere other than where the
+    // follow put it) → pan / pinch / rotate all work and pause the follow.
+    return MapLibreMap(
+      styleString: style,
+      initialCameraPosition: CameraPosition(
+        target: c == null
+            ? const LatLng(10.8231, 106.6297)
+            : LatLng(c.latitude, c.longitude),
+        zoom: _zoom,
       ),
+      minMaxZoomPreference: const MinMaxZoomPreference(
+        3,
+        19,
+      ), // pinch up to z19 (overzoom)
+      compassEnabled: true,
+      // Required: onCameraMove/onCameraIdle (and `cameraPosition`) only fire
+      // with this enabled.
+      trackCameraPosition: true,
+      onMapCreated: (ctrl) => _controller = ctrl,
+      onCameraMove: _onCamMove,
+      onCameraIdle: _onCamIdle,
+      onStyleLoadedCallback: () async {
+        await _addRoute();
+        await _ensureCarMarker();
+        _followPosition();
+        await _updatePois();
+      },
     );
   }
 
-  /// Pause/resume the auto-follow camera while the user touches the map
-  /// (rotate / pan shouldn't fight the 33 ms re-follow; resume after release).
-  void _onUserTouch(bool down) {
-    if (_userInteracting == down) return;
-    _userInteracting = down;
-    if (down) {
-      _stopCameraEase();
-    } else {
-      _followPosition();
-    }
+  /// The user dragged/zoomed the map away from the follow camera: keep it
+  /// where they left it, show the recenter button and auto-center back after
+  /// 10 s of no further interaction.
+  void _userPanned() {
+    if (!_followEnabled) return;
+    _followEnabled = false;
+    widget.controller?.setFollowing(false);
+    _recenterTimer?.cancel();
+    _recenterTimer = Timer(const Duration(seconds: 10), _recenter);
+    if (mounted) setState(() {});
+  }
+
+  /// Snap the camera back onto the car and resume auto-follow.
+  void _recenter() {
+    _recenterTimer?.cancel();
+    if (!mounted) return;
+    setState(() => _followEnabled = true);
+    widget.controller?.setFollowing(true);
+    _hasPosition = false;
+    _lastFollowCam = null;
+    _followPosition();
   }
 
   @override
   void dispose() {
-    _camTimer?.cancel();
+    _recenterTimer?.cancel();
+    _recenterTimer?.cancel();
     _controller?.dispose();
     super.dispose();
   }

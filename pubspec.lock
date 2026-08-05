@@ -853,22 +853,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
-  vietmap_flutter_navigation:
-    dependency: "direct main"
-    description:
-      name: vietmap_flutter_navigation
-      sha256: bbeb74032de393d5f9ed91d3775bb94e39394968b03eeef9dd483ca823c3f9d4
-      url: "https://pub.dev"
-    source: hosted
-    version: "4.2.0"
-  vietmap_gl_platform_interface:
-    dependency: "direct main"
-    description:
-      name: vietmap_gl_platform_interface
-      sha256: "7a0ab18a386dd6b61bc45b5cb160562cc00e28bc9ae7edf733cef26b4148f913"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.0.0"
   vm_service:
     dependency: transitive
     description:

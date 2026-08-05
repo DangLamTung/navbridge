@@ -49,3 +49,7 @@ tools/data/*.osm.pbf
 tools/data/*.ghz
 tools/data/*_graph/
 tools/data/extract_test/
+
+# Local secrets — never commit. Vietmap keys live in .env and are loaded by
+# tool/env.sh -> --dart-define at build time.
+.env

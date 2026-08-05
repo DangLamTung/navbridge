@@ -19,7 +19,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'offline_tiles.dart' show forceOffline;
 import 'vietmap_api.dart';
-import 'vietmap_config.dart' show dataSource;
+import 'vietmap_config.dart' show VietmapConfig, dataSource;
 
 const _nominatimBase = 'https://nominatim.openstreetmap.org';
 
@@ -31,8 +31,8 @@ class OsmSuggestion {
   final double lat;
   final double lng;
 
-  /// Where this suggestion came from: 'osm' (has coords) or 'vietmap'
-  /// (coords come from a place lookup on selection).
+  /// Where this suggestion came from: 'osm' (has coords), 'vietmap' (coords
+  /// from a place lookup on selection) or 'google' (has coords).
   final String source;
 
   OsmSuggestion({
@@ -72,7 +72,7 @@ Future<void> _loadSearchCache() async {
             lat: ((s['lat'] ?? 0) as num).toDouble(),
             lng: ((s['lng'] ?? 0) as num).toDouble(),
             source: (s['source'] ?? 'osm') as String,
-          )
+          ),
       ];
     }
   } catch (_) {}
@@ -91,8 +91,8 @@ Future<void> _saveSearchCache() async {
               'lat': s.lat,
               'lng': s.lng,
               'source': s.source,
-            }
-        ]
+            },
+        ],
     };
     await f.writeAsString(jsonEncode(data), flush: true);
   } catch (_) {}
@@ -110,6 +110,21 @@ Future<List<OsmSuggestion>> osmAutocomplete(
   await _loadSearchCache();
   final key = text.trim().toLowerCase();
   if (forceOffline) return _searchCache[key] ?? const [];
+
+  // Google Maps geocoding — used as the primary search when a key is
+  // configured (far better Vietnamese results than Nominatim).
+  if (VietmapConfig.googleApiKey.isNotEmpty) {
+    try {
+      final g = await googleGeocode(text, limit: limit);
+      if (g.isNotEmpty) {
+        _searchCache[key] = g;
+        unawaited(_saveSearchCache());
+        return g;
+      }
+    } catch (_) {
+      // fall through to Vietmap / Nominatim
+    }
+  }
 
   if (dataSource == 'vietmap') {
     try {
@@ -131,7 +146,8 @@ Future<List<OsmSuggestion>> osmAutocomplete(
   }
 
   try {
-    final url = '$_nominatimBase/search'
+    final url =
+        '$_nominatimBase/search'
         '?format=jsonv2'
         '&addressdetails=0'
         '&limit=$limit'
@@ -150,12 +166,14 @@ Future<List<OsmSuggestion>> osmAutocomplete(
       final lng = double.tryParse('${e['lon']}');
       final name = (e['display_name'] ?? '') as String;
       if (lat == null || lng == null || name.isEmpty) continue;
-      out.add(OsmSuggestion(
-        refId: '${e['osm_type']}/${e['osm_id']}',
-        display: name,
-        lat: lat,
-        lng: lng,
-      ));
+      out.add(
+        OsmSuggestion(
+          refId: '${e['osm_type']}/${e['osm_id']}',
+          display: name,
+          lat: lat,
+          lng: lng,
+        ),
+      );
     }
     _searchCache[key] = out;
     unawaited(_saveSearchCache());
@@ -163,4 +181,40 @@ Future<List<OsmSuggestion>> osmAutocomplete(
   } catch (_) {
     return _searchCache[key] ?? const [];
   }
+}
+
+/// Google Maps Geocoding API search (used when [VietmapConfig.googleApiKey]
+/// is configured). Requires the Google Geocoding API enabled + billing.
+Future<List<OsmSuggestion>> googleGeocode(String text, {int limit = 6}) async {
+  final key = VietmapConfig.googleApiKey;
+  if (key.isEmpty) return const [];
+  final url =
+      'https://maps.googleapis.com/maps/api/geocode/json'
+      '?address=${Uri.encodeQueryComponent(text)}'
+      '&language=vi'
+      '&region=vn'
+      '&key=$key';
+  final res = await http
+      .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
+      .timeout(const Duration(seconds: 15));
+  if (res.statusCode != 200) return const [];
+  final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+  final results = (data['results'] as List? ?? []).cast<Map<String, dynamic>>();
+  final out = <OsmSuggestion>[];
+  for (final r in results.take(limit)) {
+    final addr = (r['formatted_address'] ?? '') as String;
+    final geometry = r['geometry'] as Map<String, dynamic>?;
+    final loc = geometry?['location'] as Map<String, dynamic>?;
+    if (addr.isEmpty || loc == null) continue;
+    out.add(
+      OsmSuggestion(
+        refId: (r['place_id'] ?? '') as String,
+        display: addr,
+        lat: ((loc['lat'] ?? 0) as num).toDouble(),
+        lng: ((loc['lng'] ?? 0) as num).toDouble(),
+        source: 'google',
+      ),
+    );
+  }
+  return out;
 }

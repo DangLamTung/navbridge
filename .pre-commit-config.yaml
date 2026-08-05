@@ -1,0 +1,34 @@
+# Pre-commit hooks for navbridge (Flutter).
+#
+# Install once:   pip install pre-commit && pre-commit install
+# Run on demand:  pre-commit run --all-files
+#
+# The Flutter hook needs the Flutter SDK available: either `flutter` on PATH,
+# FLUTTER_ROOT set, or the workspace copy at ~/Documents/Eink/flutter_sdk.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+
+  - repo: local
+    hooks:
+      # Format-check only the .dart files being committed (the existing lib/
+      # is intentionally not reformatted wholesale).
+      - id: dart-format
+        name: dart format (staged .dart files)
+        entry: bash tool/check_format.sh
+        language: system
+        types: [dart]
+
+      # Whole-project gate: analyzer + unit tests on every commit.
+      - id: flutter-checks
+        name: flutter analyze + test
+        entry: bash tool/check.sh
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -45,33 +45,41 @@ const String _ua = 'navbridge/1.0 (BLE portable navigation; road info)';
 /// Vietnamese label + statutory default limit (km/h) per OSM/GraphHopper
 /// highway class value. Used when the way has no `maxspeed` tag.
 (String, int) classInfo(String highway) => switch (highway) {
-      'motorway' => ('Cao tốc', 120),
-      'motorway_link' => ('Cao tốc', 100),
-      'trunk' => ('Quốc lộ', 90),
-      'trunk_link' => ('Quốc lộ', 80),
-      'primary' => ('Quốc lộ', 80),
-      'primary_link' => ('Quốc lộ', 60),
-      'secondary' => ('Tỉnh lộ', 60),
-      'secondary_link' => ('Tỉnh lộ', 50),
-      'tertiary' => ('Đường huyện', 50),
-      'tertiary_link' => ('Đường huyện', 50),
-      'unclassified' => ('Đường làng', 50),
-      'residential' => ('Đường dân sinh', 50),
-      'living_street' => ('Đường phố', 20),
-      'service' => ('Đường nội bộ', 30),
-      'pedestrian' => ('Phố đi bộ', 10),
-      'footway' => ('Lối đi bộ', 10),
-      'cycleway' => ('Đường xe đạp', 20),
-      _ => ('Đường', 50),
-    };
+  'motorway' => ('Cao tốc', 120),
+  'motorway_link' => ('Cao tốc', 100),
+  'trunk' => ('Quốc lộ', 90),
+  'trunk_link' => ('Quốc lộ', 80),
+  'primary' => ('Quốc lộ', 80),
+  'primary_link' => ('Quốc lộ', 60),
+  'secondary' => ('Tỉnh lộ', 60),
+  'secondary_link' => ('Tỉnh lộ', 50),
+  'tertiary' => ('Đường huyện', 50),
+  'tertiary_link' => ('Đường huyện', 50),
+  'unclassified' => ('Đường làng', 50),
+  'residential' => ('Đường dân sinh', 50),
+  'living_street' => ('Đường phố', 20),
+  'service' => ('Đường nội bộ', 30),
+  'pedestrian' => ('Phố đi bộ', 10),
+  'footway' => ('Lối đi bộ', 10),
+  'cycleway' => ('Đường xe đạp', 20),
+  _ => ('Đường', 50),
+};
 
-/// Parse a raw OSM maxspeed tag ("50", "50 km/h", "none"…).
-int _parseMaxspeed(String? raw, int fallback) {
+/// Parse a raw OSM maxspeed tag into km/h: "50", "50 km/h", "30 mph",
+/// "15 knots", "none", … Unknown/non-numeric values return [fallback].
+int parseMaxspeed(String? raw, int fallback) {
   if (raw == null || raw.isEmpty) return fallback;
-  final t = raw.toLowerCase();
-  if (t == 'none' || t == 'signals' || t == 'variable') return fallback;
-  final m = RegExp(r'(\d+)').firstMatch(t);
-  return m == null ? fallback : int.parse(m.group(1)!);
+  final t = raw.toLowerCase().trim();
+  if (t == 'none' || t == 'signals' || t == 'variable' || t == 'walk') {
+    return fallback;
+  }
+  final m = RegExp(r'(\d+(?:\.\d+)?)').firstMatch(t);
+  if (m == null) return fallback;
+  final v = double.parse(m.group(1)!);
+  // OSM stores imperial units verbatim — convert to km/h (the chip is km/h).
+  if (t.contains('mph')) return (v * 1.609344).round();
+  if (t.contains('knot')) return (v * 1.852).round();
+  return v.round();
 }
 
 /// Simple client-side cache: last result + where we queried it.
@@ -91,7 +99,8 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos) async {
     if (distanceMeters(pos, _cache.at!) < 25) return cached;
   }
 
-  final query = '[out:json][timeout:10];'
+  final query =
+      '[out:json][timeout:10];'
       'way(around:15,${pos.latitude},${pos.longitude})[highway];'
       'out tags center;';
 
@@ -99,8 +108,11 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos) async {
   for (final ep in _endpoints) {
     try {
       res = await http
-          .post(Uri.parse(ep),
-              body: {'data': query}, headers: {'User-Agent': _ua})
+          .post(
+            Uri.parse(ep),
+            body: {'data': query},
+            headers: {'User-Agent': _ua},
+          )
           .timeout(const Duration(seconds: 12));
       if (res.statusCode == 200) break;
     } catch (_) {
@@ -110,12 +122,14 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos) async {
   if (res == null || res.statusCode != 200) return cached;
 
   final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-  final elements = (data['elements'] as List? ?? []).cast<Map<String, dynamic>>();
+  final elements = (data['elements'] as List? ?? [])
+      .cast<Map<String, dynamic>>();
   if (elements.isEmpty) return cached;
 
   // Prefer drivable ways; fall back to everything (pedestrian streets etc.).
   final drivable = elements.where((e) {
-    final hw = ((e['tags'] as Map<String, dynamic>? ?? {})['highway'] ?? '') as String;
+    final hw =
+        ((e['tags'] as Map<String, dynamic>? ?? {})['highway'] ?? '') as String;
     return _isDrivable(hw);
   }).toList();
   final pool = drivable.isNotEmpty ? drivable : elements;
@@ -125,7 +139,10 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos) async {
   for (final e in pool) {
     final c = e['center'];
     if (c is! Map || c['lat'] == null || c['lon'] == null) continue;
-    final d = distanceMeters(pos, LatLng((c['lat'] as num).toDouble(), (c['lon'] as num).toDouble()));
+    final d = distanceMeters(
+      pos,
+      LatLng((c['lat'] as num).toDouble(), (c['lon'] as num).toDouble()),
+    );
     if (d < bestD) {
       bestD = d;
       best = e;
@@ -141,7 +158,7 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos) async {
     highway: highway,
     maxspeed: tags['maxspeed'] as String?,
     label: label,
-    speedLimit: _parseMaxspeed(tags['maxspeed'] as String?, fallback),
+    speedLimit: parseMaxspeed(tags['maxspeed'] as String?, fallback),
   );
   _cache.last = info;
   _cache.at = pos;
@@ -149,11 +166,11 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos) async {
 }
 
 bool _isDrivable(String hw) => !const {
-      'footway',
-      'path',
-      'steps',
-      'cycleway',
-      'bridleway',
-      'track',
-      'construction',
-    }.contains(hw);
+  'footway',
+  'path',
+  'steps',
+  'cycleway',
+  'bridleway',
+  'track',
+  'construction',
+}.contains(hw);

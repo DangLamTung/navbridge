@@ -85,7 +85,12 @@ String _tileHost(String template) {
 /// across the primary + fallback tile servers. Returns null when every
 /// server failed — callers fall back to a transparent tile.
 Future<http.Response?> _fetchTile(
-    int z, int x, int y, String primary, String source) async {
+  int z,
+  int x,
+  int y,
+  String primary,
+  String source,
+) async {
   final key = '$source/$z/$x/$y';
   if (_tileBlockedUntil.isAfter(DateTime.now())) return null; // all blocked
   if (_failedTiles.contains(key) || _inFlightTiles.contains(key)) return null;
@@ -103,8 +108,10 @@ Future<http.Response?> _fetchTile(
     _tileBlockedUntil = DateTime.now().add(_blockBackoff);
     _blockedTileServers.clear();
     _serverIndex = 0;
-    debugPrint('TILE: all tile servers blocked — pausing '
-        '${_blockBackoff.inMinutes} min');
+    debugPrint(
+      'TILE: all tile servers blocked — pausing '
+      '${_blockBackoff.inMinutes} min',
+    );
     return null;
   }
 
@@ -129,14 +136,18 @@ Future<http.Response?> _fetchTile(
     _lastTileRequest = DateTime.now();
     try {
       final res = await http
-          .get(Uri.parse(_tileUrl(template, z, x, y)),
-              headers: {'User-Agent': _ua})
+          .get(
+            Uri.parse(_tileUrl(template, z, x, y)),
+            headers: {'User-Agent': _ua},
+          )
           .timeout(const Duration(seconds: 8));
       if (res.statusCode == 403 || res.statusCode == 429) {
         // This provider blocked us — remember it and try the next one.
         _blockedTileServers.add(template);
-        debugPrint('TILE: ${_tileHost(template)} blocked '
-            '(${res.statusCode}) — switching server');
+        debugPrint(
+          'TILE: ${_tileHost(template)} blocked '
+          '(${res.statusCode}) — switching server',
+        );
         _serverIndex = (_serverIndex + 1) % _serverList.length;
         tried++;
         continue;
@@ -156,12 +167,15 @@ Future<http.Response?> _fetchTile(
       // legitimately be small and near-uniform (e.g. rural land at low zoom)
       // — flagging those would blank out whole areas.
       final host = _tileHost(template);
-      final blockProne = host.contains('openstreetmap.org') ||
+      final blockProne =
+          host.contains('openstreetmap.org') ||
           host.contains('basemaps.cartocdn.com');
       if (blockProne && await _looksLikeBlockPlaceholder(res.bodyBytes)) {
         _blockedTileServers.add(template);
-        debugPrint('TILE: $host served a block placeholder '
-            'for $key — switching server');
+        debugPrint(
+          'TILE: $host served a block placeholder '
+          'for $key — switching server',
+        );
         _serverIndex = (_serverIndex + 1) % _serverList.length;
         tried++;
         continue;
@@ -169,8 +183,10 @@ Future<http.Response?> _fetchTile(
       return res;
     } catch (e) {
       _failedTiles.add(key);
-      debugPrint('TILE: fetch failed $key from '
-          '${_tileHost(template)}: $e');
+      debugPrint(
+        'TILE: fetch failed $key from '
+        '${_tileHost(template)}: $e',
+      );
       return null;
     } finally {
       _tileInFlight--;
@@ -225,18 +241,52 @@ bool forceOffline = false;
 /// Base URL for bulk region tile downloads.
 ///
 /// MUST stay empty: bulk/pre-downloading whole regions from
-/// tile.openstreetmap.org violates the OSM tile usage policy. To enable
-/// region downloads, set this to a self-hosted or licensed tile server that
-/// returns `/z/x/y.png` tiles (e.g. 'https://tiles.example.org'). When empty,
-/// only tiles actually viewed are cached (compliant) and the downloader is
-/// disabled.
-const String tileDownloadBaseUrl = '';
+/// Bulk region downloads go to a NON-OSM tile server. tile.openstreetmap.org
+/// explicitly prohibits bulk/pre-downloading and has IP-banned this app before,
+/// so the region downloader never touches it.
+///
+/// Default is CARTO's free basemaps (no API key — already used as the live-map
+/// fallback). Point it at your own / licensed server at build time:
+/// `flutter build apk --dart-define=TILE_URL=https://HOST/{z}/{x}/{y}.png`
+/// Templates may use {z}/{x}/{y} and {s} (a/b/c subdomain balancing).
+const String tileDownloadBaseUrl = String.fromEnvironment(
+  'TILE_URL',
+  defaultValue:
+      'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+);
+
+/// Human-readable label of the bulk-download tile source (shown in the UI).
+String get tileDownloadSourceLabel {
+  try {
+    final host = Uri.parse(tileDownloadBaseUrl).host;
+    return host.isEmpty ? 'máy chủ tile' : host;
+  } catch (_) {
+    return 'máy chủ tile';
+  }
+}
 
 /// Average tile size (bytes) per zoom — used for pre-download size estimates.
 const Map<int, int> _avgBytes = {
-  0: 5000, 1: 5000, 2: 5000, 3: 6000, 4: 6000, 5: 7000, 6: 7000, 7: 8000,
-  8: 9000, 9: 10000, 10: 12000, 11: 14000, 12: 16000, 13: 20000, 14: 26000,
-  15: 36000, 16: 50000, 17: 70000, 18: 90000, 19: 110000,
+  0: 5000,
+  1: 5000,
+  2: 5000,
+  3: 6000,
+  4: 6000,
+  5: 7000,
+  6: 7000,
+  7: 8000,
+  8: 9000,
+  9: 10000,
+  10: 12000,
+  11: 14000,
+  12: 16000,
+  13: 20000,
+  14: 26000,
+  15: 36000,
+  16: 50000,
+  17: 70000,
+  18: 90000,
+  19: 110000,
 };
 
 int _avgTileBytes(int z) => _avgBytes[z] ?? 30000;
@@ -252,13 +302,15 @@ int _avgTileBytes(int z) => _avgBytes[z] ?? 30000;
 Future<bool> isOnline() async {
   if (forceOffline) return false; // locked to offline mode
   try {
-    final r = await Connectivity()
-        .checkConnectivity()
-        .timeout(const Duration(seconds: 4));
+    final r = await Connectivity().checkConnectivity().timeout(
+      const Duration(seconds: 4),
+    );
     final ok = r.isNotEmpty && !r.contains(ConnectivityResult.none);
     if (!ok) {
-      debugPrint('TILE: connectivity_plus reported none — will still try '
-          'the fetch');
+      debugPrint(
+        'TILE: connectivity_plus reported none — will still try '
+        'the fetch',
+      );
     }
     return true; // always try; only a real HTTP result tells the truth
   } catch (e) {
@@ -268,9 +320,9 @@ Future<bool> isOnline() async {
 }
 
 /// Stream of connectivity changes (true = online).
-Stream<bool> onlineStream() => Connectivity()
-    .onConnectivityChanged
-    .map((r) => r.isNotEmpty && !r.contains(ConnectivityResult.none));
+Stream<bool> onlineStream() => Connectivity().onConnectivityChanged.map(
+  (r) => r.isNotEmpty && !r.contains(ConnectivityResult.none),
+);
 
 // ---- slippy tile math --------------------------------------------------
 
@@ -279,8 +331,7 @@ int lonToTileX(double lon, int z) =>
 
 int latToTileY(double lat, int z) {
   final r = lat * math.pi / 180.0;
-  return ((1.0 -
-              math.log(math.tan(r) + 1.0 / math.cos(r)) / math.pi) /
+  return ((1.0 - math.log(math.tan(r) + 1.0 / math.cos(r)) / math.pi) /
           2.0 *
           math.pow(2, z))
       .floor();
@@ -402,27 +453,28 @@ class OfflineRegion {
   }
 
   Map<String, dynamic> toJson() => {
-        'name': name,
-        'swLat': swLat,
-        'swLon': swLon,
-        'neLat': neLat,
-        'neLon': neLon,
-        'minZoom': minZoom,
-        'maxZoom': maxZoom,
-        'downloadedAt': downloadedAt.toIso8601String(),
-      };
+    'name': name,
+    'swLat': swLat,
+    'swLon': swLon,
+    'neLat': neLat,
+    'neLon': neLon,
+    'minZoom': minZoom,
+    'maxZoom': maxZoom,
+    'downloadedAt': downloadedAt.toIso8601String(),
+  };
 
   factory OfflineRegion.fromJson(Map<String, dynamic> j) => OfflineRegion(
-        name: (j['name'] ?? 'region') as String,
-        swLat: (j['swLat'] as num).toDouble(),
-        swLon: (j['swLon'] as num).toDouble(),
-        neLat: (j['neLat'] as num).toDouble(),
-        neLon: (j['neLon'] as num).toDouble(),
-        minZoom: (j['minZoom'] as num).toInt(),
-        maxZoom: (j['maxZoom'] as num).toInt(),
-        downloadedAt:
-            DateTime.tryParse((j['downloadedAt'] ?? '') as String) ?? DateTime.now(),
-      );
+    name: (j['name'] ?? 'region') as String,
+    swLat: (j['swLat'] as num).toDouble(),
+    swLon: (j['swLon'] as num).toDouble(),
+    neLat: (j['neLat'] as num).toDouble(),
+    neLon: (j['neLon'] as num).toDouble(),
+    minZoom: (j['minZoom'] as num).toInt(),
+    maxZoom: (j['maxZoom'] as num).toInt(),
+    downloadedAt:
+        DateTime.tryParse((j['downloadedAt'] ?? '') as String) ??
+        DateTime.now(),
+  );
 }
 
 Future<List<OfflineRegion>> loadRegions() async {
@@ -443,17 +495,19 @@ Future<void> saveRegions(List<OfflineRegion> rs) async {
   final sup = await getApplicationSupportDirectory();
   final f = File('${sup.path}/offline_regions.json');
   await f.writeAsString(
-      jsonEncode([for (final r in rs) r.toJson()]), flush: true);
+    jsonEncode([for (final r in rs) r.toJson()]),
+    flush: true,
+  );
 }
 
 // ---- downloader --------------------------------------------------------
 
 /// Downloads all tiles of a region with progress + cancel support.
 ///
-/// Only enabled when [tileDownloadBaseUrl] points at a self-hosted / licensed
-/// tile server — bulk downloads from tile.openstreetmap.org are not allowed
-/// by the OSM tile usage policy. The downloader is single-threaded and
-/// rate-limited to ~1 tile/second.
+/// Uses a NON-OSM tile source ([tileDownloadBaseUrl] — default CARTO, or a
+/// self-hosted/licensed server via `--dart-define=TILE_URL`), so it never
+/// trips the OSM bulk-download ban. Single-threaded and rate-limited to keep
+/// any public host happy.
 class RegionDownloader {
   final OfflineRegion region;
   int done = 0;
@@ -469,13 +523,14 @@ class RegionDownloader {
   void cancel() => _cancel = true;
 
   Future<void> download(void Function(int done, int total) onProgress) async {
-    if (tileDownloadBaseUrl.isEmpty) return; // policy: no bulk OSM download
+    if (tileDownloadBaseUrl.isEmpty) return; // no source configured
     done = 0;
     failed = 0;
     _blocked = false;
     final b = region.bounds;
     var lastRequest = DateTime.now();
-    const minGap = Duration(milliseconds: 1050); // ~1 tile/s, policy-safe
+    // ~3 tiles/s — fast enough for a useful download, gentle on public hosts.
+    const minGap = Duration(milliseconds: 300);
     for (var z = region.minZoom; z <= region.maxZoom; z++) {
       if (_cancel) return;
       final x0 = lonToTileX(b.west, z);
@@ -490,7 +545,7 @@ class RegionDownloader {
             done++;
             continue;
           }
-          // Respect ~1 tile/s.
+          // Respect the rate limit.
           final wait = minGap - DateTime.now().difference(lastRequest);
           if (wait > Duration.zero) {
             await Future<void>.delayed(wait);
@@ -498,14 +553,20 @@ class RegionDownloader {
           lastRequest = DateTime.now();
           try {
             final res = await http
-                .get(Uri.parse('$tileDownloadBaseUrl/$z/$x/$y.png'),
-                    headers: {'User-Agent': _ua})
+                .get(
+                  Uri.parse(_tileUrl(tileDownloadBaseUrl, z, x, y)),
+                  headers: {'User-Agent': _ua},
+                )
                 .timeout(const Duration(seconds: 10));
             if (res.statusCode == 429 || res.statusCode == 403) {
               _blocked = true; // stop before we get IP-banned
               return;
             }
-            if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
+            // Only cache real PNG tiles (some servers return an HTML error
+            // page with HTTP 200).
+            if (res.statusCode == 200 &&
+                res.bodyBytes.isNotEmpty &&
+                _isPng(res.bodyBytes)) {
               f.createSync(recursive: true);
               f.writeAsBytesSync(res.bodyBytes);
             } else {
@@ -520,6 +581,17 @@ class RegionDownloader {
       }
     }
   }
+
+  static bool _isPng(List<int> b) =>
+      b.length >= 8 &&
+      b[0] == 0x89 &&
+      b[1] == 0x50 &&
+      b[2] == 0x4E &&
+      b[3] == 0x47 &&
+      b[4] == 0x0D &&
+      b[5] == 0x0A &&
+      b[6] == 0x1A &&
+      b[7] == 0x0A;
 }
 
 /// Remove every tile belonging to [r] from the store.
@@ -575,8 +647,9 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
 
   @override
   ImageStreamCompleter loadImage(
-          OfflineTileImage key, ImageDecoderCallback decode) =>
-      OneFrameImageStreamCompleter(_load(decode));
+    OfflineTileImage key,
+    ImageDecoderCallback decode,
+  ) => OneFrameImageStreamCompleter(_load(decode));
 
   Future<ImageInfo> _load(ImageDecoderCallback decode) async {
     final file = await tileFile(z, x, y, source: source);
@@ -592,8 +665,7 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
       // Rate-limited + serialized so we stay under the OSM tile policy,
       // with automatic failover to other free OSM tile servers when one
       // blocks us (403/429 — e.g. an IP ban).
-      final res =
-          await _fetchTile(z, x, y, options.urlTemplate ?? '', source);
+      final res = await _fetchTile(z, x, y, options.urlTemplate ?? '', source);
       if (res != null && res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
         file.createSync(recursive: true);
         file.writeAsBytesSync(res.bodyBytes);
@@ -604,7 +676,10 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
     return _decode(decode, TileProvider.transparentImage);
   }
 
-  Future<ImageInfo> _decode(ImageDecoderCallback decode, Uint8List bytes) async {
+  Future<ImageInfo> _decode(
+    ImageDecoderCallback decode,
+    Uint8List bytes,
+  ) async {
     final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
     final codec = await decode(buffer);
     final frame = await codec.getNextFrame();
