@@ -61,12 +61,16 @@ import 'package:navbridge/ui/stops_panel.dart';
 import 'package:navbridge/ui/suggestions_list.dart';
 import 'package:navbridge/ui/widgets.dart';
 
+part 'nav_bars.dart';
 part 'nav_gps.dart';
+part 'nav_map.dart';
 part 'nav_navigation.dart';
 part 'nav_poi.dart';
+part 'nav_route_edit.dart';
+part 'nav_screens.dart';
 part 'nav_search.dart';
-part 'nav_ui.dart';
 part 'nav_voice.dart';
+part 'nav_weather.dart';
 
 
 class NavigationPage extends StatefulWidget {
