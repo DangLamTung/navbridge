@@ -2,13 +2,61 @@ part of 'navigation_page.dart';
 
 extension _NavGps on _NavigationPageState {
 
-  Future<void> _requestPermission() async {
-    final p = await Geolocator.checkPermission();
+  /// Ensure the location permission is granted. Returns true when the app may
+  /// listen for GPS fixes. Handles the two real-world silent killers:
+  ///   1. Location SERVICES (the phone's GPS toggle) turned off.
+  ///   2. Permission denied "forever" (user picked "don't ask again") — the
+  ///      permission dialog never re-appears, so without this the app just
+  ///      never gets a fix.
+  Future<bool> _requestPermission() async {
+    // 1. Location services must be enabled first, or geolocator throws
+    //    LocationServiceDisabledException on every stream attempt.
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      debugPrint('GPS: location service DISABLED on device');
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Bật định vị (GPS) trên điện thoại để dẫn đường.'),
+              duration: Duration(seconds: 4),
+            ),
+          );
+      }
+      return false;
+    }
+
+    // 2. Permission. If it was denied "forever", the dialog won't reappear —
+    //    send the user to the system settings screen for this app.
+    var p = await Geolocator.checkPermission();
+    if (p == LocationPermission.deniedForever) {
+      debugPrint('GPS: permission denied forever — opening app settings');
+      await Geolocator.openAppSettings();
+      p = await Geolocator.checkPermission();
+      return p == LocationPermission.whileInUse ||
+          p == LocationPermission.always;
+    }
+    if (p == LocationPermission.denied) {
+      p = await Geolocator.requestPermission();
+    }
     if (p == LocationPermission.denied ||
         p == LocationPermission.deniedForever) {
-      await Geolocator.requestPermission();
+      debugPrint('GPS: permission denied ($p)');
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Cần quyền vị trí để dẫn đường.'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+      }
+      return false;
     }
+    return true;
   }
+
   void _startGps() {
     _gpsSub?.cancel();
     _gpsSub =
@@ -53,6 +101,22 @@ extension _NavGps on _NavigationPageState {
             _handleNav(pos, speedMps: p.speed);
           },
           onError: (Object e) {
+            // Distinguish the two recoverable real-world conditions so the
+            // user gets a message instead of an invisible no-fix state.
+            if (e is LocationServiceDisabledException) {
+              debugPrint('GPS: location service disabled (stream)');
+              if (mounted) {
+                ScaffoldMessenger.of(context)
+                  ..hideCurrentSnackBar()
+                  ..showSnackBar(
+                    const SnackBar(
+                      content: Text('Bật định vị (GPS) trên điện thoại.'),
+                      duration: Duration(seconds: 4),
+                    ),
+                  );
+              }
+              return; // don't hot-restart into the same wall — wait for toggle
+            }
             debugPrint('GPS: stream error: $e — restarting');
             _restartGps();
           },

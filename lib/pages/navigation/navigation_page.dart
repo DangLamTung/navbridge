@@ -80,7 +80,8 @@ class NavigationPage extends StatefulWidget {
   State<NavigationPage> createState() => _NavigationPageState();
 }
 
-class _NavigationPageState extends State<NavigationPage> {
+class _NavigationPageState extends State<NavigationPage>
+    with WidgetsBindingObserver {
   final MapController _map = MapController();
   final BleClock _clock = BleClock();
 
@@ -234,6 +235,7 @@ class _NavigationPageState extends State<NavigationPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _clock.linkStream.listen((l) {
       if (!mounted) return;
       setState(() {
@@ -245,8 +247,7 @@ class _NavigationPageState extends State<NavigationPage> {
       });
     });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _requestPermission();
-      _startGps();
+      if (await _requestPermission()) _startGps();
       // Load the on-device routing graph if one is already downloaded.
       if (await routingGraphPresent()) {
         final ok = await OfflineRouter.instance.load(await routingGraphPath());
@@ -290,8 +291,22 @@ class _NavigationPageState extends State<NavigationPage> {
     );
   }
 
+  /// When the app comes back to the foreground (e.g. after the user enabled
+  /// the phone's GPS toggle or granted location permission in system
+  /// settings), re-check and restart the GPS stream — otherwise a device with
+  /// location services turned off would silently never get a fix.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    if (_simulating) return;
+    Future(() async {
+      if (await _requestPermission() && !_simulating) _startGps();
+    });
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
     _searchCtrl.dispose();
     _searchFocus.dispose();
