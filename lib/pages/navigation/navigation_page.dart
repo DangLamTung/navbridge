@@ -115,6 +115,11 @@ class _NavigationPageState extends State<NavigationPage>
   LatLng? _current;
   double? _heading;
 
+  /// True once the browse map has been panned to the first real GPS fix, so
+  /// the "you are here" dot is on screen (the map starts at the default HCMC
+  /// centre, which can be far from the user's real position).
+  bool _centeredOnGps = false;
+
   /// Smoothed route-ahead bearing (deg, 0=N) from `engine.routeBearing()` —
   /// the direction of the road ahead, low-pass filtered so the arrow and the
   /// heading-up camera never flicker. Passed to the vector map as `bearing`.

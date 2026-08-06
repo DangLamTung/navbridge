@@ -77,7 +77,23 @@ extension _NavGps on _NavigationPageState {
             final pos = LatLng(p.latitude, p.longitude);
             _current = pos;
             _heading = p.heading.isNaN ? null : p.heading;
-            if (_engine == null || !_navigating) return;
+            // Browse mode: no engine/route yet — still redraw so the blue
+            // current-location marker follows the phone. Without this setState
+            // the marker never appeared on the browse map even though the GPS
+            // stream was delivering fixes.
+            if (_engine == null || !_navigating) {
+              // First real fix: pan the browse map to the user so the blue
+              // dot is actually on screen (the map starts centred on the
+              // default HCMC point, which may be far from the real location —
+              // "GPS doesn't work" when the marker was simply off-screen).
+              if (!_centeredOnGps && !_navigating && !_simulating) {
+                _centeredOnGps = true;
+                final cur = _current;
+                if (cur != null) _map.move(cur, 16);
+              }
+              if (mounted) setNavState(() {});
+              return;
+            }
             // Keep a short trace for online OSRM /match road-snapping.
             _gpsWindow.add(pos);
             if (_gpsWindow.length > 15) _gpsWindow.removeAt(0);
