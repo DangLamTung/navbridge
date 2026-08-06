@@ -3,7 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 
-import 'widgets.dart';
+import 'package:navbridge/ui/widgets.dart';
 
 class MapControls extends StatelessWidget {
   const MapControls({

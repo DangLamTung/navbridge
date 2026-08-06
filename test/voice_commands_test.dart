@@ -3,7 +3,7 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:navbridge/voice_commands.dart';
+import 'package:navbridge/services/voice_commands.dart';
 
 void main() {
   group('parseVoiceCommand', () {

@@ -6,8 +6,8 @@ import 'dart:math' as math;
 
 import 'package:latlong2/latlong.dart';
 
-import 'nav_protocol.dart';
-import 'osrm.dart';
+import 'package:navbridge/core/nav_protocol.dart';
+import 'package:navbridge/services/osrm.dart';
 
 /// Everything needed to build a nav frame for the clock.
 class NavProgress {

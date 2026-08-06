@@ -3,7 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../nav_protocol.dart';
+import 'package:navbridge/core/nav_protocol.dart';
 
 /// Google blue used across the app.
 const Color kAppBlue = Color(0xFF4285F4);

@@ -10,13 +10,13 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
-import 'offline_router.dart';
-import 'offline_tiles.dart';
-import 'nav_map_store.dart';
-import 'settings.dart';
-import 'terrain.dart';
-import 'ui/widgets.dart';
-import 'vietmap_config.dart' show dataSource;
+import 'package:navbridge/services/offline_router.dart';
+import 'package:navbridge/services/offline_tiles.dart';
+import 'package:navbridge/services/nav_map_store.dart';
+import 'package:navbridge/core/settings.dart';
+import 'package:navbridge/services/terrain.dart';
+import 'package:navbridge/ui/widgets.dart';
+import 'package:navbridge/services/vietmap_config.dart' show dataSource;
 
 String formatBytes(int b) {
   if (b >= 1 << 30) return '${(b / (1 << 30)).toStringAsFixed(2)} GB';

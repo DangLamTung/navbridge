@@ -9,7 +9,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
-import 'vietmap_config.dart';
+import 'package:navbridge/services/vietmap_config.dart';
 
 const _ua = 'navbridge/1.0 (Vietmap search)';
 

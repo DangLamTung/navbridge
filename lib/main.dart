@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'navigation_page.dart';
+import 'package:navbridge/pages/navigation/navigation_page.dart';
 
 void main() {
   runApp(const NavBridgeApp());

@@ -6,9 +6,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
-import 'trip_logger.dart';
-import 'trip_plan.dart';
-import 'ui/widgets.dart';
+import 'package:navbridge/services/trip_logger.dart';
+import 'package:navbridge/core/trip_plan.dart';
+import 'package:navbridge/ui/widgets.dart';
 
 class TripsScreen extends StatefulWidget {
   const TripsScreen({super.key});

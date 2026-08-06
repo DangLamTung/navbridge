@@ -9,10 +9,10 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../nav_engine.dart';
-import '../nav_protocol.dart';
-import '../osrm.dart';
-import 'widgets.dart';
+import 'package:navbridge/services/nav_engine.dart';
+import 'package:navbridge/core/nav_protocol.dart';
+import 'package:navbridge/services/osrm.dart';
+import 'package:navbridge/ui/widgets.dart';
 
 class NavTopBar extends StatelessWidget {
   const NavTopBar({

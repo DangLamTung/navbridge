@@ -8,8 +8,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'ble_clock.dart';
-import 'config.dart';
+import 'package:navbridge/services/ble_clock.dart';
+import 'package:navbridge/core/config.dart';
 
 class DevicePickerSheet extends StatefulWidget {
   final BleClock clock;

@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 
-import 'package:navbridge/offline_poi.dart';
+import 'package:navbridge/services/offline_poi.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

@@ -18,9 +18,9 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'offline_poi.dart';
+import 'package:navbridge/services/offline_poi.dart';
 import 'offline_tiles.dart' show forceOffline;
-import 'vietmap_api.dart';
+import 'package:navbridge/services/vietmap_api.dart';
 import 'vietmap_config.dart' show VietmapConfig, dataSource;
 
 const _nominatimBase = 'https://nominatim.openstreetmap.org';

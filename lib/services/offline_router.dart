@@ -15,10 +15,10 @@ import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'offline_tiles.dart' show forceOffline;
-import 'osrm.dart';
-import 'route_profile.dart';
+import 'package:navbridge/services/osrm.dart';
+import 'package:navbridge/core/route_profile.dart';
 import 'vietmap_config.dart' show dataSource;
-import 'vietmap_router.dart';
+import 'package:navbridge/services/vietmap_router.dart';
 
 const MethodChannel _channel = MethodChannel('navbridge/routing');
 

@@ -13,8 +13,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-import 'config.dart';
-import 'nav_protocol.dart';
+import 'package:navbridge/core/config.dart';
+import 'package:navbridge/core/nav_protocol.dart';
 
 /// Link state exposed to the UI (decoupled from flutter_blue_plus types).
 enum ClockLink { off, connecting, connected }

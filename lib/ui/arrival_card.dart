@@ -4,7 +4,7 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../nav_engine.dart';
+import 'package:navbridge/services/nav_engine.dart';
 
 class ArrivalCard extends StatelessWidget {
   const ArrivalCard({

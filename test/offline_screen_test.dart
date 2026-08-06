@@ -2,7 +2,7 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:navbridge/offline_screen.dart';
+import 'package:navbridge/pages/offline_screen.dart';
 
 void main() {
   group('formatBytes', () {

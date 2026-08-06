@@ -3,9 +3,9 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../elevation.dart';
-import '../route_profile.dart';
-import 'widgets.dart';
+import 'package:navbridge/services/elevation.dart';
+import 'package:navbridge/core/route_profile.dart';
+import 'package:navbridge/ui/widgets.dart';
 
 /// 59000 → "59.000 ₫".
 String _formatVnd(int v) {

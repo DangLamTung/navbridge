@@ -4,8 +4,8 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../overpass.dart';
-import 'widgets.dart';
+import 'package:navbridge/services/overpass.dart';
+import 'package:navbridge/ui/widgets.dart';
 
 class RoadInfoChip extends StatelessWidget {
   const RoadInfoChip({

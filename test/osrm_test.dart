@@ -3,7 +3,7 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:navbridge/osrm.dart';
+import 'package:navbridge/services/osrm.dart';
 
 void main() {
   group('decodePolyline', () {

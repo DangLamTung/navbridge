@@ -4,8 +4,8 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_map/flutter_map.dart' show LatLngBounds;
 import 'package:latlong2/latlong.dart';
-import 'package:navbridge/offline_tiles.dart' show lonToTileX, latToTileY;
-import 'package:navbridge/terrain.dart';
+import 'package:navbridge/services/offline_tiles.dart' show lonToTileX, latToTileY;
+import 'package:navbridge/services/terrain.dart';
 
 void main() {
   group('terrariumDecode', () {

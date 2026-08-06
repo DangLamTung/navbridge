@@ -6,8 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../offline_poi.dart';
-import 'widgets.dart';
+import 'package:navbridge/services/offline_poi.dart';
+import 'package:navbridge/ui/widgets.dart';
 
 /// Bottom-sheet detail card shown when the user taps an offline POI result.
 /// Shows the rich OSM metadata when present, plus a "đi đến" (navigate) action.

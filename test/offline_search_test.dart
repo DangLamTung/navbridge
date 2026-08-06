@@ -3,8 +3,8 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:navbridge/offline_tiles.dart' show forceOffline;
-import 'package:navbridge/osm_api.dart';
+import 'package:navbridge/services/offline_tiles.dart' show forceOffline;
+import 'package:navbridge/services/osm_api.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

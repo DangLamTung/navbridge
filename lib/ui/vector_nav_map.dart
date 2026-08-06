@@ -20,10 +20,10 @@ import 'package:latlong2/latlong.dart' as ll;
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'osrm.dart';
-import 'poi_search.dart';
-import 'terrain.dart';
-import 'trip_plan.dart';
+import 'package:navbridge/services/osrm.dart';
+import 'package:navbridge/services/poi_search.dart';
+import 'package:navbridge/services/terrain.dart';
+import 'package:navbridge/core/trip_plan.dart';
 
 /// Built-in car marker icons (see assets/offline_map/icons/).
 const List<String> kCarIcons = [

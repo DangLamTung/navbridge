@@ -3,7 +3,7 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:navbridge/trip_logger.dart';
+import 'package:navbridge/services/trip_logger.dart';
 
 void main() {
   group('defaultFileName', () {

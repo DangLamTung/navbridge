@@ -2,7 +2,7 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:navbridge/route_profile.dart';
+import 'package:navbridge/core/route_profile.dart';
 
 void main() {
   group('RouteProfile', () {

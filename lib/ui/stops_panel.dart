@@ -4,8 +4,8 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../trip_plan.dart';
-import 'widgets.dart';
+import 'package:navbridge/core/trip_plan.dart';
+import 'package:navbridge/ui/widgets.dart';
 
 class StopsPanel extends StatelessWidget {
   const StopsPanel({

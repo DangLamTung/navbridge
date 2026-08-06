@@ -6,7 +6,7 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:navbridge/vietmap_config.dart';
+import 'package:navbridge/services/vietmap_config.dart';
 
 void main() {
   test('no Vietmap keys are compiled in by default', () {

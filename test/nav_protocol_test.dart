@@ -4,7 +4,7 @@ library;
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:navbridge/nav_protocol.dart';
+import 'package:navbridge/core/nav_protocol.dart';
 
 void main() {
   group('buildNavFrame', () {

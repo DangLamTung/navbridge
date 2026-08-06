@@ -3,9 +3,9 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../offline_poi.dart';
-import '../osm_api.dart';
-import 'widgets.dart';
+import 'package:navbridge/services/offline_poi.dart';
+import 'package:navbridge/services/osm_api.dart';
+import 'package:navbridge/ui/widgets.dart';
 
 class SuggestionList extends StatelessWidget {
   const SuggestionList({

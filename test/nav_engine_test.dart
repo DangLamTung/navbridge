@@ -3,9 +3,9 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:navbridge/nav_engine.dart';
-import 'package:navbridge/nav_protocol.dart';
-import 'package:navbridge/osrm.dart';
+import 'package:navbridge/services/nav_engine.dart';
+import 'package:navbridge/core/nav_protocol.dart';
+import 'package:navbridge/services/osrm.dart';
 
 /// A straight ~1.1 km eastbound route with 101 geometry points (~11 m apart)
 /// and two steps: depart + arrive.

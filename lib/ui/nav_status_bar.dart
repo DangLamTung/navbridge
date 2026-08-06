@@ -9,8 +9,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../nav_protocol.dart';
-import '../weather.dart';
+import 'package:navbridge/core/nav_protocol.dart';
+import 'package:navbridge/services/weather.dart';
 import 'widgets.dart' show kAppBlue;
 
 /// Which bottom-bar "slide" is visible: the path-time progress or the

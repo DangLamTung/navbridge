@@ -2,7 +2,7 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:navbridge/offline_tiles.dart';
+import 'package:navbridge/services/offline_tiles.dart';
 
 void main() {
   group('region download source', () {
