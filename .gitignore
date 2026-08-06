@@ -64,3 +64,6 @@ tools/data/saigon.pmtiles
 # Offline POI build intermediates (regenerate with tools/poi/build_pois.py).
 tools/poi/*.osm.pbf
 tools/poi/*.geojson
+
+# Android build outputs
+android/build/
