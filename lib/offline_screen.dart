@@ -14,6 +14,7 @@ import 'offline_router.dart';
 import 'offline_tiles.dart';
 import 'nav_map_store.dart';
 import 'settings.dart';
+import 'terrain.dart';
 import 'ui/widgets.dart';
 import 'vietmap_config.dart' show dataSource;
 
@@ -52,6 +53,12 @@ class _OfflineScreenState extends State<OfflineScreen> {
   int _navDone = 0;
   int _navTotal = 1;
 
+  // --- offline 3D terrain (DEM, downloadable) ---
+  int _terrainBytes = 0;
+  bool _terrainDownloading = false;
+  int _terrainDone = 0;
+  int _terrainTotal = 1;
+
   // --- on-device routing graph (GraphHopper) ---
   bool _graphHas = false;
   bool _graphLoaded = false;
@@ -65,6 +72,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
     _reload();
     _refreshGraph();
     _refreshNavMap();
+    _refreshTerrain();
     onlineStream().listen((o) => setState(() => _online = o));
     isOnline().then((o) => setState(() => _online = o));
     // The global reflects the persisted choice AND any session override (the
@@ -198,6 +206,77 @@ class _OfflineScreenState extends State<OfflineScreen> {
       );
     }
     await _refreshNavMap();
+  }
+
+  // --- offline 3D terrain (DEM) -------------------------------------
+
+  Future<void> _refreshTerrain() async {
+    var bytes = 0;
+    try {
+      final root = await terrainTilesRoot();
+      final dir = Directory(root);
+      if (dir.existsSync()) {
+        for (final f in dir.listSync(recursive: true)) {
+          if (f is File && f.path.endsWith('.png')) bytes += f.lengthSync();
+        }
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _terrainBytes = bytes);
+  }
+
+  Future<void> _downloadTerrain() async {
+    if (_terrainDownloading) return;
+    setState(() {
+      _terrainDownloading = true;
+      _terrainDone = 0;
+      _terrainTotal = 1;
+    });
+    final dl = TerrainDownloader(_bounds);
+    _terrainTotal = dl.total;
+    try {
+      await dl.download((done, total) {
+        if (mounted) {
+          setState(() {
+            _terrainDone = done;
+            _terrainTotal = total;
+          });
+        }
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              dl.blocked
+                  ? 'Máy chủ địa hình giới hạn tải (429/403). Thử lại sau.'
+                  : 'Đã tải xong địa hình 3D.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Tải địa hình thất bại: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _terrainDownloading = false);
+      await _refreshTerrain();
+    }
+  }
+
+  Future<void> _deleteTerrain() async {
+    final root = await terrainTilesRoot();
+    final dir = Directory(root);
+    try {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    } catch (_) {}
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đã xoá địa hình 3D đã tải.')),
+      );
+    }
+    await _refreshTerrain();
   }
 
   void _preset(LatLngBounds b) => setState(() => _bounds = b);
@@ -557,6 +636,96 @@ class _OfflineScreenState extends State<OfflineScreen> {
                             onPressed: _deleteNavMap,
                             icon: const Icon(Icons.delete_outline),
                             tooltip: 'Xoá bản đồ đã tải',
+                          ),
+                        ],
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Địa hình 3D (DEM)',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Material(
+            color: const Color(0xFFF1F3F4),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        _terrainBytes > 0
+                            ? Icons.terrain
+                            : Icons.download_for_offline_outlined,
+                        size: 18,
+                        color: kAppBlue,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _terrainBytes > 0
+                              ? 'Địa hình 3D (${formatBytes(_terrainBytes)})'
+                              : 'Chưa có dữ liệu địa hình',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _terrainBytes > 0
+                        ? 'Đã tải cho vùng bên dưới — bật nút "⛰ 3D" trên màn '
+                              'hình chỉ đường để thấy đồi núi nổi 3D. Cũng dùng '
+                              'để tính độ cao (lên/xuống) tuyến đường khi ngoại '
+                              'tuyến.'
+                        : 'Tải dữ liệu độ cao (Terrarium, miễn phí) cho vùng '
+                              '"Tải cả vùng" bên dưới để bản đồ dẫn đường hiển '
+                              'thị đồi núi nổi 3D và tính độ cao tuyến đường khi '
+                              'không có mạng.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_terrainDownloading) ...[
+                    LinearProgressIndicator(
+                      value: _terrainTotal == 0
+                          ? 0
+                          : _terrainDone / _terrainTotal,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${_terrainTotal == 0 ? 0 : (_terrainDone * 100 / _terrainTotal).toStringAsFixed(0)}% '
+                      '($_terrainDone / $_terrainTotal ô)',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ] else
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _online ? _downloadTerrain : null,
+                            icon: const Icon(Icons.terrain, size: 18),
+                            label: Text(
+                              _terrainBytes > 0 ? 'Tải lại' : 'Tải địa hình',
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                        ),
+                        if (_terrainBytes > 0) ...[
+                          const SizedBox(width: 8),
+                          IconButton(
+                            onPressed: _deleteTerrain,
+                            icon: const Icon(Icons.delete_outline),
+                            tooltip: 'Xoá địa hình đã tải',
                           ),
                         ],
                       ],

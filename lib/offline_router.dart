@@ -29,16 +29,30 @@ class OfflineRouter {
 
   bool _loaded = false;
   bool get isLoaded => _loaded;
+  Completer<void>? _loadCompleter;
+
+  /// Completes once the graph has finished loading (or failed to load).
+  /// Offline routing awaits this so it doesn't fail while the graph is still
+  /// loading at startup (it can take ~60 s on low-end phones).
+  Future<void> get ready {
+    if (_loaded) return Future.value();
+    final c = _loadCompleter;
+    if (c == null) return Future.value();
+    return c.future;
+  }
 
   /// Load the graph at [graphPath] (a folder, or a `.ghz` zip — the native
   /// side extracts it). Returns true when routing is ready.
   Future<bool> load(String graphPath) async {
+    _loadCompleter ??= Completer<void>();
     try {
       final ok = await _channel.invokeMethod<bool>('load', {'dir': graphPath});
       _loaded = ok ?? false;
+      if (!_loadCompleter!.isCompleted) _loadCompleter!.complete();
       return _loaded;
     } catch (e) {
       debugPrint('ROUTER: load error: $e');
+      if (!_loadCompleter!.isCompleted) _loadCompleter!.complete();
       return false;
     }
   }
@@ -87,18 +101,27 @@ class OfflineRouter {
       }
       // Platform-channel maps decode as Map<Object?, Object?>, so a typed
       // invokeMapMethod<String, dynamic> cast throws. Convert explicitly.
-      final raw = await _channel.invokeMethod<Object?>('route', {
-        'points': flat,
-        'alternatives': maxAlternatives,
-        'avoidMotorway': avoidMotorway,
-        'avoidFerry': avoidFerry,
-      });
-      if (raw == null) return const [];
+      final raw = await _channel
+          .invokeMethod<Object?>('route', {
+            'points': flat,
+            'alternatives': maxAlternatives,
+            'avoidMotorway': avoidMotorway,
+            'avoidFerry': avoidFerry,
+          })
+          .timeout(const Duration(seconds: 90));
+      if (raw == null) {
+        debugPrint('ROUTER: route returned null (no path)');
+        return const [];
+      }
       // Kotlin returns a plain List of Maps (best first).
       final rawList = (raw as List).cast<Object?>();
+      debugPrint('ROUTER: offline route paths=${rawList.length}');
       return [
         for (final r in rawList) _parse(Map<String, dynamic>.from(r as Map)),
       ];
+    } on TimeoutException {
+      debugPrint('ROUTER: offline route TIMED OUT (90s)');
+      return const [];
     } catch (e) {
       debugPrint('ROUTER: route error: $e');
       return const [];
@@ -282,14 +305,19 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
       debugPrint('VIETMAP: route failed: $e — falling back to OSRM');
     }
   }
-  if (profile == RouteProfile.car && OfflineRouter.instance.isLoaded) {
-    final local = await OfflineRouter.instance.route(
-      points,
-      maxAlternatives: maxAlternatives,
-      avoidMotorway: avoidHighway,
-      avoidFerry: avoidFerry,
-    );
-    if (local.isNotEmpty) return local;
+  if (profile == RouteProfile.car) {
+    // Wait for the on-device graph if it's still loading at startup (it can
+    // take ~60 s on low-end phones), so offline routing doesn't fail early.
+    await OfflineRouter.instance.ready;
+    if (OfflineRouter.instance.isLoaded) {
+      final local = await OfflineRouter.instance.route(
+        points,
+        maxAlternatives: maxAlternatives,
+        avoidMotorway: avoidHighway,
+        avoidFerry: avoidFerry,
+      );
+      if (local.isNotEmpty) return local;
+    }
   }
   if (forceOffline) {
     throw StateError(

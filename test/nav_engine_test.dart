@@ -238,5 +238,68 @@ void main() {
       final back = engine.snapToRoute(side);
       expect(distanceMeters(back, on), lessThan(3));
     });
+
+    test('routeBearing points along the road ahead (eastbound)', () {
+      final engine = TurnByTurnEngine(_straightRoute());
+      // Anywhere along the straight eastbound road the ahead-bearing is 90°.
+      for (final d in [100.0, 400.0, 700.0]) {
+        engine.snapToRoute(engine.positionAtDistance(d));
+        engine.update(engine.positionAtDistance(d));
+        expect(engine.routeBearing(), closeTo(90, 6));
+      }
+    });
+
+    test('routeBearing is stable under repeated noisy fixes', () {
+      final engine = TurnByTurnEngine(_straightRoute());
+      var prev = -1.0;
+      // Repeated calls must not make the bearing jump around (the old
+      // nearest-segment scan flipped between segments at vertices).
+      for (var d = 0.0; d < 900; d += 25) {
+        final on = engine.positionAtDistance(d);
+        final noisy = LatLng(
+          on.latitude + (d * 0.000031) % 0.00018 - 0.00009,
+          on.longitude + 0.00005,
+        );
+        engine.snapToRoute(noisy);
+        engine.update(noisy);
+        final b = engine.routeBearing();
+        expect(b, closeTo(90, 12)); // always ~east, never flipping to west
+        if (prev >= 0) {
+          expect((b - prev).abs(), lessThan(6)); // no per-fix jumps
+        }
+        prev = b;
+      }
+    });
+
+    test('routeBearing follows the road through a bend', () {
+      // East then south.
+      final geometry = [
+        const LatLng(10.82, 106.62),
+        const LatLng(10.82, 106.64),
+        const LatLng(10.80, 106.64),
+      ];
+      final engine = TurnByTurnEngine(
+        OsrmRoute(
+          distance: 5000,
+          duration: 400,
+          geometry: geometry,
+          steps: const [],
+        ),
+      );
+      // On the east-west leg → east (≈90°).
+      engine.snapToRoute(const LatLng(10.82, 106.63));
+      expect(engine.routeBearing(), closeTo(90, 10));
+      // Southbound straight road → south (≈180°).
+      final south = TurnByTurnEngine(
+        OsrmRoute(
+          distance: 2500,
+          duration: 200,
+          geometry: [const LatLng(10.82, 106.64), const LatLng(10.80, 106.64)],
+          steps: const [],
+        ),
+      );
+      south.snapToRoute(const LatLng(10.81, 106.6401));
+      expect(south.routeBearing(), closeTo(180, 10));
+    });
   });
 }

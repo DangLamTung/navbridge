@@ -13,10 +13,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'offline_poi.dart';
 import 'offline_tiles.dart' show forceOffline;
 import 'vietmap_api.dart';
 import 'vietmap_config.dart' show VietmapConfig, dataSource;
@@ -35,12 +37,17 @@ class OsmSuggestion {
   /// from a place lookup on selection) or 'google' (has coords).
   final String source;
 
+  /// Optional bundled offline POI (from `vietnam_pois.json`) — when set, the
+  /// UI can show the wiki-style info card (address/phone/description/…).
+  final OfflinePoi? poi;
+
   OsmSuggestion({
     required this.refId,
     required this.display,
     required this.lat,
     required this.lng,
     this.source = 'osm',
+    this.poi,
   });
 }
 
@@ -98,6 +105,95 @@ Future<void> _saveSearchCache() async {
   } catch (_) {}
 }
 
+/// Bundled offline place index (cities / districts / landmarks of Việt Nam
+/// with coordinates) — searched ON-DEVICE so geocoding works with no network.
+List<OsmSuggestion>? _offlinePlaces;
+bool _offlinePlacesLoaded = false;
+
+Future<void> _loadOfflinePlaces() async {
+  if (_offlinePlacesLoaded) return;
+  _offlinePlacesLoaded = true;
+  try {
+    final raw = await rootBundle.loadString(
+      'assets/offline_map/vietnam_places.json',
+    );
+    final list = jsonDecode(raw) as List;
+    _offlinePlaces = [
+      for (final e in list.cast<Map<String, dynamic>>())
+        OsmSuggestion(
+          refId: 'offline/${e['name']}',
+          display: (e['name'] ?? '') as String,
+          lat: ((e['lat'] ?? 0) as num).toDouble(),
+          lng: ((e['lng'] ?? 0) as num).toDouble(),
+          source: 'offline',
+        ),
+    ];
+  } catch (_) {
+    _offlinePlaces = const [];
+  }
+}
+
+/// Case-insensitive substring match over the bundled offline place index.
+Future<List<OsmSuggestion>> _offlineSearch(String text, int limit) async {
+  await _loadOfflinePlaces();
+  final places = _offlinePlaces ?? const <OsmSuggestion>[];
+  // Match WITHOUT Vietnamese diacritics so "ha noi" finds "Hà Nội".
+  final q = _removeDiacritics(text.trim().toLowerCase());
+  if (q.isEmpty) return const [];
+  // Rank: exact / starts-with first, then contains.
+  final starts = <OsmSuggestion>[];
+  final contains = <OsmSuggestion>[];
+  for (final p in places) {
+    final name = _removeDiacritics(p.display.toLowerCase());
+    if (name == q) {
+      starts.insert(0, p);
+    } else if (name.startsWith(q)) {
+      starts.add(p);
+    } else if (name.contains(q)) {
+      contains.add(p);
+    }
+  }
+  return [...starts, ...contains].take(limit).toList();
+}
+
+/// Strips Vietnamese diacritics (tone marks + đ) so search works with or
+/// without accents. Returns the input unchanged for non-Vietnamese text.
+String _removeDiacritics(String s) {
+  const map = {
+    'à': 'a', 'á': 'a', 'ả': 'a', 'ã': 'a', 'ạ': 'a',
+    'ă': 'a', 'ằ': 'a', 'ắ': 'a', 'ẳ': 'a', 'ẵ': 'a', 'ặ': 'a',
+    'â': 'a', 'ầ': 'a', 'ấ': 'a', 'ẩ': 'a', 'ẫ': 'a', 'ậ': 'a',
+    'è': 'e', 'é': 'e', 'ẻ': 'e', 'ẽ': 'e', 'ẹ': 'e',
+    'ê': 'e', 'ề': 'e', 'ế': 'e', 'ể': 'e', 'ễ': 'e', 'ệ': 'e',
+    'ì': 'i', 'í': 'i', 'ỉ': 'i', 'ĩ': 'i', 'ị': 'i',
+    'ò': 'o', 'ó': 'o', 'ỏ': 'o', 'õ': 'o', 'ọ': 'o',
+    'ô': 'o', 'ồ': 'o', 'ố': 'o', 'ổ': 'o', 'ỗ': 'o', 'ộ': 'o',
+    'ơ': 'o', 'ờ': 'o', 'ớ': 'o', 'ở': 'o', 'ỡ': 'o', 'ợ': 'o',
+    'ù': 'u', 'ú': 'u', 'ủ': 'u', 'ũ': 'u', 'ụ': 'u',
+    'ư': 'u', 'ừ': 'u', 'ứ': 'u', 'ử': 'u', 'ữ': 'u', 'ự': 'u',
+    'ỳ': 'y', 'ý': 'y', 'ỷ': 'y', 'ỹ': 'y', 'ỵ': 'y',
+    'đ': 'd',
+    'À': 'A', 'Á': 'A', 'Ả': 'A', 'Ã': 'A', 'Ạ': 'A',
+    'Ă': 'A', 'Ằ': 'A', 'Ắ': 'A', 'Ẳ': 'A', 'Ẵ': 'A', 'Ặ': 'A',
+    'Â': 'A', 'Ầ': 'A', 'Ấ': 'A', 'Ẩ': 'A', 'Ẫ': 'A', 'Ậ': 'A',
+    'È': 'E', 'É': 'E', 'Ẻ': 'E', 'Ẽ': 'E', 'Ẹ': 'E',
+    'Ê': 'E', 'Ề': 'E', 'Ế': 'E', 'Ể': 'E', 'Ễ': 'E', 'Ệ': 'E',
+    'Ì': 'I', 'Í': 'I', 'Ỉ': 'I', 'Ĩ': 'I', 'Ị': 'I',
+    'Ò': 'O', 'Ó': 'O', 'Ỏ': 'O', 'Õ': 'O', 'Ọ': 'O',
+    'Ô': 'O', 'Ồ': 'O', 'Ố': 'O', 'Ổ': 'O', 'Ỗ': 'O', 'Ộ': 'O',
+    'Ơ': 'O', 'Ờ': 'O', 'Ớ': 'O', 'Ở': 'O', 'Ỡ': 'O', 'Ợ': 'O',
+    'Ù': 'U', 'Ú': 'U', 'Ủ': 'U', 'Ũ': 'U', 'Ụ': 'U',
+    'Ư': 'U', 'Ừ': 'U', 'Ứ': 'U', 'Ử': 'U', 'Ữ': 'U', 'Ự': 'U',
+    'Ỳ': 'Y', 'Ý': 'Y', 'Ỷ': 'Y', 'Ỹ': 'Y', 'Ỵ': 'Y',
+    'Đ': 'D',
+  };
+  final b = StringBuffer();
+  for (final ch in s.split('')) {
+    b.write(map[ch] ?? ch);
+  }
+  return b.toString();
+}
+
 /// Search suggestions for a partial query (min ~2 chars).
 /// Falls back to the local cache when the network is unavailable; in forced
 /// offline mode only the local cache is used. With the Vietmap data source
@@ -109,7 +205,30 @@ Future<List<OsmSuggestion>> osmAutocomplete(
 }) async {
   await _loadSearchCache();
   final key = text.trim().toLowerCase();
-  if (forceOffline) return _searchCache[key] ?? const [];
+  // Offline: the bundled Việt Nam place index + previously cached results +
+  // the bundled POI index (ATM/gas/food/…) — so geocoding works with NO
+  // network (no more empty offline search).
+  if (forceOffline) {
+    final bundled = await _offlineSearch(text, limit);
+    final cached = _searchCache[key] ?? const <OsmSuggestion>[];
+    final pois = (await searchOfflinePois(text, limit: limit)).map(
+      (p) => OsmSuggestion(
+        refId: 'poi/${p.category}/${p.name}',
+        display: p.name,
+        lat: p.lat,
+        lng: p.lng,
+        source: 'poi',
+        poi: p,
+      ),
+    );
+    final out = [...bundled, ...cached, ...pois];
+    // De-duplicate by (lat,lng) — POIs first so they win over place entries.
+    final seen = <String>{};
+    return [
+      for (final s in out)
+        if (seen.add('${s.lat},${s.lng}')) s,
+    ].take(limit).toList();
+  }
 
   // Google Maps geocoding — used as the primary search when a key is
   // configured (far better Vietnamese results than Nominatim).
@@ -152,10 +271,11 @@ Future<List<OsmSuggestion>> osmAutocomplete(
         '&addressdetails=0'
         '&limit=$limit'
         '&accept-language=vi'
+        '&countrycodes=vn'
         '&q=${Uri.encodeQueryComponent(text)}';
     final res = await http
         .get(Uri.parse(url), headers: {'User-Agent': _ua})
-        .timeout(const Duration(seconds: 15));
+        .timeout(const Duration(seconds: 8));
     if (res.statusCode != 200) {
       throw Exception('OSM search HTTP ${res.statusCode}');
     }
@@ -179,7 +299,26 @@ Future<List<OsmSuggestion>> osmAutocomplete(
     unawaited(_saveSearchCache());
     return out;
   } catch (_) {
-    return _searchCache[key] ?? const [];
+    // Online search failed / empty — fall back to the bundled offline place
+    // index so geocoding still works even with a dead network.
+    final bundled = await _offlineSearch(text, limit);
+    final cached = _searchCache[key] ?? const <OsmSuggestion>[];
+    final pois = (await searchOfflinePois(text, limit: limit)).map(
+      (p) => OsmSuggestion(
+        refId: 'poi/${p.category}/${p.name}',
+        display: p.name,
+        lat: p.lat,
+        lng: p.lng,
+        source: 'poi',
+        poi: p,
+      ),
+    );
+    final out = [...bundled, ...cached, ...pois];
+    final seen = <String>{};
+    return [
+      for (final s in out)
+        if (seen.add('${s.lat},${s.lng}')) s,
+    ].take(limit).toList();
   }
 }
 

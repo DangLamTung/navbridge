@@ -29,6 +29,11 @@ dependencies:
   flutter_tts: ^4.0.2
   cupertino_icons: ^1.0.8
   maplibre_gl: ^0.26.2
+  # Keep the screen on while navigating (prevents the MapLibre GL surface
+  # being torn down / going black when the itel screen sleeps).
+  wakelock_plus: ^1.2.10
+  # Open the Wikipedia / website links on the POI info card.
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:
@@ -39,14 +44,16 @@ flutter:
   uses-material-design: true
   assets:
     # Offline vector navigation map (style + fonts + sprite + tiles).
-    # NOTE: the .pmtiles TILES are NOT bundled anymore — they are downloaded on
-    # demand (offline screen, --dart-define=NAVMAP_URL) to keep the APK small.
-    # Fonts / sprite / style / manifest ARE bundled (small) and copied into app
-    # storage at first use so MapLibre can read them from file:// paths.
+    # The HCMC z16 nav-map TILES are BUNDLED so navigation (route + arrow +
+    # terrain) works out-of-the-box on a fresh install. Other regions are
+    # downloaded on demand (offline screen, --dart-define=NAVMAP_URL).
     # Flutter does NOT recurse into subdirectories — each dir with files must
     # be listed.
     - assets/offline_map/manifest.json
     - assets/offline_map/nav_style.json
+    - assets/offline_map/saigon_z16.pmtiles
+    - assets/offline_map/vietnam_places.json
+    - assets/offline_map/vietnam_pois.json
     - assets/offline_map/icons/
     - assets/offline_map/sprite/
     - assets/offline_map/fonts/

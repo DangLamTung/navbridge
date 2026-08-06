@@ -22,6 +22,8 @@ import 'package:path_provider/path_provider.dart';
 
 import 'osrm.dart';
 import 'poi_search.dart';
+import 'terrain.dart';
+import 'trip_plan.dart';
 
 /// Built-in car marker icons (see assets/offline_map/icons/).
 const List<String> kCarIcons = [
@@ -64,12 +66,17 @@ class VectorNavMap extends StatefulWidget {
     this.routeSteps = const [],
     this.routeStartIndex = 0,
     this.current,
+    this.bearing,
     this.heading,
     this.headingUp = true,
     this.tilt3D = true,
+    this.terrain3D = false,
+    this.nightMode = false,
     this.carIcon = 'arrow',
     this.pois = const [],
     this.selectedPoi,
+    this.stops = const [],
+    this.satellite = false,
     this.controller,
   });
 
@@ -88,6 +95,13 @@ class VectorNavMap extends StatefulWidget {
   /// Live position to follow.
   final ll.LatLng? current;
 
+  /// Smoothed route-ahead bearing (0=N) from the nav engine
+  /// (`TurnByTurnEngine.routeBearing`) — the direction of the road ahead of
+  /// the car, low-pass filtered. Drives both the heading-up camera and the
+  /// arrow in north-up mode, replacing the phone compass and the raw
+  /// nearest-segment scan (both caused the arrow/camera to flicker).
+  final double? bearing;
+
   /// Heading (degrees, 0=N) from the phone's compass sensor.
   final double? heading;
 
@@ -96,6 +110,17 @@ class VectorNavMap extends StatefulWidget {
 
   /// Tilted 3D perspective camera (Google-style). Turn off for a flat 2D map.
   final bool tilt3D;
+
+  /// True 3D terrain relief from the offline DEM (bundled `terrain.pmtiles`
+  /// or downloaded Terrarium tiles). The `raster-dem` source + `terrain`
+  /// style property are injected when enabled; with the tilted camera the
+  /// mountains render as real 3D geometry. Off (and no DEM data) → flat map.
+  final bool terrain3D;
+
+  /// Night (dark) map mode: dark background + a dim overlay so the map is
+  /// easy on the eyes after dark, while the route/arrow (annotations) stay
+  /// bright.
+  final bool nightMode;
 
   /// Car marker icon name (from [kCarIcons]).
   final String carIcon;
@@ -106,6 +131,15 @@ class VectorNavMap extends StatefulWidget {
   /// The POI the user tapped — the camera centers on it (follow pauses).
   final PoiResult? selectedPoi;
 
+  /// Multi-stop trip waypoints — drawn as numbered markers on the map so the
+  /// driver sees where each stop is.
+  final List<TripStop> stops;
+
+  /// Satellite imagery basemap (ESRI World Imagery, free) — shows real
+  /// terrain, nicer for mountain views than the light vector map. Online
+  /// only; falls back to the vector/light map when offline.
+  final bool satellite;
+
   /// Camera-follow controller for the auto-center button (rendered by the
   /// page so it sits above the platform view).
   final VectorNavMapController? controller;
@@ -114,10 +148,17 @@ class VectorNavMap extends StatefulWidget {
   State<VectorNavMap> createState() => _VectorNavMapState();
 }
 
-class _VectorNavMapState extends State<VectorNavMap> {
+class _VectorNavMapState extends State<VectorNavMap>
+    with WidgetsBindingObserver {
   MapLibreMapController? _controller;
   String? _styleString;
   String? _styleError;
+  /// Parsed nav style with file:// paths resolved — terrain is injected on
+  /// top of this per [_buildStyleString].
+  Map<String, dynamic>? _baseStyle;
+  /// Offline `raster-dem` source (bundled pmtiles or downloaded terrarium
+  /// tiles), or null when no DEM data is present.
+  Map<String, dynamic>? _demSource;
   Line? _casing;
   Line? _routeLine;
   final List<Line> _trafficLines = [];
@@ -125,17 +166,13 @@ class _VectorNavMapState extends State<VectorNavMap> {
   final List<Circle> _poiCircles = [];
   final List<Symbol> _poiSymbols = [];
   String? _lastPoiSig;
-  Symbol? _carMarker;
   bool _hasPosition = false;
   // Vietmap-style nav camera: start at max zoom with the car centered. The
-  // user can pinch to a different zoom — it's adopted (see [_onCamMove]) so
+  // user can pinch to a different zoom — it's adopted (see [_onCamIdle]) so
   // follow keeps the map at the zoom the user chose instead of snapping back
   // to 19 (that's what made it feel "zoom in only").
   double _zoom = 19;
   String? _lastRouteSig;
-  ll.LatLng? _lastCarPos;
-  double? _lastIconRotate;
-  String? _lastIconName;
 
   /// True when the nav-map tiles (PMTiles) are not on disk yet — either they
   /// were never bundled or the user hasn't downloaded them. Show a prompt to
@@ -156,28 +193,50 @@ class _VectorNavMapState extends State<VectorNavMap> {
   /// back on by the recenter button or after 10 s of no interaction.
   bool _followEnabled = true;
 
-  /// The camera we last requested for the follow ease — used in [_onCamMove]
+  /// Screen position (top-left of the arrow) of the car while auto-follow is
+  /// paused (user panning/zooming) — projected from the live camera so the
+  /// arrow stays glued to the car's real position instead of vanishing.
+  Offset? _carScreen;
+
+  /// Projected on-screen positions of the trip stops (marker top-left) —
+  /// refreshed alongside [_carScreen] so the stop indicators stay glued to
+  /// the map.
+  final List<Offset?> _stopScreens = [];
+
+  /// True after the first `resumed` lifecycle event (app launch). Used so the
+  /// style-reload self-heal only runs on REAL background→foreground returns.
+  bool _resumedOnce = false;
+
+  /// The camera we last requested for the follow ease — used in [_onCamIdle]
   /// to tell our own moves from the user's pan/zoom (no pointer wrapper, so
   /// the platform view keeps full pan + pinch control).
   CameraPosition? _lastFollowCam;
 
-  /// Icon scale. The navigation puck (arrow) is Vietmap's exact 75dp puck
-  /// (white circle + #2a5dff arrow), rasterized at 4x (300px); MapLibre
-  /// icon-size is in physical pixels, so scale by density to land at 75dp.
-  double _iconSize(String name) {
-    if (name == 'arrow') {
-      final dpr = MediaQuery.of(context).devicePixelRatio;
-      return 75.0 * dpr / 300.0;
-    }
-    return 0.16; // emoji icons (300px) ~ 48px
-  }
-
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.controller?.attachRecenter(_recenter);
     widget.controller?.setFollowing(true);
     _prepare();
+  }
+
+  /// Self-heal: the MapLibre GL surface on the low-end itel can die (the map
+  /// renders black while the Flutter UI keeps drawing) after the screen
+  /// sleeps or the app is backgrounded. Reloading the style forces the
+  /// renderer to re-initialize the GL context, bringing the map back.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    if (!_resumedOnce) {
+      _resumedOnce = true; // first resume = app launch, nothing to heal
+      return;
+    }
+    final ctrl = _controller;
+    final style = _styleString;
+    if (ctrl != null && style != null && style.isNotEmpty) {
+      unawaited(_reloadStyle(ctrl, style));
+    }
   }
 
   /// Copies the bundled PMTiles + sprite + glyphs into app storage (MapLibre
@@ -265,6 +324,34 @@ class _VectorNavMapState extends State<VectorNavMap> {
       final style = jsonDecode(styleRaw) as Map<String, dynamic>;
       final src = style['sources'] as Map<String, dynamic>;
       src['openmaptiles']['url'] = 'pmtiles://file://${pmtilesFile.path}';
+      debugPrint('VECTORMAP: vector source -> ${src['openmaptiles']['url']}');
+      // Online raster fallback so the nav map shows ANYWHERE while online —
+      // the bundled pmtiles only covers HCMC, so outside it the vector source
+      // has no tiles (flat gray "no map"). A light CARTO basemap (no labels;
+      // the vector layers draw labels) sits above the background and below
+      // the vector layers: where vector tiles exist they draw over it,
+      // elsewhere the raster shows through. Free, no key.
+      src['raster-fallback'] = <String, dynamic>{
+        'type': 'raster',
+        'tiles': [
+          'https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
+        ],
+        'tileSize': 256,
+        'maxzoom': 20,
+        'attribution': '© CARTO © OpenStreetMap',
+      };
+      final layers = style['layers'] as List<dynamic>;
+      final insertAt =
+          (layers.isNotEmpty &&
+                  layers.first is Map &&
+                  (layers.first as Map)['id'] == 'background')
+              ? 1
+              : 0;
+      layers.insert(insertAt, <String, dynamic>{
+        'id': 'raster-fallback',
+        'type': 'raster',
+        'source': 'raster-fallback',
+      });
       style['glyphs'] = (style['glyphs'] as String).replaceAll(
         '__NAV_FONTS__',
         fontsDir.path,
@@ -273,24 +360,102 @@ class _VectorNavMapState extends State<VectorNavMap> {
         '__NAV_SPRITE__',
         spriteDir.path,
       );
-      if (mounted) setState(() => _styleString = jsonEncode(style));
+      _baseStyle = style;
+      _demSource = await _resolveDemSource();
+      debugPrint(
+        'VECTORMAP: base style sources=${src.keys.toList()} '
+        'layers=${layers.length}',
+      );
+      if (mounted) setState(() => _styleString = _buildStyleString());
     } catch (e) {
       debugPrint('VECTORMAP: prepare failed: $e');
       if (mounted) setState(() => _styleError = '$e');
     }
   }
 
-  Future<void> _loadIcons(MapLibreMapController ctrl) async {
-    for (final name in kCarIcons) {
-      try {
-        final data = await rootBundle.load(
-          'assets/offline_map/icons/$name.png',
-        );
-        await ctrl.addImage(name, data.buffer.asUint8List());
-      } catch (e) {
-        debugPrint('VECTORMAP: icon $name failed: $e');
-      }
+  /// Offline DEM source for 3D terrain: a bundled `terrain.pmtiles` wins;
+  /// otherwise downloaded Terrarium PNG tiles served straight from disk as a
+  /// `file://` raster-dem source. When nothing is on disk yet, fall back to
+  /// the LIVE AWS Terrarium DEM (public, no key) so MapLibre's 3D terrain
+  /// "just works" whenever the device is online — the offline store is only
+  /// needed for fully-offline operation.
+  Future<Map<String, dynamic>?> _resolveDemSource() async {
+    final pm = await terrainPmtilesPath();
+    if (pm != null) {
+      return {'type': 'raster-dem', 'url': 'pmtiles://file://$pm'};
     }
+    final root = await terrainTilesRoot();
+    if (Directory('$root/$kTerrainMinZoom').existsSync()) {
+      return {
+        'type': 'raster-dem',
+        'tiles': ['file://$root/{z}/{x}/{y}.png'],
+        'encoding': 'terrarium',
+        'tileSize': 256,
+      };
+    }
+    // Online: live public Terrarium DEM (same encoding as the downloaded
+    // tiles). This is what makes the ⛰ terrain button useful immediately.
+    return {
+      'type': 'raster-dem',
+      'tiles': [
+        'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+      ],
+      'encoding': 'terrarium',
+      'tileSize': 256,
+    };
+  }
+
+  /// The style JSON string with (or without) 3D terrain, depending on
+  /// [widget.terrain3D] and whether offline DEM data exists.
+  String _buildStyleString() {
+    if (_baseStyle == null) return '';
+    final style = applyTerrainToStyle(
+      _baseStyle!,
+      _demSource,
+      enabled: widget.terrain3D,
+    );
+    // Satellite basemap: swap the online raster-fallback to ESRI World
+    // Imagery (free, no key — real terrain photos, great for mountains).
+    // Offline it stays transparent and the vector map shows through.
+    final src = style['sources'] as Map<String, dynamic>;
+    final fallback = src['raster-fallback'] as Map<String, dynamic>?;
+    if (fallback != null) {
+      fallback['tiles'] = [
+        if (widget.satellite)
+          'https://server.arcgisonline.com/ArcGIS/rest/services/'
+              'World_Imagery/MapServer/tile/{z}/{y}/{x}'
+        else
+          'https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
+      ];
+    }
+    // Night mode: dark background layer + a semi-transparent black overlay so
+    // the map goes dark while the route/arrow (annotations) stay bright.
+    final layers = style['layers'] as List<dynamic>;
+    if (widget.nightMode) {
+      for (final l in layers) {
+        if (l is Map && l['id'] == 'background') {
+          (l['paint'] as Map<String, dynamic>)['background-color'] = '#0E1116';
+        }
+      }
+      if (!layers.any((l) => l is Map && l['id'] == 'night-overlay')) {
+        layers.add(<String, dynamic>{
+          'id': 'night-overlay',
+          'type': 'background',
+          'paint': <String, dynamic>{
+            'background-color': '#000000',
+            'background-opacity': 0.55,
+          },
+        });
+      }
+    } else {
+      layers.removeWhere((l) => l is Map && l['id'] == 'night-overlay');
+    }
+    debugPrint(
+      'VECTORMAP: final style sources='
+      '${(style['sources'] as Map).keys.toList()} firstLayers='
+      '${layers.take(6).map((l) => l is Map ? l['id'] : '?').toList()}',
+    );
+    return jsonEncode(style);
   }
 
   Future<void> _addRoute() async {
@@ -302,13 +467,20 @@ class _VectorNavMapState extends State<VectorNavMap> {
     if (pts.length < 2) return;
     // Bold Vietmap-style route: thick white casing under a solid blue line
     // (the navigation route is drawn large so it reads clearly at 320dpi).
-    _casing = await ctrl.addLine(
-      LineOptions(geometry: pts, lineColor: '#ffffff', lineWidth: 14),
-    );
-    _routeLine = await ctrl.addLine(
-      LineOptions(geometry: pts, lineColor: '#1A73E8', lineWidth: 10),
-    );
-    _lastRouteSig = _routeSignature();
+    try {
+      _casing = await ctrl.addLine(
+        LineOptions(geometry: pts, lineColor: '#ffffff', lineWidth: 14),
+      );
+      _routeLine = await ctrl.addLine(
+        LineOptions(geometry: pts, lineColor: '#1A73E8', lineWidth: 10),
+      );
+      _lastRouteSig = _routeSignature();
+    } catch (e) {
+      // Style/annotation manager transiently unavailable (e.g. emulator GPU
+      // reset) — the route line is re-added on the next style-loaded event.
+      debugPrint('VECTORMAP: add route skipped (map reloading): $e');
+      _lastRouteSig = null;
+    }
   }
 
   /// The portion of the route still ahead of the car — the part already
@@ -429,8 +601,9 @@ class _VectorNavMapState extends State<VectorNavMap> {
 
   /// Vietmap's SimpleCamera: the map rotates to the ROUTE direction (not the
   /// phone compass), so the road ahead is always vertical in heading-up mode.
-  /// Once a route bearing has been computed it is always reused — never the
-  /// raw phone heading (which is noisy and made the arrow spin/flicker).
+  /// The bearing comes from the nav engine ([widget.bearing]) — a smoothed
+  /// look-ahead along the route — never the raw phone heading and never a
+  /// nearest-segment scan (both made the arrow/camera flicker).
   double _bearing() {
     if (!widget.headingUp) return 0; // north-up
     return _routeBearing();
@@ -446,60 +619,17 @@ class _VectorNavMapState extends State<VectorNavMap> {
     return 0;
   }
 
-  /// Bearing of the route at the car: direction of the nearest polyline
-  /// SEGMENT (perpendicular distance, not the nearest vertex — vertices flip
-  /// between adjacent segments as the car moves, which made the bearing — and
-  /// therefore the arrow — jump). The result is cached and reused when the
-  /// route is briefly absent so the camera never falls back to the compass.
+  /// Route bearing: the engine-smoothed value from the page ([widget.bearing])
+  /// when present, else the last cached value — so a momentary gap in the
+  /// route (re-route) never falls back to the noisy compass.
   double _routeBearing() {
-    final c = widget.current;
-    final g = widget.routeGeometry;
-    if (c == null || g.length < 2) {
-      return _hasRouteBearing ? _lastRouteBearing : (widget.heading ?? 0);
+    final b = widget.bearing;
+    if (b != null) {
+      _lastRouteBearing = b;
+      _hasRouteBearing = true;
+      return b;
     }
-    var bi = 0;
-    var bd = double.infinity;
-    for (var i = 0; i < g.length - 1; i++) {
-      final d = _distToSegment(c, g[i], g[i + 1]);
-      if (d < bd) {
-        bd = d;
-        bi = i;
-      }
-    }
-    final a = g[bi];
-    final b = g[bi + 1];
-    final y =
-        math.sin((b.longitude - a.longitude) * math.pi / 180) *
-        math.cos(b.latitude * math.pi / 180);
-    final x =
-        math.cos(a.latitude * math.pi / 180) *
-            math.sin(b.latitude * math.pi / 180) -
-        math.sin(a.latitude * math.pi / 180) *
-            math.cos(b.latitude * math.pi / 180) *
-            math.cos((b.longitude - a.longitude) * math.pi / 180);
-    final bearing = (math.atan2(y, x) * 180 / math.pi + 360) % 360;
-    _lastRouteBearing = bearing;
-    _hasRouteBearing = true;
-    return bearing;
-  }
-
-  /// Perpendicular distance (meters) from [p] to segment [a]-[b].
-  double _distToSegment(ll.LatLng p, ll.LatLng a, ll.LatLng b) {
-    // Equirectangular local meters about p (fine within a route window).
-    const mPerLat = 111320.0;
-    final mPerLng = 111320.0 * math.cos(p.latitude * math.pi / 180);
-    final ax = (a.longitude - p.longitude) * mPerLng;
-    final ay = (a.latitude - p.latitude) * mPerLat;
-    final bx = (b.longitude - p.longitude) * mPerLng;
-    final by = (b.latitude - p.latitude) * mPerLat;
-    final abx = bx - ax;
-    final aby = by - ay;
-    final len2 = abx * abx + aby * aby;
-    var t = len2 == 0 ? 0.0 : -(ax * abx + ay * aby) / len2;
-    t = t.clamp(0.0, 1.0);
-    final cx = ax + t * abx;
-    final cy = ay + t * aby;
-    return math.sqrt(cx * cx + cy * cy);
+    return _hasRouteBearing ? _lastRouteBearing : (widget.heading ?? 0);
   }
 
   /// 3D perspective angle — Vietmap SimpleCamera.DEFAULT_TILT (50).
@@ -514,19 +644,16 @@ class _VectorNavMapState extends State<VectorNavMap> {
     final ctrl = _controller;
     final c = widget.current;
     if (ctrl == null || c == null) return;
-    // User is free on the map (follow paused): keep the puck glued to the
-    // REAL fix so it stays at the car's position while they pan/zoom.
+    // User is free on the map (follow paused): leave the map where they put
+    // it and keep the car arrow pinned to the car's real screen position.
     if (!_followEnabled) {
-      _updateCarMarker();
+      unawaited(_updateCarScreen());
       return;
     }
     // Adopt the live camera zoom (whatever the user pinched to) so follow
     // never forces the zoom back to the initial max.
     final live = ctrl.cameraPosition;
     if (live != null && live.zoom >= 3) _zoom = live.zoom.clamp(3.0, 19.0);
-    // While following, the puck is painted ONLY from onCameraMove/onCameraIdle
-    // at the camera target — painting the raw fix here too made the puck jump
-    // ahead of the glide and then snap back every tick (the flicker).
     if (ctrl.isCameraMoving) return;
     final bearing = _bearing();
     final car = ll.LatLng(c.latitude, c.longitude);
@@ -559,75 +686,107 @@ class _VectorNavMapState extends State<VectorNavMap> {
     }
   }
 
-  /// Glue the car icon to the camera while the follow animation glides, so
-  /// the arrow never detaches from the screen anchor / jumps / flickers
-  /// (with a fixed 300 px puck at max zoom even a few meters of lag looks
-  /// like the marker blinking out). `_paintCar`'s 0.3 m guard keeps this
-  /// cheap — it only calls `updateSymbol` when the puck actually moves.
-  ///
-  /// MapLibre can occasionally report a `cam.target` that has drifted well
-  /// off the road mid-animation (a tilted bearing-change pivot) — painting
-  /// that would teleport the puck off-route for a frame (the flicker). Clamp:
-  /// if the camera target is far from the snapped car, keep the puck on the
-  /// car instead.
-  void _onCamMove(CameraPosition cam) {
-    if (!_followEnabled) return;
-    final t = cam.target;
-    final cur = widget.current;
-    if (cur != null &&
-        _distMeters(
-              ll.LatLng(cur.latitude, cur.longitude),
-              ll.LatLng(t.latitude, t.longitude),
-            ) >
-            50) {
-      _paintCar(ll.LatLng(cur.latitude, cur.longitude));
-    } else {
-      _paintCar(ll.LatLng(t.latitude, t.longitude));
-    }
-  }
-
   /// Fires when the camera stops moving: either our follow animation finished
   /// (camera sits on [_lastFollowCam] → keep following) or the user
-  /// interrupted it with a pan / pinch / rotate (camera deviated → pause
-  /// follow, show the recenter button, auto-center after 10 s).
+  /// interrupted it with a pan / pinch / rotate. Only a real PAN (the camera
+  /// target moved away) pauses follow — a pure rotate / pinch-zoom keeps
+  /// following, so the car arrow never vanishes while the driver re-orients
+  /// the view. When follow is paused, the arrow is projected to the car's
+  /// real on-screen position.
   void _onCamIdle() {
-    final last = _lastFollowCam;
     final ctrl = _controller;
-    if (last == null || ctrl == null || !_followEnabled || !_hasPosition) {
+    if (ctrl == null) return;
+    if (!_followEnabled) {
+      unawaited(_updateCarScreen());
       return;
     }
+    final last = _lastFollowCam;
+    if (last == null || !_hasPosition) return;
     final cam = ctrl.cameraPosition;
     if (cam == null) return;
     final t = cam.target;
-    // Final puck placement: glue the arrow onto the SETTLED CAMERA target so
-    // it never detaches from the screen anchor. (Painting the LIVE snapped
-    // fix here made the puck jump ~500 ms of travel ahead of the camera at
-    // every settle and snap back each tick — the original flicker.) Only when
-    // MapLibre settles on a target that has drifted far off the road (a
-    // tilted bearing-change pivot) do we paint the real snapped position
-    // instead, so the puck stays on the route.
-    final cur = widget.current;
-    if (cur != null &&
-        _distMeters(
-              ll.LatLng(cur.latitude, cur.longitude),
-              ll.LatLng(t.latitude, t.longitude),
-            ) >
-            50) {
-      _paintCar(ll.LatLng(cur.latitude, cur.longitude));
-    } else {
-      _paintCar(ll.LatLng(t.latitude, t.longitude));
-    }
     final targetClose =
         _distMeters(
           ll.LatLng(last.target.latitude, last.target.longitude),
           ll.LatLng(t.latitude, t.longitude),
         ) <
         8;
-    final zoomClose = (cam.zoom - last.zoom).abs() < 0.15;
-    final b = (cam.bearing - last.bearing) % 360;
-    final bearingClose = b.abs() < 5 || b.abs() > 355;
-    if (!targetClose || !zoomClose || !bearingClose) {
-      _userPanned(); // the user took over the map
+    if (!targetClose) {
+      _userPanned(); // the user dragged the map away
+    }
+  }
+
+  /// Fires on every camera-ease / gesture frame. While the camera moves, keep
+  /// re-projecting the car so the arrow stays glued to the car's REAL on-
+  /// screen position (it visibly advances with the car instead of being a
+  /// static center dot). Throttled to ~10/s to keep platform-channel calls
+  /// cheap.
+  DateTime _lastProject = DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _onCamMove(CameraPosition cam) {
+    if (widget.current == null || _controller == null) return;
+    final now = DateTime.now();
+    if (now.difference(_lastProject).inMilliseconds < 100) return;
+    _lastProject = now;
+    unawaited(_updateCarScreen());
+  }
+
+  /// Projects the car's geo position (and the trip stops) to their on-screen
+  /// spots so the arrow + stop markers are always glued to the map (following
+  /// or free). Clamped to the screen so nothing vanishes.
+  Future<void> _updateCarScreen() async {
+    final ctrl = _controller;
+    final c = widget.current;
+    if (ctrl == null || c == null) return;
+    try {
+      final size = MediaQuery.of(context).size;
+      final dpr = MediaQuery.of(context).devicePixelRatio;
+      // Car arrow.
+      final p = await ctrl.toScreenLocation(
+        LatLng(c.latitude, c.longitude),
+      );
+      if (!mounted) return;
+      final off = Offset(
+        ((p.x.toDouble() / dpr) - 37.5).clamp(0.0, size.width - 75.0),
+        ((p.y.toDouble() / dpr) - 37.5).clamp(0.0, size.height - 75.0),
+      );
+      // Trip stop markers (numbered waypoints) — same physical→logical fix
+      // as the car (toScreenLocation returns device pixels, /dpr = logical).
+      final stops = widget.stops;
+      final screens = <Offset?>[];
+      for (final s in stops) {
+        try {
+          final sp = await ctrl.toScreenLocation(LatLng(s.lat, s.lng));
+          screens.add(
+            Offset(sp.x.toDouble() / dpr, sp.y.toDouble() / dpr),
+          );
+        } catch (_) {
+          screens.add(null);
+        }
+      }
+      if (!mounted) return;
+      var changed = _carScreen != off;
+      if (screens.length != _stopScreens.length) changed = true;
+      if (!changed) {
+        for (var i = 0; i < screens.length; i++) {
+          if (screens[i] != _stopScreens[i]) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (changed) {
+        setState(() {
+          _carScreen = off;
+          _stopScreens
+            ..clear()
+            ..addAll(screens);
+        });
+      }
+    } catch (_) {
+      // Projection failed (e.g. car off-screen / map busy) — fall back to
+      // center so the arrow never vanishes.
+      if (mounted && _carScreen != null) setState(() => _carScreen = null);
     }
   }
 
@@ -671,74 +830,6 @@ class _VectorNavMapState extends State<VectorNavMap> {
     return math.sqrt(dLat * dLat + dLng * dLng);
   }
 
-  /// Soft halo under the car (Google-style location cone) — removed: the
-  /// Vietmap navigation puck carries its own white halo.
-  /// The car marker: the Vietmap navigation puck (white circle + blue arrow)
-  /// or a fun emoji. Rotation is viewport-aligned (see [_puckRotate]).
-  Future<void> _ensureCarMarker() async {
-    final ctrl = _controller;
-    final c = widget.current;
-    if (ctrl == null || c == null) return;
-    if (_carMarker == null) {
-      await _loadIcons(ctrl);
-      try {
-        _carMarker = await ctrl.addSymbol(
-          SymbolOptions(
-            geometry: LatLng(c.latitude, c.longitude),
-            iconImage: widget.carIcon,
-            iconSize: _iconSize(widget.carIcon),
-            iconRotate: _puckRotate(),
-            iconAnchor: 'center',
-          ),
-        );
-        debugPrint('VECTORMAP: car marker created (${widget.carIcon})');
-      } catch (e) {
-        debugPrint('VECTORMAP: car marker failed: $e');
-      }
-      _lastCarPos = c;
-      _lastIconRotate = _puckRotate();
-      _lastIconName = widget.carIcon;
-    }
-  }
-
-  void _updateCarMarker() {
-    final c = widget.current;
-    if (c == null) return;
-    _paintCar(ll.LatLng(c.latitude, c.longitude));
-  }
-
-  /// Place the puck icon at [pos] (rotated by [_puckRotate]). Called both on
-  /// new GPS fixes and each camera-ease frame (to keep the icon glued to the
-  /// screen anchor while the camera glides).
-  void _paintCar(ll.LatLng pos) {
-    final ctrl = _controller;
-    if (ctrl == null || _carMarker == null) return;
-    final iconChanged = widget.carIcon != _lastIconName;
-    final posChanged =
-        _lastCarPos == null || _distMeters(_lastCarPos!, pos) > 0.3;
-    final rotate = _puckRotate();
-    final rotChanged = (rotate - (_lastIconRotate ?? 0)).abs() > 0.5;
-    if (!posChanged && !rotChanged && !iconChanged) return;
-    debugPrint(
-      'VECTORMAP: paint car @'
-      '${pos.latitude.toStringAsFixed(5)},${pos.longitude.toStringAsFixed(5)} '
-      'rot=$rotate',
-    );
-    _lastCarPos = pos;
-    _lastIconRotate = rotate;
-    _lastIconName = widget.carIcon;
-    ctrl.updateSymbol(
-      _carMarker!,
-      SymbolOptions(
-        geometry: LatLng(pos.latitude, pos.longitude),
-        iconImage: widget.carIcon,
-        iconSize: _iconSize(widget.carIcon),
-        iconRotate: _puckRotate(),
-        iconAnchor: 'center',
-      ),
-    );
-  }
-
   @override
   void didUpdateWidget(VectorNavMap old) {
     super.didUpdateWidget(old);
@@ -747,12 +838,51 @@ class _VectorNavMapState extends State<VectorNavMap> {
       _hasPosition = false;
       _lastFollowCam = null;
     }
+    if (old.terrain3D != widget.terrain3D ||
+        old.nightMode != widget.nightMode ||
+        old.satellite != widget.satellite) {
+      // Rebuild the style (terrain / night / satellite) and hot-swap it via
+      // setStyle — much lighter than re-creating the whole platform view
+      // (which reset the camera and flashed on low-end devices). Annotations
+      // are dropped and re-added by the style-loaded callback.
+      _styleString = _buildStyleString();
+      final ctrl = _controller;
+      if (ctrl != null) {
+        unawaited(_reloadStyle(ctrl, _styleString!));
+      } else if (mounted) {
+        setState(() {});
+      }
+    }
     if (old.selectedPoi != widget.selectedPoi && widget.selectedPoi != null) {
       _focusPoi(widget.selectedPoi!);
     }
     _followPosition();
     _updateRoute();
     _updatePois();
+  }
+
+  /// Hot-swap the style at runtime (terrain / night toggles). Old annotation
+  /// handles are invalidated by `setStyle`, so clear them — the plugin's
+  /// style-loaded callback re-creates the route + puck + POIs.
+  Future<void> _reloadStyle(MapLibreMapController ctrl, String style) async {
+    _resetAnnotations();
+    try {
+      await ctrl.setStyle(style);
+    } catch (e) {
+      debugPrint('VECTORMAP: setStyle failed: $e');
+    }
+    if (mounted) _followPosition();
+  }
+
+  void _resetAnnotations() {
+    _lastRouteSig = null;
+    _lastPoiSig = null;
+    _casing = null;
+    _routeLine = null;
+    _trafficLines.clear();
+    _trafficLights.clear();
+    _poiCircles.clear();
+    _poiSymbols.clear();
   }
 
   /// Center the camera on the tapped POI and pause auto-follow so the user
@@ -822,31 +952,85 @@ class _VectorNavMapState extends State<VectorNavMap> {
     // `animateCamera` (auto-cancelled on user touch) and user takeover is
     // detected in [_onCamIdle] (camera stops somewhere other than where the
     // follow put it) → pan / pinch / rotate all work and pause the follow.
-    return MapLibreMap(
-      styleString: style,
-      initialCameraPosition: CameraPosition(
-        target: c == null
-            ? const LatLng(10.8231, 106.6297)
-            : LatLng(c.latitude, c.longitude),
-        zoom: _zoom,
+    return Stack(
+      children: [
+        MapLibreMap(
+          styleString: style,
+          initialCameraPosition: CameraPosition(
+            target: c == null
+                ? const LatLng(10.8231, 106.6297)
+                : LatLng(c.latitude, c.longitude),
+            zoom: _zoom,
+          ),
+          minMaxZoomPreference: const MinMaxZoomPreference(
+            3,
+            19,
+          ), // pinch up to z19 (overzoom)
+          compassEnabled: true,
+          // Required: onCameraIdle/onCameraMove (and `cameraPosition`) only
+          // fire with this enabled.
+          trackCameraPosition: true,
+          onMapCreated: (ctrl) {
+            debugPrint('VECTORMAP: map created');
+            _controller = ctrl;
+          },
+          onCameraMove: _onCamMove,
+          onCameraIdle: _onCamIdle,
+          onStyleLoadedCallback: () async {
+            debugPrint('VECTORMAP: style loaded — adding route');
+            await _addRoute();
+            _followPosition();
+            await _updatePois();
+          },
+        ),
+        // The car arrow: a Flutter overlay that needs NO per-frame MapLibre
+        // symbol updates (which is what made the old platform puck blink on
+        // the weak itel GPU). It is projected to the car's real on-screen
+        // position on every camera move / GPS fix, so it advances smoothly
+        // along the road and never vanishes (falls back to screen center if
+        // the projection is momentarily unavailable). Rotation comes from
+        // [_puckRotate] and refreshes on every parent rebuild (GPS fix).
+        if (widget.current != null)
+          if (_carScreen != null)
+            Positioned(
+              left: _carScreen!.dx,
+              top: _carScreen!.dy,
+              child: IgnorePointer(child: _carArrow()),
+            )
+          else
+            Positioned.fill(
+              child: IgnorePointer(child: Center(child: _carArrow())),
+            ),
+        // Trip stop indicators (numbered waypoints) — glued to the map.
+        for (var i = 0;
+            i < widget.stops.length && i < _stopScreens.length;
+            i++)
+          if (_stopScreens[i] != null)
+            Positioned(
+              left: _stopScreens[i]!.dx - 14,
+              top: _stopScreens[i]!.dy - 26,
+              child: IgnorePointer(
+                child: _StopMarker(
+                  index: i,
+                  isDest: i == widget.stops.length - 1,
+                ),
+              ),
+            ),
+      ],
+    );
+  }
+
+  /// The car puck: the Vietmap arrow / emoji image, rotated by [_puckRotate]
+  /// (viewport-aligned; never the raw compass).
+  Widget _carArrow() {
+    return Transform.rotate(
+      angle: _puckRotate() * math.pi / 180,
+      child: Image.asset(
+        'assets/offline_map/icons/${widget.carIcon}.png',
+        width: 75,
+        height: 75,
+        errorBuilder: (_, _, _) => const SizedBox.shrink(),
       ),
-      minMaxZoomPreference: const MinMaxZoomPreference(
-        3,
-        19,
-      ), // pinch up to z19 (overzoom)
-      compassEnabled: true,
-      // Required: onCameraMove/onCameraIdle (and `cameraPosition`) only fire
-      // with this enabled.
-      trackCameraPosition: true,
-      onMapCreated: (ctrl) => _controller = ctrl,
-      onCameraMove: _onCamMove,
-      onCameraIdle: _onCamIdle,
-      onStyleLoadedCallback: () async {
-        await _addRoute();
-        await _ensureCarMarker();
-        _followPosition();
-        await _updatePois();
-      },
     );
   }
 
@@ -860,13 +1044,17 @@ class _VectorNavMapState extends State<VectorNavMap> {
     _recenterTimer?.cancel();
     _recenterTimer = Timer(const Duration(seconds: 10), _recenter);
     if (mounted) setState(() {});
+    unawaited(_updateCarScreen());
   }
 
   /// Snap the camera back onto the car and resume auto-follow.
   void _recenter() {
     _recenterTimer?.cancel();
     if (!mounted) return;
-    setState(() => _followEnabled = true);
+    setState(() {
+      _followEnabled = true;
+      _carScreen = null; // arrow back to screen center
+    });
     widget.controller?.setFollowing(true);
     _hasPosition = false;
     _lastFollowCam = null;
@@ -875,9 +1063,47 @@ class _VectorNavMapState extends State<VectorNavMap> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _recenterTimer?.cancel();
     _recenterTimer?.cancel();
     _controller?.dispose();
     super.dispose();
+  }
+}
+
+/// Numbered waypoint marker for a trip stop (Google-style "1", "2", …). The
+/// last stop (the destination) is drawn in red so it reads as the goal.
+class _StopMarker extends StatelessWidget {
+  const _StopMarker({required this.index, required this.isDest});
+
+  /// 0-based stop index — rendered as index+1.
+  final int index;
+  final bool isDest;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isDest ? const Color(0xFFC5221F) : const Color(0xFF1A73E8);
+    return Container(
+      width: 28,
+      height: 28,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: const [
+          BoxShadow(color: Colors.black38, blurRadius: 4),
+        ],
+      ),
+      child: Center(
+        child: Text(
+          '${index + 1}',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+            fontSize: 14,
+          ),
+        ),
+      ),
+    );
   }
 }

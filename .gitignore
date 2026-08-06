@@ -60,3 +60,7 @@ tools/data/saigon.pmtiles
 # Local secrets — never commit. Vietmap keys live in .env and are loaded by
 # tool/env.sh -> --dart-define at build time.
 .env
+
+# Offline POI build intermediates (regenerate with tools/poi/build_pois.py).
+tools/poi/*.osm.pbf
+tools/poi/*.geojson

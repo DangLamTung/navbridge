@@ -61,6 +61,21 @@ class TurnByTurnEngine {
   int _curSeg =
       0; // segment index the car projects onto (for route "consuming")
 
+  /// Last position projected onto the route — used as the origin of the
+  /// route-ahead bearing ([routeBearing]).
+  LatLng? _lastSnapped;
+
+  /// Smoothed route-ahead bearing (deg, 0=N) — the value that drives the
+  /// arrow and the heading-up camera. Low-pass filtered so GPS jitter and
+  /// nearest-segment flips can never make it (or the arrow) spin/flicker.
+  double _smBearing = 0;
+  bool _hasSmBearing = false;
+
+  /// Meters ahead of the car used for the route-ahead bearing (MapLibre /
+  /// Vietmap look-ahead style): far enough to be stable against GPS jitter,
+  /// close enough that it still follows the road through a curve.
+  static const double _lookAheadMeters = 25.0;
+
   TurnByTurnEngine(this.route, {List<String>? stopNames})
     : stopNames = stopNames ?? const [],
       _stopCum = List.of(route.stopCumulative) {
@@ -94,35 +109,55 @@ class TurnByTurnEngine {
   /// window finds nothing close (e.g. a brand-new route after a re-route).
   LatLng snapToRoute(LatLng pos) {
     final pts = route.geometry;
-    if (pts.length < 2) return pos;
+    if (pts.length < 2) {
+      _lastSnapped = pos;
+      return pos;
+    }
     const win = 80;
     var bestSeg = -1;
-    var bestD = double.infinity;
+    var bestScore = double.infinity; // distance + continuity penalty (meters)
+    var bestRaw = double.infinity; // pure perpendicular distance (meters)
     final start = _curIdx.clamp(0, pts.length - 2);
     final lo = (start - win).clamp(0, pts.length - 2);
     final hi = (start + win).clamp(0, pts.length - 2);
     for (var i = lo; i <= hi; i++) {
-      final (_, d) = _closestOnSegment(pos, pts[i], pts[i + 1]);
-      if (d < bestD) {
-        bestD = d;
+      final (_, d2) = _closestOnSegment(pos, pts[i], pts[i + 1]);
+      final d = math.sqrt(d2);
+      // Continuity (hysteresis): a segment far from the one we're already on
+      // must be CLEARLY closer to win — otherwise GPS noise near a fork or a
+      // vertex could jump the projection to a wrong parallel road / ahead
+      // segment and the car would lurch forward (or snap back) on the route.
+      final jump = (i - _curSeg).abs() < 3 ? 0.0 : 12.0;
+      final score = d + jump;
+      if (score < bestScore) {
+        bestScore = score;
+        bestRaw = d;
         bestSeg = i;
       }
     }
-    if (bestSeg < 0 || bestD > 25 * 25) {
+    // Full-scan fallback: the window found nothing close (a re-route just set
+    // a fresh route, or the car is well off the old segment). Distance only —
+    // continuity is meaningless when we're not on the route yet.
+    if (bestSeg < 0 || bestRaw > 25) {
       for (var i = 0; i < pts.length - 1; i++) {
-        final (_, d) = _closestOnSegment(pos, pts[i], pts[i + 1]);
-        if (d < bestD) {
-          bestD = d;
+        final (_, d2) = _closestOnSegment(pos, pts[i], pts[i + 1]);
+        final d = math.sqrt(d2);
+        if (d < bestRaw) {
+          bestRaw = d;
           bestSeg = i;
         }
       }
     }
-    if (bestSeg < 0) return pos;
+    if (bestSeg < 0) {
+      _lastSnapped = pos;
+      return pos;
+    }
     // Monotonic: the car only ever drives forward, so the consumed start must
     // never move backward (GPS noise could make the nearest segment flip to an
     // earlier one → the drawn route would briefly "grow back").
     _curSeg = math.max(_curSeg, bestSeg);
     final (proj, _) = _closestOnSegment(pos, pts[bestSeg], pts[bestSeg + 1]);
+    _lastSnapped = proj;
     return proj;
   }
 
@@ -131,6 +166,52 @@ class TurnByTurnEngine {
   /// driven part of the route (vertices before this) can be dropped from the
   /// drawn polyline.
   int get snappedSegmentIndex => _curSeg;
+
+  /// Smoothed bearing (0=N, clockwise) of the route just ahead of the car —
+  /// the value that drives the arrow and the heading-up camera. This is the
+  /// MapLibre / Vietmap "snap location bearing" approach: the direction from
+  /// the car's snapped position toward a point [_lookAheadMeters] ahead on
+  /// the route, low-pass filtered.
+  ///
+  /// Never the raw nearest-segment bearing (which flips between adjacent
+  /// segments at a vertex and under GPS jitter — that flip is what made the
+  /// arrow/camera snap back and forth / flicker) and never the phone compass.
+  ///
+  /// Filtering: micro-jitter (<0.5°) is zeroed, medium wobble is attenuated
+  /// 70%, and real changes (approaching a turn) pass through so the camera
+  /// animation still rotates the map for an actual corner.
+  double routeBearing() {
+    final pts = route.geometry;
+    if (pts.length < 2) return _hasSmBearing ? _smBearing : 0;
+    final proj = _lastSnapped;
+    if (proj == null) return _hasSmBearing ? _smBearing : 0;
+    // Cumulative distance at the SNAPPED point (not the nearest vertex — that
+    // can be behind/ahead of the car and would make the look-ahead point the
+    // wrong way mid-segment).
+    final seg = _curSeg.clamp(0, pts.length - 2);
+    final snapCum = _cum[seg] + distanceMeters(pts[seg], proj);
+    final target = (snapCum + _lookAheadMeters).clamp(snapCum, _cum.last);
+    if (target <= snapCum) {
+      // At the very end of the route — hold the last bearing.
+      return _hasSmBearing ? _smBearing : _bearingBetween(proj, pts.last);
+    }
+    final to = positionAtDistance(target);
+    final raw = _bearingBetween(proj, to);
+    if (!_hasSmBearing) {
+      _smBearing = raw;
+      _hasSmBearing = true;
+      return raw;
+    }
+    // Shortest-path difference, then low-pass.
+    var d = (raw - _smBearing + 540) % 360 - 180;
+    if (d.abs() < 0.5) {
+      d = 0;
+    } else if (d.abs() < 20) {
+      d *= 0.3;
+    }
+    _smBearing = (_smBearing + d + 360) % 360;
+    return _smBearing;
+  }
 
   /// Offset [pos] laterally — perpendicular to the route at [pos] — by
   /// [meters] (positive = right of the travel direction). Used to inject
