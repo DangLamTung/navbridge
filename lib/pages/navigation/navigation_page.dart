@@ -564,6 +564,12 @@ class _NavigationPageState extends State<NavigationPage>
                   terrain3D: _terrain3d,
                   nightMode: _nightMode,
                   satellite: _satellite,
+                  // Vietmap light basemap in nav mode when the Vietmap data
+                  // source is active, online, and real keys are compiled in.
+                  vietmapBase:
+                      dataSource == 'vietmap' &&
+                      !_offline &&
+                      VietmapConfig.hasKeys,
                   carIcon: _carIcon,
                   pois: _pois,
                   selectedPoi: _selectedPoi,

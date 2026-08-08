@@ -23,6 +23,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/poi_search.dart';
 import 'package:navbridge/services/terrain.dart';
+import 'package:navbridge/services/vietmap_config.dart' show VietmapConfig;
 import 'package:navbridge/core/trip_plan.dart';
 
 /// Built-in car marker icons (see assets/offline_map/icons/).
@@ -77,6 +78,7 @@ class VectorNavMap extends StatefulWidget {
     this.selectedPoi,
     this.stops = const [],
     this.satellite = false,
+    this.vietmapBase = false,
     this.controller,
   });
 
@@ -139,6 +141,13 @@ class VectorNavMap extends StatefulWidget {
   /// terrain, nicer for mountain views than the light vector map. Online
   /// only; falls back to the vector/light map when offline.
   final bool satellite;
+
+  /// Vietmap light-raster basemap in nav mode — used when the Vietmap data
+  /// source is active and online. Only affects the online raster fallback
+  /// (below the vector layers); offline the bundled vector map still draws
+  /// through, and the caller gates this on [VietmapConfig.hasKeys] so the
+  /// keyed URL is never used without a real key.
+  final bool vietmapBase;
 
   /// Camera-follow controller for the auto-center button (rendered by the
   /// page so it sits above the platform view).
@@ -427,10 +436,18 @@ class _VectorNavMapState extends State<VectorNavMap>
           'https://server.arcgisonline.com/ArcGIS/rest/services/'
               'World_Imagery/MapServer/tile/{z}/{y}/{x}'
         else if (widget.nightMode)
+          // Vietmap has no dark style — keep CARTO dark at night.
           'https://basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png'
+        else if (widget.vietmapBase)
+          // Vietmap light raster when the Vietmap source is active (online).
+          // The caller gates this on hasKeys, so apikey is always present.
+          VietmapConfig.mapTiles
         else
           'https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
       ];
+      fallback['attribution'] = widget.vietmapBase
+          ? '© Vietmap'
+          : '© CARTO © OpenStreetMap';
     }
     // Night mode: remap the whole vector style to a REAL dark palette (light
     // fills → dark, roads → medium gray, labels → light text on a dark halo)
@@ -1009,7 +1026,8 @@ class _VectorNavMapState extends State<VectorNavMap>
     }
     if (old.terrain3D != widget.terrain3D ||
         old.nightMode != widget.nightMode ||
-        old.satellite != widget.satellite) {
+        old.satellite != widget.satellite ||
+        old.vietmapBase != widget.vietmapBase) {
       // Rebuild the style (terrain / night / satellite) and hot-swap it via
       // setStyle — much lighter than re-creating the whole platform view
       // (which reset the camera and flashed on low-end devices). Annotations
