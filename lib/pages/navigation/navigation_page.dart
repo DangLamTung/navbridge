@@ -46,6 +46,7 @@ import 'package:navbridge/ui/arrival_card.dart';
 import 'package:navbridge/ui/vector_nav_map.dart';
 import 'package:navbridge/services/vietmap_api.dart';
 import 'package:navbridge/services/vietmap_config.dart';
+import 'package:navbridge/services/vietmap_intent.dart';
 import 'package:navbridge/services/voice_commands.dart';
 import 'package:navbridge/services/voice_guide.dart';
 import 'package:navbridge/services/weather.dart';
@@ -733,6 +734,18 @@ class _NavigationPageState extends State<NavigationPage>
                                           ? const Color(0xFFEA4335)
                                           : const Color(0xFFF4B400),
                                       onTap: _toggleListening,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    RoundActionButton(
+                                      icon: Icons.local_gas_station,
+                                      color: const Color(0xFFF4B400),
+                                      onTap: _findNearestGas,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    RoundActionButton(
+                                      icon: Icons.directions_car,
+                                      color: const Color(0xFF1A73E8),
+                                      onTap: _openVietmapNav,
                                     ),
                                   ],
                                 ),

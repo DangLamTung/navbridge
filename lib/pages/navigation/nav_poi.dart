@@ -1,10 +1,10 @@
 part of 'navigation_page.dart';
 
 extension _NavPoi on _NavigationPageState {
-
   Widget _poiArea() {
     return _pois.isEmpty ? _poiTypeBar() : _poiResults();
   }
+
   Widget _poiTypeBar() {
     return SizedBox(
       height: 40,
@@ -57,6 +57,7 @@ extension _NavPoi on _NavigationPageState {
       ),
     );
   }
+
   Widget _poiResults() {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -168,6 +169,7 @@ extension _NavPoi on _NavigationPageState {
       ),
     );
   }
+
   Widget _poiCard(PoiResult p) {
     final d = _current == null ? 0.0 : distanceMeters(_current!, p.pos);
     final col = poiColor(p.type);
@@ -235,6 +237,68 @@ extension _NavPoi on _NavigationPageState {
       }
     } finally {
       if (mounted) setNavState(() => _poiBusy = false);
+    }
+  }
+
+  /// "Xăng gần nhất": merge the bundled offline fuel POIs with the live
+  /// Overpass fuel search around the current position and show the nearest
+  /// with distance. Works fully offline; the online pass only adds stations.
+  Future<void> _findNearestGas() async {
+    final c = _current ?? _origin;
+    if (c == null) return;
+    setNavState(() {
+      _poiBusy = true;
+      _poiType = PoiType.fuel;
+      _selectedPoi = null;
+      _pois = [];
+    });
+    try {
+      final results = <PoiResult>[
+        for (final p in await poisInCategory('fuel', near: c, limit: 8))
+          PoiResult(name: p.name, lat: p.lat, lng: p.lng, type: PoiType.fuel),
+      ];
+      // Online pass is best-effort — offline stations still show if it fails.
+      try {
+        for (final r in await searchPois(PoiType.fuel, c, limit: 8)) {
+          final dup = results.any(
+            (x) => (x.lat - r.lat).abs() < 1e-5 && (x.lng - r.lng).abs() < 1e-5,
+          );
+          if (!dup) results.add(r);
+        }
+      } catch (_) {}
+      results.sort(
+        (a, b) => distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos)),
+      );
+      if (!mounted) return;
+      setNavState(() => _pois = results.take(8).toList());
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Không tìm được trạm xăng: $e')));
+      }
+    } finally {
+      if (mounted) setNavState(() => _poiBusy = false);
+    }
+  }
+
+  /// "Điều hướng bằng Vietmap": hand the current destination to the Vietmap
+  /// Maps app (browser fallback) through an Android intent / deep link.
+  Future<void> _openVietmapNav() async {
+    final dest = _destination ?? (_stops.isEmpty ? null : _stops.last.pos);
+    if (dest == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Chưa có điểm đến để mở Vietmap.')),
+        );
+      return;
+    }
+    final ok = await openVietmapNavigation(dest, label: _destinationName);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Không mở được Vietmap.')));
     }
   }
 
