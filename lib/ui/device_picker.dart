@@ -13,7 +13,7 @@ import 'package:navbridge/core/config.dart';
 
 class DevicePickerSheet extends StatefulWidget {
   final BleClock clock;
-  final Future<void> Function(String mac) onPicked;
+  final Future<void> Function(ScannedClockDevice device) onPicked;
 
   const DevicePickerSheet({
     super.key,
@@ -72,10 +72,18 @@ class _DevicePickerSheetState extends State<DevicePickerSheet> {
         d.id.toUpperCase() == AppConfig.clockMac.toUpperCase();
   }
 
+  /// The ESP 2.8" nav display advertises as NAV-OSM / NAVMAP. It has its own
+  /// GATT profile and must be driven by the map BLE client — not the E-ink
+  /// clock's, whose Write characteristic UUID it does not expose.
+  bool _isMap(ScannedClockDevice d) {
+    final n = d.name.toUpperCase();
+    return n.contains('NAV-OSM') || n.contains('NAVMAP');
+  }
+
   Future<void> _pick(ScannedClockDevice d) async {
     _closed = true;
     Navigator.of(context).pop();
-    await widget.onPicked(d.id);
+    await widget.onPicked(d);
   }
 
   @override
@@ -137,25 +145,35 @@ class _DevicePickerSheetState extends State<DevicePickerSheet> {
                     itemBuilder: (_, i) {
                       final d = sorted[i];
                       final isClock = _isClock(d);
+                      final isMap = _isMap(d);
+                      final target = isClock || isMap;
                       return ListTile(
                         dense: true,
                         leading: Icon(
-                          isClock ? Icons.watch : Icons.devices,
-                          color: isClock ? Colors.green : null,
+                          isClock
+                              ? Icons.watch
+                              : isMap
+                              ? Icons.map_outlined
+                              : Icons.devices,
+                          color: target ? Colors.green : null,
                         ),
                         title: Text(
                           d.name.isEmpty ? '(không có tên)' : d.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontWeight:
-                                isClock ? FontWeight.bold : FontWeight.normal,
+                            fontWeight: target
+                                ? FontWeight.bold
+                                : FontWeight.normal,
                           ),
                         ),
                         subtitle: Text('${d.id}  •  ${d.rssi} dBm'),
-                        trailing: isClock
-                            ? const Icon(Icons.check_circle,
-                                color: Colors.green, size: 18)
+                        trailing: target
+                            ? const Icon(
+                                Icons.check_circle,
+                                color: Colors.green,
+                                size: 18,
+                              )
                             : null,
                         onTap: () => _pick(d),
                       );

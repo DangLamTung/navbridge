@@ -27,23 +27,34 @@ extension _NavMap on _NavigationPageState {
     setNavState(() => _carIcon = kCarIcons[(i + 1) % kCarIcons.length]);
   }
 
-  void _cycleTileLayer() {
-    final i = _NavigationPageState._tileLayerNames.indexOf(_tileSource);
-    final next = _NavigationPageState._tileLayerNames[(i + 1) % _NavigationPageState._tileLayerNames.length];
+  void _selectTileLayer(String next) {
     setNavState(() {
       _tileSource = next;
       _tileProvider = OfflineTileProvider(source: next);
     });
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text('Bản đồ: $_tileSource'),
-          duration: const Duration(seconds: 1),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
   }
+
+  /// Icon for a basemap layer option in the layer picker.
+  IconData _tileLayerIcon(String name) => switch (name) {
+    'osm' => Icons.map,
+    'carto' => Icons.layers,
+    'topo' => Icons.terrain,
+    'esri' => Icons.satellite_alt,
+    'vietmap' => Icons.map_outlined,
+    'vietmapsat' => Icons.satellite,
+    _ => Icons.map,
+  };
+
+  /// Display label for a basemap layer option in the layer picker.
+  String _tileLayerLabel(String name) => switch (name) {
+    'osm' => 'OpenStreetMap',
+    'carto' => 'Carto',
+    'topo' => 'Địa hình',
+    'esri' => 'Vệ tinh (ESRI)',
+    'vietmap' => 'Vietmap',
+    'vietmapsat' => 'Vietmap vệ tinh',
+    _ => name,
+  };
 
   void _locateMe() {
     final c = _current;

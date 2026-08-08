@@ -153,9 +153,11 @@ class _VectorNavMapState extends State<VectorNavMap>
   MapLibreMapController? _controller;
   String? _styleString;
   String? _styleError;
+
   /// Parsed nav style with file:// paths resolved — terrain is injected on
   /// top of this per [_buildStyleString].
   Map<String, dynamic>? _baseStyle;
+
   /// Offline `raster-dem` source (bundled pmtiles or downloaded terrarium
   /// tiles), or null when no DEM data is present.
   Map<String, dynamic>? _demSource;
@@ -343,10 +345,10 @@ class _VectorNavMapState extends State<VectorNavMap>
       final layers = style['layers'] as List<dynamic>;
       final insertAt =
           (layers.isNotEmpty &&
-                  layers.first is Map &&
-                  (layers.first as Map)['id'] == 'background')
-              ? 1
-              : 0;
+              layers.first is Map &&
+              (layers.first as Map)['id'] == 'background')
+          ? 1
+          : 0;
       layers.insert(insertAt, <String, dynamic>{
         'id': 'raster-fallback',
         'type': 'raster',
@@ -424,38 +426,209 @@ class _VectorNavMapState extends State<VectorNavMap>
         if (widget.satellite)
           'https://server.arcgisonline.com/ArcGIS/rest/services/'
               'World_Imagery/MapServer/tile/{z}/{y}/{x}'
+        else if (widget.nightMode)
+          'https://basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png'
         else
           'https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
       ];
     }
-    // Night mode: dark background layer + a semi-transparent black overlay so
-    // the map goes dark while the route/arrow (annotations) stay bright.
-    final layers = style['layers'] as List<dynamic>;
+    // Night mode: remap the whole vector style to a REAL dark palette (light
+    // fills → dark, roads → medium gray, labels → light text on a dark halo)
+    // instead of dimming the light map with a black overlay. The route and
+    // car arrow are separate annotations, so they stay bright on top.
     if (widget.nightMode) {
-      for (final l in layers) {
-        if (l is Map && l['id'] == 'background') {
-          (l['paint'] as Map<String, dynamic>)['background-color'] = '#0E1116';
-        }
-      }
-      if (!layers.any((l) => l is Map && l['id'] == 'night-overlay')) {
-        layers.add(<String, dynamic>{
-          'id': 'night-overlay',
-          'type': 'background',
-          'paint': <String, dynamic>{
-            'background-color': '#000000',
-            'background-opacity': 0.55,
-          },
-        });
-      }
-    } else {
-      layers.removeWhere((l) => l is Map && l['id'] == 'night-overlay');
+      return _darkStyle(style);
     }
-    debugPrint(
-      'VECTORMAP: final style sources='
-      '${(style['sources'] as Map).keys.toList()} firstLayers='
-      '${layers.take(6).map((l) => l is Map ? l['id'] : '?').toList()}',
-    );
     return jsonEncode(style);
+  }
+
+  /// Real dark-map theme for the vector style (used when [widget.nightMode]).
+  /// Every paint color is remapped to a dark version of the same hue — light
+  /// fills become dark fills, roads become medium gray, labels become light
+  /// text on a dark halo — so the map is genuinely dark, not just dimmed.
+  String _darkStyle(Map<String, dynamic> style) {
+    final s = jsonDecode(jsonEncode(style)) as Map<String, dynamic>;
+    final layers = s['layers'] as List<dynamic>;
+    for (final l in layers) {
+      if (l is! Map) continue;
+      final paint = l['paint'];
+      if (paint is! Map) continue;
+      l['paint'] = _darkPaint(paint.cast<String, dynamic>());
+    }
+    return jsonEncode(s);
+  }
+
+  Map<String, dynamic> _darkPaint(Map<String, dynamic> paint) {
+    final out = <String, dynamic>{};
+    paint.forEach((key, value) {
+      final k = key.toLowerCase();
+      out[key] = _darkColorValue(
+        value,
+        isText: k.contains('text-color') || k.contains('icon-color'),
+        isHalo: k.contains('halo-color'),
+        isFill: k.contains('fill-color') || k.contains('fill-extrusion'),
+        isLine: k.contains('line-color'),
+        isBg: k.contains('background-color'),
+      );
+    });
+    return out;
+  }
+
+  dynamic _darkColorValue(
+    Object? v, {
+    required bool isText,
+    required bool isHalo,
+    required bool isFill,
+    required bool isLine,
+    required bool isBg,
+  }) {
+    if (v is String) {
+      return _darkColor(
+        v,
+        isText: isText,
+        isHalo: isHalo,
+        isFill: isFill,
+        isLine: isLine,
+        isBg: isBg,
+      );
+    }
+    if (v is Map) {
+      final out = <String, dynamic>{};
+      v.forEach((key, val) {
+        if (key == 'stops' && val is List) {
+          out[key] = val.map((e) {
+            if (e is List && e.length == 2) {
+              return [
+                e[0],
+                _darkColorValue(
+                  e[1],
+                  isText: isText,
+                  isHalo: isHalo,
+                  isFill: isFill,
+                  isLine: isLine,
+                  isBg: isBg,
+                ),
+              ];
+            }
+            return e;
+          }).toList();
+        } else {
+          out[key] = val;
+        }
+      });
+      return out;
+    }
+    return v;
+  }
+
+  /// Remap a single CSS color string to its dark-theme equivalent.
+  String _darkColor(
+    String css, {
+    required bool isText,
+    required bool isHalo,
+    required bool isFill,
+    required bool isLine,
+    required bool isBg,
+  }) {
+    final hsl = _colorHsl(css);
+    if (hsl == null) return css;
+    final h = hsl[0];
+    final s = hsl[1];
+    final l = hsl[2];
+    double nl;
+    if (isHalo) {
+      nl = 0.06; // dark halo so light labels read on the dark map
+    } else if (isText) {
+      nl = l < 0.5 ? 0.88 : l; // dark text → light
+    } else if (isBg) {
+      nl = (l * 0.15).clamp(0.10, 0.20).toDouble();
+    } else if (isFill) {
+      nl = (l * 0.22).clamp(0.10, 0.26).toDouble();
+    } else if (isLine) {
+      nl = (l * 0.45).clamp(0.28, 0.55).toDouble();
+    } else {
+      nl = (l * 0.30).clamp(0.12, 0.40).toDouble();
+    }
+    return _hslToHex(h, s, nl);
+  }
+
+  /// Parse a CSS hex / rgb(a) / hsl(a) color into [hue, sat, light] (0..1).
+  List<double>? _colorHsl(String css) {
+    final c = css.trim().toLowerCase();
+    final hex = RegExp(r'^#([0-9a-f]{3}|[0-9a-f]{6})$').firstMatch(c);
+    if (hex != null) {
+      var h = hex.group(1)!;
+      if (h.length == 3) {
+        h = h.split('').map((x) => '$x$x').join();
+      }
+      final r = int.parse(h.substring(0, 2), radix: 16) / 255;
+      final g = int.parse(h.substring(2, 4), radix: 16) / 255;
+      final b = int.parse(h.substring(4, 6), radix: 16) / 255;
+      return _rgbToHsl(r, g, b);
+    }
+    final hsl = RegExp(
+      r'^hsla?\(([\d.]+)[,\s]+([\d.]+)%[,\s]+([\d.]+)%',
+    ).firstMatch(c);
+    if (hsl != null) {
+      return [
+        double.parse(hsl.group(1)!) / 360.0,
+        double.parse(hsl.group(2)!) / 100.0,
+        double.parse(hsl.group(3)!) / 100.0,
+      ];
+    }
+    final rgb = RegExp(
+      r'^rgba?\(([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)',
+    ).firstMatch(c);
+    if (rgb != null) {
+      return _rgbToHsl(
+        double.parse(rgb.group(1)!) / 255,
+        double.parse(rgb.group(2)!) / 255,
+        double.parse(rgb.group(3)!) / 255,
+      );
+    }
+    return null;
+  }
+
+  List<double> _rgbToHsl(double r, double g, double b) {
+    final max = [r, g, b].reduce((a, x) => a > x ? a : x);
+    final min = [r, g, b].reduce((a, x) => a < x ? a : x);
+    final l = (max + min) / 2;
+    if (max == min) return [0, 0, l];
+    final d = max - min;
+    final s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    double h;
+    if (max == r) {
+      h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    } else if (max == g) {
+      h = ((b - r) / d + 2) / 6;
+    } else {
+      h = ((r - g) / d + 4) / 6;
+    }
+    return [h, s, l];
+  }
+
+  String _hslToHex(double h, double s, double l) {
+    double hue2rgb(double p, double q, double t) {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    }
+
+    final q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    final p = 2 * l - q;
+    final r = hue2rgb(p, q, h + 1 / 3);
+    final g = hue2rgb(p, q, h);
+    final b = hue2rgb(p, q, h - 1 / 3);
+    String to2(double x) => (x * 255)
+        .round()
+        .clamp(0, 255)
+        .toInt()
+        .toRadixString(16)
+        .padLeft(2, '0');
+    return '#${to2(r)}${to2(g)}${to2(b)}';
   }
 
   Future<void> _addRoute() async {
@@ -742,9 +915,7 @@ class _VectorNavMapState extends State<VectorNavMap>
       final size = MediaQuery.of(context).size;
       final dpr = MediaQuery.of(context).devicePixelRatio;
       // Car arrow.
-      final p = await ctrl.toScreenLocation(
-        LatLng(c.latitude, c.longitude),
-      );
+      final p = await ctrl.toScreenLocation(LatLng(c.latitude, c.longitude));
       if (!mounted) return;
       final off = Offset(
         ((p.x.toDouble() / dpr) - 37.5).clamp(0.0, size.width - 75.0),
@@ -757,9 +928,7 @@ class _VectorNavMapState extends State<VectorNavMap>
       for (final s in stops) {
         try {
           final sp = await ctrl.toScreenLocation(LatLng(s.lat, s.lng));
-          screens.add(
-            Offset(sp.x.toDouble() / dpr, sp.y.toDouble() / dpr),
-          );
+          screens.add(Offset(sp.x.toDouble() / dpr, sp.y.toDouble() / dpr));
         } catch (_) {
           screens.add(null);
         }
@@ -1002,9 +1171,7 @@ class _VectorNavMapState extends State<VectorNavMap>
               child: IgnorePointer(child: Center(child: _carArrow())),
             ),
         // Trip stop indicators (numbered waypoints) — glued to the map.
-        for (var i = 0;
-            i < widget.stops.length && i < _stopScreens.length;
-            i++)
+        for (var i = 0; i < widget.stops.length && i < _stopScreens.length; i++)
           if (_stopScreens[i] != null)
             Positioned(
               left: _stopScreens[i]!.dx - 14,
@@ -1065,8 +1232,10 @@ class _VectorNavMapState extends State<VectorNavMap>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _recenterTimer?.cancel();
-    _recenterTimer?.cancel();
-    _controller?.dispose();
+    // Do NOT dispose _controller here — the MapLibreMap widget owns the
+    // controller it hands us via onMapCreated and disposes it itself. Calling
+    // dispose() again throws "A MapLibreMapController was used after being
+    // disposed" when exiting navigation.
     super.dispose();
   }
 }
@@ -1090,9 +1259,7 @@ class _StopMarker extends StatelessWidget {
         color: color,
         shape: BoxShape.circle,
         border: Border.all(color: Colors.white, width: 2),
-        boxShadow: const [
-          BoxShadow(color: Colors.black38, blurRadius: 4),
-        ],
+        boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4)],
       ),
       child: Center(
         child: Text(

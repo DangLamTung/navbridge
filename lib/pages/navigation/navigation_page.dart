@@ -6,7 +6,7 @@
 ///   - [SearchPill]            top search bar
 ///   - [SuggestionList]        Nominatim results
 ///   - [MapControls]           zoom +/− and locate buttons
-///   - [ClockButton]           E-ink bluetooth connection state
+///   - [DisplaysButton]        combined BLE displays connection state
 ///   - [RoutePreviewCard]      "route ready" bottom card
 ///   - [NavigationCard]        live turn-by-turn bottom card
 library;
@@ -23,10 +23,12 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'package:navbridge/services/ble_clock.dart';
+import 'package:navbridge/services/ble_map_clock.dart';
 import 'package:navbridge/ui/device_picker.dart';
 import 'package:navbridge/services/elevation.dart';
 import 'package:navbridge/services/nav_engine.dart';
 import 'package:navbridge/core/nav_protocol.dart';
+import 'package:navbridge/core/map_protocol.dart';
 import 'package:navbridge/pages/offline_screen.dart';
 import 'package:navbridge/services/offline_poi.dart';
 import 'package:navbridge/services/offline_router.dart';
@@ -47,7 +49,7 @@ import 'package:navbridge/services/vietmap_config.dart';
 import 'package:navbridge/services/voice_commands.dart';
 import 'package:navbridge/services/voice_guide.dart';
 import 'package:navbridge/services/weather.dart';
-import 'package:navbridge/ui/clock_button.dart';
+import 'package:navbridge/ui/displays_button.dart';
 import 'package:navbridge/ui/elevation_chart.dart';
 import 'package:navbridge/ui/map_controls.dart';
 import 'package:navbridge/ui/nav_status_bar.dart';
@@ -72,7 +74,6 @@ part 'nav_search.dart';
 part 'nav_voice.dart';
 part 'nav_weather.dart';
 
-
 class NavigationPage extends StatefulWidget {
   const NavigationPage({super.key});
 
@@ -84,6 +85,9 @@ class _NavigationPageState extends State<NavigationPage>
     with WidgetsBindingObserver {
   final MapController _map = MapController();
   final BleClock _clock = BleClock();
+
+  /// BLE client for the ESP32 2.8" navigation display (NAV-OSM board).
+  final BleMapClock _mapClock = BleMapClock();
 
   /// setState wrapper exposed to the navigation `part` extensions (nav_*.dart),
   /// which are not State subclasses and so can't call the protected
@@ -132,6 +136,11 @@ class _NavigationPageState extends State<NavigationPage>
   StreamSubscription<Position>? _gpsSub;
   bool _navigating = false;
   String _clockStatus = 'off';
+  String _mapStatus = 'off';
+
+  /// Last minute sent to the ESP32 display's HUD clock — the current time is
+  /// only pushed when the minute ticks over.
+  int _lastMapClockMinute = -1;
 
   // --- Google-style extras: step list, alternative routes ----------------
   bool _showSteps = false; // expanded turn-banner step list
@@ -149,7 +158,8 @@ class _NavigationPageState extends State<NavigationPage>
   bool _avoidFerry = false; // re-plan without ferries (OSRM)
   ElevationInfo? _elevation; // ascent/descent of the current route
   final Map<String, ElevationInfo> _elevationCache = {};
-  bool _elevationExpanded = false; // expand the elevation chart on the nav screen
+  bool _elevationExpanded =
+      false; // expand the elevation chart on the nav screen
 
   /// Current air temperature (°C) for the bottom status bar (Open-Meteo).
   WeatherInfo? _weather;
@@ -205,14 +215,21 @@ class _NavigationPageState extends State<NavigationPage>
     'topo': 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
     'esri':
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    'vietmap': VietmapConfig.satelliteTiles,
+    // Vietmap layers need the tile key (--dart-define=VIETMAP_TILE_KEY).
+    // Without it their URLs carry `?apikey=` and every tile 403s, so the
+    // menu only lists them when real keys were compiled in (see below).
+    'vietmap': VietmapConfig.mapTiles,
+    'vietmapsat': VietmapConfig.satelliteTiles,
   };
-  static const List<String> _tileLayerNames = [
+
+  /// Basemap layer names in menu order. Vietmap layers are only offered when
+  /// real keys were provided at build time.
+  List<String> get _tileLayerNames => [
     'osm',
     'carto',
     'topo',
     'esri',
-    'vietmap',
+    if (VietmapConfig.hasKeys) ...['vietmap', 'vietmapsat'],
   ];
   String _tileSource = 'osm'; // active basemap layer
 
@@ -245,6 +262,16 @@ class _NavigationPageState extends State<NavigationPage>
       if (!mounted) return;
       setState(() {
         _clockStatus = switch (l) {
+          ClockLink.connected => 'connected',
+          ClockLink.connecting => 'connecting',
+          ClockLink.off => 'off',
+        };
+      });
+    });
+    _mapClock.linkStream.listen((l) {
+      if (!mounted) return;
+      setState(() {
+        _mapStatus = switch (l) {
           ClockLink.connected => 'connected',
           ClockLink.connecting => 'connecting',
           ClockLink.off => 'off',
@@ -326,6 +353,7 @@ class _NavigationPageState extends State<NavigationPage>
       unawaited(saveTrip(t).then((_) {}, onError: (Object _) {}));
     }
     _clock.dispose();
+    _mapClock.dispose();
     _map.dispose();
     super.dispose();
   }
@@ -350,8 +378,6 @@ class _NavigationPageState extends State<NavigationPage>
   /// Normal builds (no defines) are completely unaffected.
 
   // ---- GPS -------------------------------------------------------------
-
-
 
   /// Online GPS road-snapping: send the rolling trace to OSRM /match
   /// (throttled to 5 s) to refine the on-route position when online. The
@@ -391,9 +417,7 @@ class _NavigationPageState extends State<NavigationPage>
   /// the car forward/back on the road and adds no value. Only used by the
   /// NAVTEST harness (no effect on normal builds).
 
-
   // ---- search (Nominatim → OSRM route) ---------------------------------
-
 
   /// When forced-offline is active, ask the user whether to go online for an
   /// action that needs the network (search / routing). Accepting lifts the
@@ -401,30 +425,19 @@ class _NavigationPageState extends State<NavigationPage>
   /// so a restart goes back to forced offline. Returns true when the action
   /// may proceed online.
 
-
-
   /// Add [name]@[lat]/[lng] as the destination and build the route.
 
   /// Route through all planned stops (origin → stop1 → … → last stop).
 
   /// Switch to alternative route [i] (Google's tap-to-choose preview).
 
-
-
-
-
   /// Best-effort start position: live fix, last known, or the app default.
   /// Never throws; falls back to the default city (HCMC) when GPS is
   /// unavailable so route planning + simulation still work.
 
-
-
   // ---- BLE clock -------------------------------------------------------
 
-
-
   // ---- map helpers -----------------------------------------------------
-
 
   // ---- voice: spoken turn-by-turn (Bluetooth speaker) ------------------
 
@@ -435,11 +448,7 @@ class _NavigationPageState extends State<NavigationPage>
   /// speed, the callouts move earlier; the fixed fallbacks keep them sane
   /// when stationary.
 
-
   // ---- voice: commands (mic) -------------------------------------------
-
-
-
 
   /// Cycle the car marker icon (arrow → fun emojis).
 
@@ -504,12 +513,8 @@ class _NavigationPageState extends State<NavigationPage>
 
   // ---- quick POI search (gas / food / hotel / …) -----------------------
 
-
-
-
   /// Lazily-loaded category chips for the BUNDLED offline POI index (ATM,
   /// xăng, nhà hàng, …) — browse "nearest X" with no network.
-
 
   /// Find the nearest POIs of [type] around the current position and
   /// highlight them on the map.
@@ -532,11 +537,7 @@ class _NavigationPageState extends State<NavigationPage>
 
   /// Switch the basemap layer (OSM → CARTO → Topo → Satellite → …).
 
-
   // ---- trips history ---------------------------------------------------
-
-
-
 
   // ---- UI composition --------------------------------------------------
 
@@ -669,7 +670,8 @@ class _NavigationPageState extends State<NavigationPage>
                                           height: 46,
                                           child: Icon(
                                             Icons.layers,
-                                            color: (_tilt3d ||
+                                            color:
+                                                (_tilt3d ||
                                                     _terrain3d ||
                                                     _satellite)
                                                 ? kAppBlue
@@ -785,9 +787,7 @@ class _NavigationPageState extends State<NavigationPage>
                     Positioned(
                       left: 12,
                       right: 66,
-                      top: _offline
-                          ? (_suggestions.isEmpty ? 152 : 104)
-                          : 70,
+                      top: _offline ? (_suggestions.isEmpty ? 152 : 104) : 70,
                       child: _suggestions.isNotEmpty
                           ? SuggestionList(
                               suggestions: _suggestions,
@@ -837,10 +837,41 @@ class _NavigationPageState extends State<NavigationPage>
                             onTap: _openOffline,
                           ),
                           const SizedBox(height: 8),
-                          RoundActionButton(
-                            icon: Icons.layers_outlined,
-                            color: const Color(0xFF7B1FA2),
-                            onTap: _cycleTileLayer,
+                          PopupMenuButton<String>(
+                            tooltip: 'Lớp bản đồ',
+                            position: PopupMenuPosition.under,
+                            offset: const Offset(-150, 8),
+                            color: Colors.white,
+                            elevation: 8,
+                            shadowColor: Colors.black38,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            onSelected: _selectTileLayer,
+                            itemBuilder: (context) => [
+                              for (final name in _tileLayerNames)
+                                _layerItem(
+                                  name,
+                                  _tileLayerIcon(name),
+                                  _tileLayerLabel(name),
+                                  name == _tileSource,
+                                ),
+                            ],
+                            child: Material(
+                              color: Colors.white,
+                              elevation: 4,
+                              shadowColor: Colors.black26,
+                              shape: const CircleBorder(),
+                              child: SizedBox(
+                                width: 46,
+                                height: 46,
+                                child: Icon(
+                                  Icons.layers_outlined,
+                                  color: const Color(0xFF7B1FA2),
+                                  size: 22,
+                                ),
+                              ),
+                            ),
                           ),
                         ],
                       ),
@@ -898,10 +929,7 @@ class _NavigationPageState extends State<NavigationPage>
     );
   }
 
-
-
   /// Compact header shown while navigating (replaces the search bar).
-
 
   /// Minutes remaining to the destination (from remaining duration).
 
@@ -917,8 +945,6 @@ class _NavigationPageState extends State<NavigationPage>
 
   /// While the user drags the progress line: remember the scrubbed fraction
   /// so the elevation marker + preview distance follow the finger.
-
-
 
   /// Compact elevation/terrain chart for the nav status bar (tap to
   /// expand/collapse). The progress marker follows the live progress, or the
@@ -940,10 +966,7 @@ class _NavigationPageState extends State<NavigationPage>
               const SizedBox(width: 6),
               const Text(
                 'Độ cao',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
               ),
               const Spacer(),
               Icon(

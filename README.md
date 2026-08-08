@@ -1,8 +1,12 @@
 # NavBridge
 
 BLE portable turn-by-turn navigation: routes + turn-by-turn directions
-on your phone, mirrored in real time to an external BLE-connected monitor
-(e-ink clock / HUD).
+on your phone, mirrored in real time to external BLE-connected monitors:
+
+- **E-ink clock** (DA14585) — binary nav frame (`lib/core/nav_protocol.dart`).
+- **ESP32 2.8" TFT display** (NAV-OSM board, ILI9341 320×240) — compact
+  binary overlay frames (`lib/core/map_protocol.dart`): route polyline, live
+  position, maneuver, ETA and clock, fed through `BleMapClock`.
 
 - OSM map + Nominatim search + OSRM routing (no API keys)
 - Road type + speed limit lookup (Overpass)

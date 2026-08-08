@@ -1,7 +1,6 @@
 part of 'navigation_page.dart';
 
 extension _NavNavigation on _NavigationPageState {
-
   Future<void> _maybeRunNavTest() async {
     const long = bool.fromEnvironment('NAVTEST_LONG');
     const mountain = bool.fromEnvironment('NAVTEST_MOUNTAIN');
@@ -16,7 +15,11 @@ extension _NavNavigation on _NavigationPageState {
     if (!mounted) return;
     debugPrint(
       'NAVTEST: building route to '
-      '${long ? 'Hà Nội (~1600km)' : mountain ? 'Đà Lạt (terrain)' : 'Chợ Bến Thành'}'
+      '${long
+          ? 'Hà Nội (~1600km)'
+          : mountain
+          ? 'Đà Lạt (terrain)'
+          : 'Chợ Bến Thành'}'
       '${offline ? ' (OFFLINE)' : ''}',
     );
     setNavState(() {
@@ -38,8 +41,8 @@ extension _NavNavigation on _NavigationPageState {
         long
             ? TripStop(name: 'Hà Nội', lat: 21.0285, lng: 105.8542)
             : mountain
-                ? TripStop(name: 'Đà Lạt', lat: 11.9404, lng: 108.4583)
-                : TripStop(name: 'Chợ Bến Thành', lat: 10.7725, lng: 106.6980),
+            ? TripStop(name: 'Đà Lạt', lat: 11.9404, lng: 108.4583)
+            : TripStop(name: 'Chợ Bến Thành', lat: 10.7725, lng: 106.6980),
       );
     });
     try {
@@ -52,7 +55,13 @@ extension _NavNavigation on _NavigationPageState {
     _toggleSimulation();
     debugPrint(
       'NAVTEST: SIM drive started '
-      '(${long ? 'LONG' : mountain ? 'MOUNTAIN' : offline ? 'OFFLINE' : 'short + re-route'})',
+      '(${long
+          ? 'LONG'
+          : mountain
+          ? 'MOUNTAIN'
+          : offline
+          ? 'OFFLINE'
+          : 'short + re-route'})',
     );
     if (!long && !mountain && !offline) {
       // 20 s in, drive off-route to exercise the re-route path (expect
@@ -148,6 +157,7 @@ extension _NavNavigation on _NavigationPageState {
       // Snap straight into the new route (updates distance, icon, clock,
       // voice) instead of waiting for the next GPS fix.
       _handleNav(from, speedMps: speedMps);
+      _sendMapRoute();
     } catch (_) {
       // keep the old route on failure
     }
@@ -205,7 +215,10 @@ extension _NavNavigation on _NavigationPageState {
     final crossMeters = (r.nextDouble() * 2 - 1) * 12.0;
     return _engine!.lateralOffset(p, crossMeters);
   }
+
   Future<void> _sendToClock(NavProgress nav) async {
+    // ESP32 2.8" map display overlay feed (no-op when not connected).
+    await _sendToMap(nav);
     if (!_clock.isConnected) return;
     await _clock.sendNavFrame(
       meter: nav.meter,
@@ -214,6 +227,57 @@ extension _NavNavigation on _NavigationPageState {
       minute: nav.etaMinute,
       text: nav.text,
     );
+  }
+
+  /// Push the overlay frames to the ESP32 2.8" display (NAV-OSM board):
+  /// live position, next maneuver, ETA and the current HUD time. Each packet
+  /// replaces the previous one on the board, so a dropped write self-heals
+  /// on the next ~1 Hz tick.
+  Future<void> _sendToMap(NavProgress nav) async {
+    if (!_mapClock.isConnected) return;
+    final cur = _current;
+    if (cur != null) {
+      await _mapClock.sendFrame(
+        buildMapPosFrame(
+          lat: cur.latitude,
+          lon: cur.longitude,
+          spd: (_lastSpeedMps * 3.6).round().clamp(0, 255),
+          hdg: _routeBearing.round() % 360,
+          speedLimit: _roadInfo?.speedLimit ?? 0,
+        ),
+      );
+    }
+    await _mapClock.sendFrame(
+      buildMapNavFrame(
+        dist: nav.meter,
+        maneuverId: mapManeuverIdForIcon(nav.iconCode),
+        street: nav.text,
+      ),
+    );
+    await _mapClock.sendFrame(
+      buildMapEtaFrame(
+        hour: nav.etaHour,
+        minute: nav.etaMinute,
+        arrive: _destinationName,
+      ),
+    );
+    // HUD clock — only when the minute ticks.
+    final now = DateTime.now();
+    if (now.minute != _lastMapClockMinute) {
+      _lastMapClockMinute = now.minute;
+      await _mapClock.sendFrame(
+        buildMapClockFrame(hour: now.hour, minute: now.minute),
+      );
+    }
+  }
+
+  /// Send the full route polyline to the ESP32 display (once per route /
+  /// re-route). The board draws it as a thick blue line over its local tiles.
+  Future<void> _sendMapRoute() async {
+    if (!_mapClock.isConnected) return;
+    final engine = _engine;
+    if (engine == null) return;
+    await _mapClock.sendFrame(buildMapRouteFrame(engine.route.geometry));
   }
 
   Future<void> _startNavigation() async {
@@ -228,6 +292,7 @@ extension _NavNavigation on _NavigationPageState {
     _progress = nav;
     _logFix(origin, 0);
     _sendToClock(nav);
+    _sendMapRoute();
     _spokenFar = false;
     _spokenNear = false;
     _spokenFinal = false;
@@ -240,6 +305,7 @@ extension _NavNavigation on _NavigationPageState {
     unawaited(WakelockPlus.enable()); // keep the screen on while navigating
     if (mounted) setNavState(() {});
   }
+
   Future<void> _exitNavigation() async {
     debugPrint('SIM: EXIT navigation called');
     _simTimer?.cancel();
@@ -270,10 +336,20 @@ extension _NavNavigation on _NavigationPageState {
     await _finishTrip(); // save the recorded trip
   }
 
-  Future<void> _toggleClock() async {
-    if (_clock.isConnected) {
+  /// Single button for both BLE displays (E-ink clock + ESP32 2.8" nav
+  /// display). If any display is connected, tapping disconnects them all;
+  /// otherwise it opens the picker, which routes each device to its own BLE
+  /// client.
+  Future<void> _toggleDisplays() async {
+    if (_clock.isConnected || _mapClock.isConnected) {
       await _clock.disconnect();
-      if (mounted) setNavState(() => _clockStatus = 'off');
+      await _mapClock.disconnect();
+      if (mounted) {
+        setNavState(() {
+          _clockStatus = 'off';
+          _mapStatus = 'off';
+        });
+      }
       return;
     }
     await showModalBottomSheet<void>(
@@ -286,19 +362,56 @@ extension _NavNavigation on _NavigationPageState {
       builder: (_) => DevicePickerSheet(clock: _clock, onPicked: _connectTo),
     );
   }
-  Future<void> _connectTo(String mac) async {
+
+  /// The device picker hands us a picked BLE device. Route it by type: the
+  /// ESP 2.8" nav display (NAV-OSM) has its OWN GATT profile, so it goes to
+  /// [_mapClock] — never the E-ink clock's [BleClock] (those UUIDs don't
+  /// exist on the ESP board, which is what caused "not found Write
+  /// characteristic").
+  Future<void> _connectTo(ScannedClockDevice device) async {
     if (!mounted) return;
-    setNavState(() => _clockStatus = 'connecting');
+    final isMap = _isMapDisplay(device);
+    setNavState(() {
+      if (isMap) {
+        _mapStatus = 'connecting';
+      } else {
+        _clockStatus = 'connecting';
+      }
+    });
     try {
-      await _clock.connect(mac: mac);
-      if (mounted) setNavState(() => _clockStatus = 'connected');
+      if (isMap) {
+        await _mapClock.connect(mac: device.id);
+        if (mounted) setNavState(() => _mapStatus = 'connected');
+        // Push the current route + progress so the display shows nav right
+        // away instead of waiting for the next GPS tick.
+        _sendMapRoute();
+        final nav = _progress;
+        if (nav != null) _sendToMap(nav);
+      } else {
+        await _clock.connect(mac: device.id);
+        if (mounted) setNavState(() => _clockStatus = 'connected');
+      }
     } catch (e) {
       if (mounted) {
-        setNavState(() => _clockStatus = 'off');
+        setNavState(() {
+          if (isMap) {
+            _mapStatus = 'off';
+          } else {
+            _clockStatus = 'off';
+          }
+        });
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('BLE: $e')));
       }
     }
+  }
+
+  /// True when [d] is the ESP 2.8" nav display (NAV-OSM / NAVMAP advertise
+  /// names) — which must be driven by [BleMapClock], not the E-ink
+  /// [BleClock].
+  bool _isMapDisplay(ScannedClockDevice d) {
+    final n = d.name.toUpperCase();
+    return n.contains('NAV-OSM') || n.contains('NAVMAP');
   }
 }

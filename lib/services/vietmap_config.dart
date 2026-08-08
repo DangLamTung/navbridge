@@ -26,7 +26,11 @@ class VietmapConfig {
   static const String place = 'https://maps.vietmap.vn/api/place/v4';
   static const String route = 'https://maps.vietmap.vn/api/route/v4';
 
-  /// Raster satellite tiles (the only raster Vietmap style).
+  /// Vietmap raster map tiles — the light/standard map style.
+  static const String mapTiles =
+      'https://maps.vietmap.vn/api/maps/raster/v3/{z}/{x}/{y}?apikey=$tileKey';
+
+  /// Vietmap raster satellite tiles.
   static const String satelliteTiles =
       'https://maps.vietmap.vn/maps/tiles/st/{z}/{x}/{y}.png?apikey=$tileKey';
 
