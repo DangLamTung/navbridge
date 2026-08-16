@@ -64,11 +64,70 @@ String weatherEmoji(int? code) {
   return '⛈️';
 }
 
+/// A short ASCII label for an Open-Meteo WMO [code] — the ESP banner font is
+/// ASCII-only, so no emoji. Falls back to "Clear".
+String weatherTextForCode(int? code) {
+  if (code == null) return 'Clear';
+  if (code == 0) return 'Clear';
+  if (code <= 2) return 'Cloudy';
+  if (code == 3) return 'Overcast';
+  if (code == 45 || code == 48) return 'Fog';
+  if (code <= 57) return 'Drizzle';
+  if (code <= 67) return 'Rain';
+  if (code <= 77) return 'Snow';
+  if (code <= 82) return 'Showers';
+  if (code <= 86) return 'Snow';
+  return 'Storm';
+}
+
 /// Current air temperature (°C) at [lat]/[lng], or null on failure.
 /// Best-effort info — never fatal.
 Future<double?> fetchCurrentTemperature(double lat, double lng) async {
   final w = await fetchWeather(lat, lng);
   return w?.tempC;
+}
+
+/// Merge several [WeatherInfo] samples (fetched at points along the route
+/// ahead) into ONE "weather ahead" summary: the most severe weather code wins
+/// (storm > snow > rain > drizzle > fog > clouds > clear), and the
+/// temperature is averaged across the samples. Used by the PiP window / nav UI
+/// to show what's coming a few km down the road, not just at the car.
+WeatherInfo? mergeWeatherAhead(Iterable<WeatherInfo> samples) {
+  final list = samples.toList();
+  if (list.isEmpty) return null;
+  int severity(int? code) {
+    if (code == null) return 0;
+    if (code >= 95) return 9; // thunder
+    if (code >= 80) return 8; // showers
+    if (code >= 71) return 7; // snow
+    if (code >= 61) return 6; // rain
+    if (code >= 51) return 5; // drizzle
+    if (code == 45 || code == 48) return 4; // fog
+    if (code == 3) return 3; // overcast
+    if (code <= 2) return 2; // cloudy
+    if (code == 0) return 1; // clear
+    return 0;
+  }
+
+  var worst = list.first;
+  for (final w in list.skip(1)) {
+    if (severity(w.weatherCode) > severity(worst.weatherCode)) worst = w;
+  }
+  final temps = list
+      .map((w) => w.tempC)
+      .whereType<double>()
+      .toList(growable: false);
+  return WeatherInfo(
+    tempC: temps.isEmpty
+        ? worst.tempC
+        : temps.reduce((a, b) => a + b) / temps.length,
+    feelsLikeC: worst.feelsLikeC,
+    humidityPct: worst.humidityPct,
+    windKmh: worst.windKmh,
+    windDir: worst.windDir,
+    precipMm: worst.precipMm,
+    weatherCode: worst.weatherCode,
+  );
 }
 
 /// Current weather at [lat]/[lng], or null on failure. Fetched asynchronously

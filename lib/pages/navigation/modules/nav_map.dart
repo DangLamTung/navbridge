@@ -1,4 +1,4 @@
-part of 'navigation_page.dart';
+part of '../navigation_page.dart';
 
 /// Map rendering + camera + basemap layers for the browse (raster FlutterMap)
 /// page. The nav-mode vector map lives in `ui/vector_nav_map.dart`; this only
@@ -22,11 +22,13 @@ extension _NavMap on _NavigationPageState {
     );
   }
 
+  /// Cycle the car marker icon (arrow → fun emojis).
   void _cycleCarIcon() {
     final i = kCarIcons.indexOf(_carIcon);
     setNavState(() => _carIcon = kCarIcons[(i + 1) % kCarIcons.length]);
   }
 
+  /// Switch the basemap layer (OSM → CARTO → Topo → Satellite → …).
   void _selectTileLayer(String next) {
     setNavState(() {
       _tileSource = next;
@@ -56,16 +58,32 @@ extension _NavMap on _NavigationPageState {
     _ => name,
   };
 
+  /// Marker color for a camera's focus: speed = red, red-light = amber,
+  /// general enforcement = blue (matches the nav-map layer in
+  /// `ui/vector_nav_map.dart`).
+  Color _cameraFocusColor(String focus) => switch (focus) {
+    'speed' => const Color(0xFFD93025),
+    'red_light' => const Color(0xFFF9AB00),
+    _ => const Color(0xFF4285F4),
+  };
+
   void _locateMe() {
     final c = _current;
     if (c != null) _map.move(c, 17);
   }
 
+  /// Toggle night (dark) map mode.
   void _toggleNight() {
     setNavState(() => _nightMode = !_nightMode);
   }
 
   Widget _buildMap(OsrmRoute? route, LatLng? current) {
+    // Browse map with camera alerts on: load the camera index LAZILY (after
+    // the first build) so cold start stays fast but cameras still appear.
+    if (cameraAlerts && !_camerasRequested) {
+      _camerasRequested = true;
+      unawaited(_ensureCameras());
+    }
     return Stack(
       children: [
         FlutterMap(
@@ -82,6 +100,27 @@ extension _NavMap on _NavigationPageState {
             // tap an alternative route line to select it, long-press to add
             // a via point and re-plan.
             onTap: (_, tapPos) {
+              // Directions mode: a plain tap sets the ACTIVE field — the
+              // start point (green) or the destination (red), Google-Maps
+              // style. Tapping the route/alternative lines still selects
+              // them when present.
+              if (_directionsMode && !_navigating) {
+                if (_navField == _NavField.start) {
+                  setNavState(() {
+                    _originOverride = tapPos;
+                    _originName = 'Điểm trên bản đồ';
+                    _startCtrl.text = _originName;
+                    _suggestions = [];
+                  });
+                } else {
+                  _planToPoint(
+                    'Điểm trên bản đồ',
+                    tapPos.latitude,
+                    tapPos.longitude,
+                  );
+                }
+                return;
+              }
               if (_navigating || _alternativeRoutes.length <= 1) return;
               for (var i = 0; i < _alternativeRoutes.length; i++) {
                 if (i == _selectedRoute) continue;
@@ -134,6 +173,19 @@ extension _NavMap on _NavigationPageState {
               ),
             MarkerLayer(
               markers: [
+                // Browse-mode picked place → a red pin (Google Maps search).
+                if (_pickedPlace != null)
+                  Marker(
+                    point: LatLng(_pickedPlace!.lat, _pickedPlace!.lng),
+                    width: 44,
+                    height: 44,
+                    child: const Icon(
+                      Icons.location_pin,
+                      color: Colors.red,
+                      size: 44,
+                      shadows: [Shadow(color: Colors.black38, blurRadius: 4)],
+                    ),
+                  ),
                 if (_origin != null)
                   Marker(
                     point: _origin!,
@@ -202,6 +254,28 @@ extension _NavMap on _NavigationPageState {
                       child: Icon(p.type.icon, size: 14, color: Colors.white),
                     ),
                   ),
+                // Camera layer: colored dot per focus (speed / red-light /
+                // general), shown when camera alerts are on. A single circle
+                // (no separate 📷 text) so it fits the 26×26 marker box — the
+                // old dot+tag Column overflowed by 5 px for every camera.
+                if (cameraAlerts)
+                  for (final c in _cameras)
+                    Marker(
+                      point: c.pos,
+                      width: 26,
+                      height: 26,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: _cameraFocusColor(c.focus),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                          boxShadow: const [
+                            BoxShadow(color: Colors.black38, blurRadius: 4),
+                          ],
+                        ),
+                        child: const CctvIcon(size: 11),
+                      ),
+                    ),
               ],
             ),
           ],

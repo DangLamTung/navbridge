@@ -15,6 +15,15 @@ class NavProgress {
   final int iconCode;
   final int nextIconCode; // maneuver right after the current one (0 = none)
   final String nextText; // road name for the next maneuver
+
+  /// Distance (meters) to the maneuver AFTER the upcoming one — the "next of
+  /// next". 0 when there is no second maneuver. Fed to the ESP32 nav2 packet.
+  final int nextMeter;
+
+  /// Road name for the maneuver AFTER the upcoming one (the "next of next";
+  /// '' when there is none) — shown in simple nav mode since there's no map
+  /// to see what's coming.
+  final String nextNextText;
   final int etaHour;
   final int etaMinute;
   final String text; // road name / instruction
@@ -42,6 +51,8 @@ class NavProgress {
     required this.speedMps,
     this.nextIconCode = 0,
     this.nextText = '',
+    this.nextNextText = '',
+    this.nextMeter = 0,
     this.stopIndex = 0,
     this.totalStops = 0,
     this.stopName = '',
@@ -75,6 +86,20 @@ class TurnByTurnEngine {
   /// Vietmap look-ahead style): far enough to be stable against GPS jitter,
   /// close enough that it still follows the road through a curve.
   static const double _lookAheadMeters = 25.0;
+
+  /// Adaptive ETA state. The routing engine's `duration` is a static profile
+  /// estimate; once the driver has been moving for a few fixes we scale the
+  /// remaining time by how much faster/slower they actually travel than the
+  /// route's implied mean speed, so a traffic jam or a fast pace is reflected
+  /// live. A re-route creates a fresh engine → these reset.
+  double _etaEmaMps =
+      0; // exponential moving average of GPS speed (moving only)
+  int _etaMovingFixes = 0; // moving fixes seen (warm-up before adapting)
+  double _etaFactor = 1.0; // 1.0 until enough moving fixes engage adaptation
+
+  /// Current adaptive-ETA factor (profile speed ÷ actual speed, clamped to
+  /// 0.5–3.0). 1.0 = not yet engaged (still the pure profile ETA).
+  double get etaFactor => _etaFactor;
 
   TurnByTurnEngine(this.route, {List<String>? stopNames})
     : stopNames = stopNames ?? const [],
@@ -315,19 +340,50 @@ class TurnByTurnEngine {
         _stepCum[_nextStep] < cum + 3) {
       _nextStep++;
     }
-    final step = route.steps[_nextStep];
-    final nextIdx = _nextStep + 1;
+    // The upcoming maneuver is the step AFTER the one we're on: step
+    // `_nextStep` is the road we're already travelling (its maneuver — e.g.
+    // the last left turn — is behind us), and its END (`_stepCum[_nextStep]`)
+    // is where the NEXT maneuver lives. Announcing `steps[_nextStep]` made
+    // the spoken direction lag one turn behind (a "turn right" heard right
+    // after you'd actually made it, or a left/right that looked swapped).
+    final cur = route.steps[_nextStep]; // current road (for the name)
+    final upIdx = (_nextStep + 1).clamp(0, route.steps.length - 1);
+    final upcoming = route.steps[upIdx]; // the maneuver we're approaching
+    final nextIdx = upIdx + 1;
     final next = nextIdx < route.steps.length ? route.steps[nextIdx] : null;
 
     final meter = (_stepCum[_nextStep] - cum).clamp(0, route.distance).round();
-    final icon = iconForManeuver(step.type, step.modifier);
+    var icon = iconForManeuver(upcoming.type, upcoming.modifier);
+    // Don't announce "you have arrived" from the start of the last long road
+    // — keep "go straight" until the destination is actually close.
+    if (upcoming.type == 'arrive' && meter > 80) icon = iconStraight;
 
-    // ETA from the remaining duration (proportional to remaining distance).
-    final remainSec =
-        (route.duration * ((route.distance - cum) / route.distance)).round();
+    // ETA from the remaining duration (proportional to remaining distance),
+    // then ADAPTED to the driver's real pace: the routing engine's duration
+    // assumes a static profile speed, so once we have a few moving fixes we
+    // scale the remaining time by profileSpeed / actualSpeed (clamped) —
+    // slower driving (traffic/wind) lengthens it, a fast pace shortens it.
+    final remainBase =
+        (route.duration * ((route.distance - cum) / route.distance));
+    if (speedMps > 1.0) {
+      _etaMovingFixes++;
+      _etaEmaMps = _etaEmaMps == 0
+          ? speedMps
+          : 0.1 * speedMps + 0.9 * _etaEmaMps;
+    }
+    var remainSec = remainBase.round();
+    final profileMps = route.duration > 0
+        ? route.distance / route.duration
+        : 0.0;
+    _etaFactor = 1.0;
+    if (_etaMovingFixes >= 8 && _etaEmaMps > 1.5 && profileMps > 0) {
+      final factor = (profileMps / _etaEmaMps).clamp(0.5, 3.0);
+      _etaFactor = factor;
+      remainSec = (remainBase * factor).round();
+    }
     final eta = DateTime.now().add(Duration(seconds: remainSec));
 
-    final text = step.name.isNotEmpty ? step.name : 'Tiến lên';
+    final text = cur.name.isNotEmpty ? cur.name : 'Tiến lên';
 
     // Which stop are we heading to?
     var passed = 0;
@@ -345,11 +401,17 @@ class TurnByTurnEngine {
       nextIconCode: next == null
           ? 0
           : iconForManeuver(next.type, next.modifier),
-      nextText: next?.name ?? '',
+      // The road you turn INTO for the upcoming maneuver (used by the voice
+      // announcement "turn left onto X" and the "then" chip).
+      nextText: upcoming.name,
+      nextNextText: next == null ? '' : next.name,
+      nextMeter: next == null
+          ? 0
+          : (_stepCum[nextIdx] - cum).clamp(0, route.distance).round(),
       etaHour: eta.hour,
       etaMinute: eta.minute,
       text: text,
-      maneuver: step.maneuver,
+      maneuver: upcoming.maneuver,
       speedMps: speedMps,
       stopIndex: stopIndex,
       totalStops: _stopCum.length,

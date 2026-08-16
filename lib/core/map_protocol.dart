@@ -14,6 +14,10 @@
 ///     type 0x03 NAV  : dist(u16) modId(u8) slen(u8) street[slen]  (UTF-8)
 ///     type 0x04 ETA  : h(u8) m(u8) alen(u8) arrive[alen]          (UTF-8)
 ///     type 0x05 CLOCK: h(u8) m(u8)
+///     type 0x06 ROUTE-CONT: same payload as 0x01 (faint whole-route tail)
+///     type 0x07 WEATHER: tempC(s8) hum(u8) code(u8) slen(u8) text[UTF-8]
+///     type 0x08 NAV2  : dist(u16) modId(u8) slen(u8) street[slen]  (UTF-8)
+///     type 0x09 CAMERA: dist(u16) type(u8)   (dist=0 clears the alert)
 ///
 /// The firmware finalizes packets on the length framing alone, so no
 /// terminator byte is needed (binary frames may span chunked BLE writes).
@@ -36,6 +40,11 @@ const int mapTypePos = 0x02;
 const int mapTypeNav = 0x03;
 const int mapTypeEta = 0x04;
 const int mapTypeClock = 0x05;
+const int mapTypeRouteCont = 0x06; // route continuation (beyond path-ahead)
+const int mapTypeWeather =
+    0x07; // weather: tempC(s8) hum(u8) code(u8) slen text
+const int mapTypeNav2 = 0x08; // second maneuver (after the upcoming one)
+const int mapTypeCamera = 0x09; // speed camera ahead: dist(u16) type(u8)
 
 // ---- maneuver ids (match `navManeuverName` in ble_nav.cpp) ----
 const int mapManeuverStraight = 0;
@@ -52,8 +61,11 @@ const int mapManeuverArrive = 7;
 /// [mapMaxStreetBytes] - 1.
 const int mapMaxStreetBytes = 64;
 
-/// Maximum number of route points the board will draw (`NAV_MAX_ROUTE_POINTS`).
-const int mapMaxRoutePoints = 512;
+/// Maximum number of route points the board will accept
+/// (`NAV_MAX_ROUTE_POINTS` in `ble_nav.h` — routes with more points are
+/// silently dropped, and only the first 24 are actually drawn).
+/// Callers should decimate to this many points before sending.
+const int mapMaxRoutePoints = 64;
 
 /// Map an E-ink clock icon code (from [iconForManeuver]) to the board's
 /// maneuver id. Same maneuver vocabulary as the OSRM/Vietmap types.
@@ -94,7 +106,11 @@ Uint8List _utf8Capped(String s) {
 /// absolute lat/lon (×1e7); the rest are deltas (×1e5) relative to the
 /// previous point, clamped to i16 so the firmware's cumulative decode stays
 /// valid.
-Uint8List buildMapRouteFrame(List<LatLng> points, {int zoom = 15}) {
+Uint8List buildMapRouteFrame(
+  List<LatLng> points, {
+  int zoom = 15,
+  int type = mapTypeRoute,
+}) {
   // The board ignores routes with < 2 points; pad a single point (or an
   // empty list) into a valid degenerate 2-point polyline.
   final pts = points.length >= 2
@@ -125,7 +141,7 @@ Uint8List buildMapRouteFrame(List<LatLng> points, {int zoom = 15}) {
     lat = la;
     lon = lo;
   }
-  return _frame(mapTypeRoute, payload);
+  return _frame(type, payload);
 }
 
 /// `<pos>` — live position (~1 Hz) driving the car marker + auto-follow.
@@ -181,6 +197,56 @@ Uint8List buildMapClockFrame({required int hour, required int minute}) {
   p[0] = hour.clamp(0, 23);
   p[1] = minute.clamp(0, 59);
   return _frame(mapTypeClock, p);
+}
+
+/// `<route-cont>` — the route continuation polyline, drawn faint behind the
+/// near path-ahead so the driver sees where the road goes next. Same wire
+/// format as [buildMapRouteFrame] (type 0x06 on the ESP).
+Uint8List buildMapRouteContFrame(List<LatLng> points, {int zoom = 15}) =>
+    buildMapRouteFrame(points, zoom: zoom, type: mapTypeRouteCont);
+
+/// `<nav2>` — the maneuver AFTER the upcoming one (type 0x08). Same payload as
+/// [buildMapNavFrame]; the board shows it as the second HUD maneuver.
+Uint8List buildMapNav2Frame({
+  required int dist,
+  required int maneuverId,
+  required String street,
+}) {
+  final s = _utf8Capped(street);
+  final p = Uint8List(4 + s.length);
+  _writeUint16(p, 0, dist.clamp(0, 0xFFFF)); // meters
+  p[2] = maneuverId & 0xFF;
+  p[3] = s.length;
+  p.setRange(4, p.length, s);
+  return _frame(mapTypeNav2, p);
+}
+
+/// `<camera>` — speed camera ahead (type 0x09). Payload: dist(u16) type(u8).
+/// dist=0 clears the alert. type 1 = mobile camera (board shows "MOBILE
+/// CAM"), any other value = static camera ("CAMERA").
+Uint8List buildMapCameraFrame({required int dist, required int type}) {
+  final p = Uint8List(3);
+  _writeUint16(p, 0, dist.clamp(0, 0xFFFF)); // meters ahead
+  p[2] = type & 0xFF;
+  return _frame(mapTypeCamera, p);
+}
+
+/// `<weather>` — current weather for the banner (type 0x07).
+/// Payload: tempC(s8) humidity(u8) code(u8) slen(u8) text[UTF-8]
+Uint8List buildMapWeatherFrame({
+  required int tempC,
+  required int humidity,
+  int code = 0,
+  String text = '',
+}) {
+  final s = _utf8Capped(text);
+  final p = Uint8List(4 + s.length);
+  p[0] = tempC.clamp(-128, 127); // s8
+  p[1] = humidity.clamp(0, 255);
+  p[2] = code.clamp(0, 255);
+  p[3] = s.length;
+  p.setRange(4, p.length, s);
+  return _frame(mapTypeWeather, p);
 }
 
 // ---- little-endian helpers ----

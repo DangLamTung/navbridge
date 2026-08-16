@@ -10,16 +10,16 @@ const Color kAppBlue = Color(0xFF4285F4);
 
 /// Material icon for a nav-protocol maneuver code (shared by the nav UI).
 IconData maneuverIcon(int code) => switch (code) {
-      iconTurnLeft => Icons.turn_left,
-      iconTurnRight => Icons.turn_right,
-      iconSlightLeft => Icons.turn_slight_left,
-      iconSlightRight => Icons.turn_slight_right,
-      iconUturnLeft => Icons.u_turn_left,
-      iconUturnRight => Icons.u_turn_right,
-      iconRoundabout => Icons.roundabout_left,
-      iconArrive => Icons.flag,
-      _ => Icons.straight,
-    };
+  iconTurnLeft => Icons.turn_left,
+  iconTurnRight => Icons.turn_right,
+  iconSlightLeft => Icons.turn_slight_left,
+  iconSlightRight => Icons.turn_slight_right,
+  iconUturnLeft => Icons.u_turn_left,
+  iconUturnRight => Icons.u_turn_right,
+  iconRoundabout => Icons.roundabout_left,
+  iconArrive => Icons.flag,
+  _ => Icons.straight,
+};
 
 /// A round, white, elevated action button (zoom, locate, clock…).
 class RoundActionButton extends StatelessWidget {
@@ -29,12 +29,22 @@ class RoundActionButton extends StatelessWidget {
     required this.color,
     required this.onTap,
     this.size = 46,
+    this.child,
+    this.onLongPress,
   });
 
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
   final double size;
+
+  /// Optional custom icon widget (e.g. the drawn CCTV camera) — overrides
+  /// [icon] when provided.
+  final Widget? child;
+
+  /// Optional long-press handler (e.g. the mic button long-press toggles the
+  /// always-on wake-word listening).
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -46,10 +56,11 @@ class RoundActionButton extends StatelessWidget {
       child: InkWell(
         customBorder: const CircleBorder(),
         onTap: onTap,
+        onLongPress: onLongPress,
         child: SizedBox(
           width: size,
           height: size,
-          child: Icon(icon, color: color, size: 22),
+          child: child ?? Icon(icon, color: color, size: 22),
         ),
       ),
     );

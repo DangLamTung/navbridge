@@ -34,6 +34,20 @@ dependencies:
   wakelock_plus: ^1.2.10
   # Open the Wikipedia / website links on the POI info card.
   url_launcher: ^6.3.0
+  # Real Vietmap turn-by-turn navigation (official Vietmap Flutter SDK —
+  # wraps the native Vietmap navigation AARs; needs VIETMAP_API_KEY).
+  vietmap_flutter_navigation: ^4.2.0
+  # Keep navigation alive in the background (Google-Maps style foreground
+  # service + live notification) while the app is backgrounded / screen off.
+  flutter_foreground_task: ^8.12.0
+  # Heads-up turn-by-turn banner notifications ("only notify when needed").
+  flutter_local_notifications: ^17.2.0
+  # CCTV camera icon (bundled SVG asset, rendered via flutter_svg).
+  flutter_svg: ^1.1.6
+  # Encrypted on-device storage for AI API keys (Android Keystore / iOS
+  # Keychain). Keys are never kept in the APK — users paste them once and
+  # they're encrypted at rest.
+  flutter_secure_storage: ^9.2.2
 
 dev_dependencies:
   flutter_test:
@@ -54,6 +68,7 @@ flutter:
     - assets/offline_map/saigon_z16.pmtiles
     - assets/offline_map/vietnam_places.json
     - assets/offline_map/vietnam_pois.json
+    - assets/offline_map/vietnam_cameras.json
     - assets/offline_map/icons/
     - assets/offline_map/sprite/
     - assets/offline_map/fonts/

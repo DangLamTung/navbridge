@@ -158,6 +158,151 @@ void main() {
       expect(snapped2.latitude, closeTo(10.81, 1e-5));
     });
 
+    test('adaptive ETA scales with actual speed after warm-up', () {
+      // _straightRoute: 1110 m / 80 s → ~13.9 m/s (~50 km/h) profile speed.
+      OsrmRoute route() => _straightRoute();
+
+      // Not engaged before enough moving fixes.
+      final engine = TurnByTurnEngine(route());
+      expect(engine.etaFactor, 1.0);
+
+      // Slow driver (~21.6 km/h) for 30 fixes → EMA converges toward 6 m/s,
+      // factor = 13.9/6 ≈ 2.3 → ETA lengthens.
+      for (var i = 0; i < 30; i++) {
+        engine.update(route().geometry.first, speedMps: 6.0);
+      }
+      engine.update(engine.positionAtDistance(400), speedMps: 6.0);
+      expect(engine.etaFactor, greaterThan(2.0));
+      expect(engine.etaFactor, lessThan(2.8));
+
+      // Fast driver (~72 km/h) → factor < 1 → ETA shortens (clamped ≥ 0.5).
+      final fast = TurnByTurnEngine(route());
+      for (var i = 0; i < 30; i++) {
+        fast.update(route().geometry.first, speedMps: 20.0);
+      }
+      fast.update(fast.positionAtDistance(400), speedMps: 20.0);
+      expect(fast.etaFactor, greaterThan(0.5));
+      expect(fast.etaFactor, lessThan(0.9));
+    });
+
+    test('nextMeter is the distance to the second maneuver', () {
+      final base = _straightRoute(); // depart leg 1110 → arrive
+      // Insert a turn at ~500 m so there are two maneuvers ahead.
+      final route = OsrmRoute(
+        distance: 1110,
+        duration: 80,
+        geometry: base.geometry,
+        steps: [
+          OsrmStep(
+            name: 'Đường A',
+            distance: 500,
+            duration: 40,
+            type: 'depart',
+            modifier: null,
+            maneuver: base.geometry.first,
+          ),
+          OsrmStep(
+            name: 'Đường B',
+            distance: 610,
+            duration: 40,
+            type: 'turn',
+            modifier: 'left',
+            maneuver: base.geometry[45], // ~500 m along the route
+          ),
+          OsrmStep(
+            name: 'Bến Thành',
+            distance: 0,
+            duration: 0,
+            type: 'arrive',
+            modifier: null,
+            maneuver: base.geometry.last,
+          ),
+        ],
+        stopCumulative: const [1110],
+      );
+      final engine = TurnByTurnEngine(route);
+      engine.update(route.geometry.first);
+      final nav = engine.update(engine.positionAtDistance(100));
+      expect(nav.nextIconCode, isNot(0)); // there IS a second maneuver
+      // Upcoming maneuver = the turn; the SECOND one = arrive.
+      expect(nav.nextText, 'Đường B');
+      expect(nav.nextNextText, 'Bến Thành');
+      // Distance from ~100 m to the second maneuver (arrive at ~1110 m).
+      expect(nav.nextMeter, closeTo(1010, 25));
+    });
+
+    test('announces the UPCOMING maneuver (not the one just passed)', () {
+      // Route: go east 500 m (road A), turn LEFT north 200 m (road B), then
+      // turn RIGHT east 200 m (road C, arrive). The engine must say "left"
+      // while approaching the left turn and "right" while approaching the
+      // right turn — a regression test for the off-by-one that made the
+      // spoken direction lag one maneuver behind ("left/right reversed").
+      //
+      // Dense geometry (a vertex every ~100 m) so the engine's nearest-vertex
+      // snap lands on the true position instead of jumping at a turn vertex.
+      final geometry = <LatLng>[
+        // Road A: east 500 m (5 × 100 m).
+        for (var k = 0; k <= 5; k++) LatLng(10.82, 106.62 + k * 0.0009146),
+        // Road B: north 200 m (4 × 50 m).
+        for (var k = 1; k <= 4; k++) LatLng(10.82 + k * 0.0004492, 106.624573),
+        // Road C: east 200 m (4 × 50 m).
+        for (var k = 1; k <= 4; k++)
+          LatLng(10.821797, 106.624573 + k * 0.0004571),
+      ];
+      final route = OsrmRoute(
+        distance: 900,
+        duration: 80,
+        geometry: geometry,
+        steps: [
+          OsrmStep(
+            name: 'Đường A',
+            distance: 500,
+            duration: 40,
+            type: 'depart',
+            modifier: null,
+            maneuver: geometry[5], // left-turn point
+          ),
+          OsrmStep(
+            name: 'Đường B',
+            distance: 200,
+            duration: 20,
+            type: 'turn',
+            modifier: 'left',
+            maneuver: geometry[5], // left-turn point
+          ),
+          OsrmStep(
+            name: 'Đường C',
+            distance: 200,
+            duration: 20,
+            type: 'turn',
+            modifier: 'right',
+            maneuver: geometry[9], // right-turn point
+          ),
+          OsrmStep(
+            name: 'Bến đến',
+            distance: 0,
+            duration: 0,
+            type: 'arrive',
+            modifier: null,
+            maneuver: geometry.last,
+          ),
+        ],
+        stopCumulative: const [900],
+      );
+      final engine = TurnByTurnEngine(route);
+      // On road A, approaching the left turn at cum 500.
+      final onA = engine.update(engine.positionAtDistance(100));
+      expect(onA.iconCode, iconTurnLeft);
+      expect(onA.nextText, 'Đường B');
+      // On road B (cum 500–700), approaching the right turn at cum 700.
+      final onB = engine.update(engine.positionAtDistance(600));
+      expect(onB.iconCode, iconTurnRight);
+      expect(onB.nextText, 'Đường C');
+      // Near the end → arrive.
+      final end = engine.update(engine.positionAtDistance(880));
+      expect(end.iconCode, iconArrive);
+    });
+
     test('snapToRoute clamps beyond the ends to the route ends', () {
       final engine = TurnByTurnEngine(_straightRoute());
       final route = _straightRoute();

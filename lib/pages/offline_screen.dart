@@ -3,6 +3,7 @@
 /// downloaded regions.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -16,7 +17,8 @@ import 'package:navbridge/services/nav_map_store.dart';
 import 'package:navbridge/core/settings.dart';
 import 'package:navbridge/services/terrain.dart';
 import 'package:navbridge/ui/widgets.dart';
-import 'package:navbridge/services/vietmap_config.dart' show dataSource;
+import 'package:navbridge/services/vietmap_config.dart'
+    show dataSource, graphDownloadBaseUrl;
 
 String formatBytes(int b) {
   if (b >= 1 << 30) return '${(b / (1 << 30)).toStringAsFixed(2)} GB';
@@ -39,6 +41,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
     const LatLng(10.85, 106.80),
   ); // HCMC core
   int _maxZoom = 16;
+  int _minZoom = 1;
   bool _online = true;
   bool _forceOffline = false;
   bool _downloading = false;
@@ -63,6 +66,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
   bool _graphHas = false;
   bool _graphLoaded = false;
   bool _graphLoading = false;
+  bool _graphDownloading = false;
+  int _graphDone = 0;
+  int _graphTotal = 1;
   int _graphBytes = 0;
   int _cacheBytes = 0;
 
@@ -75,24 +81,33 @@ class _OfflineScreenState extends State<OfflineScreen> {
     _refreshTerrain();
     onlineStream().listen((o) => setState(() => _online = o));
     isOnline().then((o) => setState(() => _online = o));
-    // The global reflects the persisted choice AND any session override (the
-    // user may have gone online "if needed" from the map) — show that state.
-    setState(() => _forceOffline = forceOffline);
+    setState(() {
+      _forceOffline = forceOffline;
+    });
   }
+
+  /// Snapshot the current globals into a persisted [AppSettings] — keeps ALL
+  /// preference fields so editing one never drops the others.
+  AppSettings _currentSettings() => AppSettings(
+    forceOffline: forceOffline,
+    dataSource: dataSource,
+    vehicleType: vehicleType,
+    speedOverride: speedOverride,
+    geocodingProvider: geocodingProvider,
+    routingEngine: routingEngine,
+    smoothCamera: smoothCamera,
+    cameraAlerts: cameraAlerts,
+    pipAspect: pipAspect,
+    ridingMode: ridingMode,
+    simpleMode: simpleMode,
+  );
 
   Future<void> _toggleForceOffline(bool v) async {
     setState(() => _forceOffline = v);
     forceOffline = v;
-    await saveSettings(AppSettings(forceOffline: v, dataSource: dataSource));
+    await saveSettings(_currentSettings());
     // Tile cache is source-agnostic but network fetches stop/start here.
     setState(() {});
-  }
-
-  Future<void> _setDataSource(String s) async {
-    if (dataSource == s) return;
-    dataSource = s;
-    setState(() {});
-    await saveSettings(AppSettings(forceOffline: _forceOffline, dataSource: s));
   }
 
   Future<void> _refreshGraph() async {
@@ -130,6 +145,47 @@ class _OfflineScreenState extends State<OfflineScreen> {
           ),
         ),
       );
+    }
+  }
+
+  /// Download the GraphHopper graph (`.ghz`) from the configured GRAPH_URL,
+  /// then load it. Mirrors the nav-map download (progress + snackbar).
+  Future<void> _downloadGraph() async {
+    if (_graphDownloading) return;
+    setState(() {
+      _graphDownloading = true;
+      _graphDone = 0;
+      _graphTotal = 1;
+    });
+    try {
+      final ok = await downloadGraph((done, total) {
+        if (mounted) {
+          setState(() {
+            _graphDone = done;
+            _graphTotal = total;
+          });
+        }
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              ok
+                  ? 'Đã tải + nạp bộ dữ liệu chỉ đường.'
+                  : 'Không nạp được bộ dữ liệu sau khi tải.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Tải bộ dữ liệu thất bại: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _graphDownloading = false);
+      await _refreshGraph();
     }
   }
 
@@ -330,7 +386,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
       swLon: _bounds.southWest.longitude,
       neLat: _bounds.northEast.latitude,
       neLon: _bounds.northEast.longitude,
-      minZoom: 13,
+      minZoom: _minZoom,
       maxZoom: _maxZoom,
       downloadedAt: DateTime.now(),
     );
@@ -397,7 +453,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
       swLon: _bounds.southWest.longitude,
       neLat: _bounds.northEast.latitude,
       neLon: _bounds.northEast.longitude,
-      minZoom: 13,
+      minZoom: _minZoom,
       maxZoom: _maxZoom,
       downloadedAt: DateTime.now(),
     );
@@ -406,41 +462,13 @@ class _OfflineScreenState extends State<OfflineScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         title: const Text(
-          'Bản đồ ngoại tuyến',
+          'Dữ liệu ngoại tuyến',
           style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
         ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(14),
         children: [
-          // connectivity
-          Material(
-            color: _online ? const Color(0xFFE6F4EA) : const Color(0xFFFCE8E6),
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  Icon(
-                    _online ? Icons.wifi : Icons.cloud_off,
-                    size: 18,
-                    color: _online
-                        ? const Color(0xFF34A853)
-                        : const Color(0xFFEA4335),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    _online ? 'Đang trực tuyến' : 'Đang ngoại tuyến',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
           // offline mode (uses only downloaded data, no internet)
           Material(
             color: const Color(0xFFE8F0FE),
@@ -462,48 +490,6 @@ class _OfflineScreenState extends State<OfflineScreen> {
                     ? 'Đang bật — chỉ dùng dữ liệu đã tải, không gọi internet.'
                     : 'Chỉ dùng bản đồ và chỉ đường đã tải, không dùng internet.',
                 style: TextStyle(fontSize: 12, color: Colors.grey[700]),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          // data source: OSM (default, offline-capable) / Vietmap (fast VN)
-          Material(
-            color: const Color(0xFFFEF7E0),
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Nguồn dữ liệu (tìm kiếm & chỉ đường)',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _SourceChoice(
-                          label: 'OSM',
-                          subtitle: 'Ngoại tuyến được',
-                          icon: Icons.public,
-                          selected: dataSource == 'osm',
-                          onTap: () => _setDataSource('osm'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _SourceChoice(
-                          label: 'Vietmap',
-                          subtitle: 'Nhanh + giao thông thật',
-                          icon: Icons.traffic,
-                          selected: dataSource == 'vietmap',
-                          onTap: () => _setDataSource('vietmap'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
               ),
             ),
           ),
@@ -803,21 +789,40 @@ class _OfflineScreenState extends State<OfflineScreen> {
               ],
             ),
             const SizedBox(height: 12),
-            Row(
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                const Text(
+                  'Từ mức zoom: ',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                for (final z in [1, 3, 5, 8, 10, 12])
+                  ChoiceChip(
+                    label: Text('z$z'),
+                    selected: _minZoom == z,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: (_) => setState(() => _minZoom = z),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 6,
+              runSpacing: 6,
               children: [
                 const Text(
                   'Độ chi tiết: ',
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                 ),
-                for (final z in [14, 15, 16, 17])
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: ChoiceChip(
-                      label: Text('z$z'),
-                      selected: _maxZoom == z,
-                      visualDensity: VisualDensity.compact,
-                      onSelected: (_) => setState(() => _maxZoom = z),
-                    ),
+                for (final z in [12, 13, 14, 15, 16, 17])
+                  ChoiceChip(
+                    label: Text('z$z'),
+                    selected: _maxZoom == z,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: (_) => setState(() => _maxZoom = z),
                   ),
               ],
             ),
@@ -943,31 +948,69 @@ class _OfflineScreenState extends State<OfflineScreen> {
                     'một lần để định tuyến hoàn toàn ngoại tuyến, kể cả khi đi lệch lộ trình.',
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
+                  if (graphDownloadBaseUrl.isEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Chưa cấu hình URL tải (dùng --dart-define=GRAPH_URL). '
+                      'Có thể nạp bộ dữ liệu đã có trên máy bằng nút "Nạp bộ dữ liệu".',
+                      style: TextStyle(fontSize: 11, color: Colors.orange[800]),
+                    ),
+                  ],
                   const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _graphHas && !_graphLoading
-                              ? _loadGraph
-                              : null,
-                          icon: _graphLoading
-                              ? const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.upload_file, size: 18),
-                          label: const Text(
-                            'Nạp bộ dữ liệu',
-                            style: TextStyle(fontSize: 13),
+                  if (_graphDownloading) ...[
+                    LinearProgressIndicator(
+                      value: _graphTotal == 0 ? 0 : _graphDone / _graphTotal,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${_graphTotal == 0 ? 0 : (_graphDone * 100 / _graphTotal).toStringAsFixed(0)}% '
+                      '(${formatBytes(_graphDone)} / ${formatBytes(_graphTotal)})',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ] else ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _graphHas && !_graphLoading
+                                ? _loadGraph
+                                : null,
+                            icon: _graphLoading
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.upload_file, size: 18),
+                            label: const Text(
+                              'Nạp bộ dữ liệu',
+                              style: TextStyle(fontSize: 13),
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            // Disabled unless a GRAPH_URL was configured and
+                            // no graph is present yet (and we're online).
+                            onPressed:
+                                _online &&
+                                    !_graphHas &&
+                                    graphDownloadBaseUrl.isNotEmpty
+                                ? _downloadGraph
+                                : null,
+                            icon: const Icon(Icons.download, size: 18),
+                            label: Text(
+                              _graphHas ? 'Đã có' : 'Tải xuống',
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1009,63 +1052,6 @@ class _OfflineScreenState extends State<OfflineScreen> {
                 ),
               ),
         ],
-      ),
-    );
-  }
-}
-
-/// One selectable data-source card (OSM / Vietmap).
-class _SourceChoice extends StatelessWidget {
-  const _SourceChoice({
-    required this.label,
-    required this.subtitle,
-    required this.icon,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final String subtitle;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final fg = selected ? Colors.white : Colors.grey[800];
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: selected ? kAppBlue : const Color(0xFFF1F3F4),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 20, color: fg),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: fg,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 10,
-                color: selected ? Colors.white70 : Colors.grey[600],
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

@@ -185,49 +185,67 @@ class NavTopBar extends StatelessWidget {
             ),
           ),
         ),
-        // Tap-the-banner extras (only when expanded): next-maneuver strip +
-        // full step list, dropped below the banner like the SDK's banner.
-        if (expanded) ...[
-          if (nav != null && nav.nextIconCode != 0)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(10),
+        // Always-visible next-turn chip (Google-style "then …"): shows the turn
+        // after the next one without having to tap the banner. Solid white pill
+        // so it reads on any map background (a translucent chip vanished on a
+        // light map).
+        if (nav != null && nav.nextIconCode != 0)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 2, 10, 6),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.94),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: kAppBlue.withValues(alpha: 0.4),
+                  width: 1,
                 ),
-                child: Row(
-                  children: [
-                    Icon(
-                      maneuverIcon(nav.nextIconCode),
-                      color: Colors.white,
-                      size: 16,
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 4,
+                    offset: Offset(0, 1),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    maneuverIcon(nav.nextIconCode),
+                    color: kAppBlue,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'Sau đó: ${nav.nextText.isEmpty ? 'đi tiếp' : nav.nextText}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF202124),
+                      ),
                     ),
+                  ),
+                  if (stopLabel.isNotEmpty) ...[
                     const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        'Sau đó: ${nav.nextText.isEmpty ? 'đi tiếp' : nav.nextText}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.white,
-                        ),
+                    Text(
+                      stopLabel,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.black54,
                       ),
                     ),
-                    if (stopLabel.isNotEmpty)
-                      Text(
-                        stopLabel,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.white70,
-                        ),
-                      ),
                   ],
-                ),
+                ],
               ),
             ),
+          ),
+        // Tap-the-banner extras (only when expanded): full step list.
+        if (expanded) ...[
           if (steps.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),

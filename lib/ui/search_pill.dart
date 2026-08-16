@@ -14,6 +14,7 @@ class SearchPill extends StatelessWidget {
     required this.onClear,
     this.busy = false,
     this.showClear = false,
+    this.onDirections,
   });
 
   final TextEditingController controller;
@@ -26,6 +27,10 @@ class SearchPill extends StatelessWidget {
 
   /// Whether to show the clear (×) button.
   final bool showClear;
+
+  /// When set, shows a small "Chỉ đường" (directions) icon at the right edge
+  /// that switches the bar into directions mode (start/end + stops).
+  final VoidCallback? onDirections;
 
   @override
   Widget build(BuildContext context) {
@@ -72,6 +77,13 @@ class SearchPill extends StatelessWidget {
               IconButton(
                 icon: const Icon(Icons.close, size: 20),
                 onPressed: onClear,
+              ),
+            if (onDirections != null)
+              IconButton(
+                tooltip: 'Chỉ đường',
+                icon: const Icon(Icons.directions, size: 20),
+                color: const Color(0xFF1A73E8),
+                onPressed: onDirections,
               ),
           ],
         ),

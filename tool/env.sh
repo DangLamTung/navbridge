@@ -25,7 +25,8 @@ else
   set +a
 fi
 
-for key in VIETMAP_API_KEY VIETMAP_TILE_KEY GOOGLE_GEOCODE_KEY; do
+for key in VIETMAP_API_KEY VIETMAP_TILE_KEY GOOGLE_GEOCODE_KEY \
+  GOOGLE_PLACES_KEY GRAPH_URL DEEPSEEK_API_KEY GEMINI_API_KEY; do
   val="${!key:-}"
   if [[ -n "$val" ]]; then
     DART_DEFINES+=("--dart-define=$key=$val")

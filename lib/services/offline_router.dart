@@ -14,10 +14,10 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'offline_tiles.dart' show forceOffline;
+import 'offline_tiles.dart' show forceOffline, routingEngine;
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/core/route_profile.dart';
-import 'vietmap_config.dart' show dataSource;
+import 'vietmap_config.dart' show dataSource, graphDownloadBaseUrl;
 import 'package:navbridge/services/vietmap_router.dart';
 
 const MethodChannel _channel = MethodChannel('navbridge/routing');
@@ -213,6 +213,34 @@ Future<bool> routingGraphPresent() async {
       File('$dir.ghz').existsSync();
 }
 
+/// Download the GraphHopper routing graph (`.ghz`) from
+/// `$graphDownloadBaseUrl/graph.ghz` into app storage, then load it.
+/// Throws a clear error when no `GRAPH_URL` is configured. Reports byte
+/// progress via [onProgress] (done bytes, total bytes). Returns true when
+/// routing is ready after the download.
+Future<bool> downloadGraph(
+  void Function(int done, int total)? onProgress,
+) async {
+  final base = graphDownloadBaseUrl;
+  if (base.isEmpty) {
+    throw StateError(
+      'Chưa cấu hình URL tải bộ dữ liệu GraphHopper (dùng --dart-define=GRAPH_URL).',
+    );
+  }
+  final url = Uri.parse('$base/graph.ghz');
+  final dir = await routingGraphDir();
+  final target = '$dir.ghz';
+  final ok = await downloadToFile(
+    url.toString(),
+    target,
+    onProgress ?? (_, _) {},
+  );
+  if (!ok) {
+    throw StateError('Không tải được bộ dữ liệu GraphHopper ($url).');
+  }
+  return OfflineRouter.instance.load(target);
+}
+
 /// Download [url] to [target] with byte progress; returns true on success.
 Future<bool> downloadToFile(
   String url,
@@ -305,7 +333,7 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
       debugPrint('VIETMAP: route failed: $e — falling back to OSRM');
     }
   }
-  if (profile == RouteProfile.car) {
+  if (profile == RouteProfile.car && routingEngine != 'osrm') {
     // Wait for the on-device graph if it's still loading at startup (it can
     // take ~60 s on low-end phones), so offline routing doesn't fail early.
     await OfflineRouter.instance.ready;
@@ -319,7 +347,7 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
       if (local.isNotEmpty) return local;
     }
   }
-  if (forceOffline) {
+  if (forceOffline || routingEngine == 'graphhopper') {
     throw StateError(
       profile == RouteProfile.car
           ? 'Ngoại tuyến: chưa tải bộ dữ liệu chỉ đường'

@@ -19,11 +19,16 @@ import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'package:navbridge/services/offline_poi.dart';
-import 'offline_tiles.dart' show forceOffline;
+import 'offline_tiles.dart' show forceOffline, geocodingProvider;
 import 'package:navbridge/services/vietmap_api.dart';
 import 'vietmap_config.dart' show VietmapConfig, dataSource;
 
 const _nominatimBase = 'https://nominatim.openstreetmap.org';
+
+/// Photon (Komoot) geocoding — free, no API key, faster and better
+/// Vietnamese results than Nominatim. Used as the online primary search when
+/// [geocodingProvider] isn't explicitly set to 'nominatim'.
+const _photonBase = 'https://photon.komoot.io/api';
 
 /// One OSM search result — already resolved to coordinates, so no second
 /// "place" request is needed (saves the Vietmap place transaction entirely).
@@ -160,31 +165,139 @@ Future<List<OsmSuggestion>> _offlineSearch(String text, int limit) async {
 /// without accents. Returns the input unchanged for non-Vietnamese text.
 String _removeDiacritics(String s) {
   const map = {
-    'à': 'a', 'á': 'a', 'ả': 'a', 'ã': 'a', 'ạ': 'a',
-    'ă': 'a', 'ằ': 'a', 'ắ': 'a', 'ẳ': 'a', 'ẵ': 'a', 'ặ': 'a',
-    'â': 'a', 'ầ': 'a', 'ấ': 'a', 'ẩ': 'a', 'ẫ': 'a', 'ậ': 'a',
-    'è': 'e', 'é': 'e', 'ẻ': 'e', 'ẽ': 'e', 'ẹ': 'e',
-    'ê': 'e', 'ề': 'e', 'ế': 'e', 'ể': 'e', 'ễ': 'e', 'ệ': 'e',
-    'ì': 'i', 'í': 'i', 'ỉ': 'i', 'ĩ': 'i', 'ị': 'i',
-    'ò': 'o', 'ó': 'o', 'ỏ': 'o', 'õ': 'o', 'ọ': 'o',
-    'ô': 'o', 'ồ': 'o', 'ố': 'o', 'ổ': 'o', 'ỗ': 'o', 'ộ': 'o',
-    'ơ': 'o', 'ờ': 'o', 'ớ': 'o', 'ở': 'o', 'ỡ': 'o', 'ợ': 'o',
-    'ù': 'u', 'ú': 'u', 'ủ': 'u', 'ũ': 'u', 'ụ': 'u',
-    'ư': 'u', 'ừ': 'u', 'ứ': 'u', 'ử': 'u', 'ữ': 'u', 'ự': 'u',
-    'ỳ': 'y', 'ý': 'y', 'ỷ': 'y', 'ỹ': 'y', 'ỵ': 'y',
+    'à': 'a',
+    'á': 'a',
+    'ả': 'a',
+    'ã': 'a',
+    'ạ': 'a',
+    'ă': 'a',
+    'ằ': 'a',
+    'ắ': 'a',
+    'ẳ': 'a',
+    'ẵ': 'a',
+    'ặ': 'a',
+    'â': 'a',
+    'ầ': 'a',
+    'ấ': 'a',
+    'ẩ': 'a',
+    'ẫ': 'a',
+    'ậ': 'a',
+    'è': 'e',
+    'é': 'e',
+    'ẻ': 'e',
+    'ẽ': 'e',
+    'ẹ': 'e',
+    'ê': 'e',
+    'ề': 'e',
+    'ế': 'e',
+    'ể': 'e',
+    'ễ': 'e',
+    'ệ': 'e',
+    'ì': 'i',
+    'í': 'i',
+    'ỉ': 'i',
+    'ĩ': 'i',
+    'ị': 'i',
+    'ò': 'o',
+    'ó': 'o',
+    'ỏ': 'o',
+    'õ': 'o',
+    'ọ': 'o',
+    'ô': 'o',
+    'ồ': 'o',
+    'ố': 'o',
+    'ổ': 'o',
+    'ỗ': 'o',
+    'ộ': 'o',
+    'ơ': 'o',
+    'ờ': 'o',
+    'ớ': 'o',
+    'ở': 'o',
+    'ỡ': 'o',
+    'ợ': 'o',
+    'ù': 'u',
+    'ú': 'u',
+    'ủ': 'u',
+    'ũ': 'u',
+    'ụ': 'u',
+    'ư': 'u',
+    'ừ': 'u',
+    'ứ': 'u',
+    'ử': 'u',
+    'ữ': 'u',
+    'ự': 'u',
+    'ỳ': 'y',
+    'ý': 'y',
+    'ỷ': 'y',
+    'ỹ': 'y',
+    'ỵ': 'y',
     'đ': 'd',
-    'À': 'A', 'Á': 'A', 'Ả': 'A', 'Ã': 'A', 'Ạ': 'A',
-    'Ă': 'A', 'Ằ': 'A', 'Ắ': 'A', 'Ẳ': 'A', 'Ẵ': 'A', 'Ặ': 'A',
-    'Â': 'A', 'Ầ': 'A', 'Ấ': 'A', 'Ẩ': 'A', 'Ẫ': 'A', 'Ậ': 'A',
-    'È': 'E', 'É': 'E', 'Ẻ': 'E', 'Ẽ': 'E', 'Ẹ': 'E',
-    'Ê': 'E', 'Ề': 'E', 'Ế': 'E', 'Ể': 'E', 'Ễ': 'E', 'Ệ': 'E',
-    'Ì': 'I', 'Í': 'I', 'Ỉ': 'I', 'Ĩ': 'I', 'Ị': 'I',
-    'Ò': 'O', 'Ó': 'O', 'Ỏ': 'O', 'Õ': 'O', 'Ọ': 'O',
-    'Ô': 'O', 'Ồ': 'O', 'Ố': 'O', 'Ổ': 'O', 'Ỗ': 'O', 'Ộ': 'O',
-    'Ơ': 'O', 'Ờ': 'O', 'Ớ': 'O', 'Ở': 'O', 'Ỡ': 'O', 'Ợ': 'O',
-    'Ù': 'U', 'Ú': 'U', 'Ủ': 'U', 'Ũ': 'U', 'Ụ': 'U',
-    'Ư': 'U', 'Ừ': 'U', 'Ứ': 'U', 'Ử': 'U', 'Ữ': 'U', 'Ự': 'U',
-    'Ỳ': 'Y', 'Ý': 'Y', 'Ỷ': 'Y', 'Ỹ': 'Y', 'Ỵ': 'Y',
+    'À': 'A',
+    'Á': 'A',
+    'Ả': 'A',
+    'Ã': 'A',
+    'Ạ': 'A',
+    'Ă': 'A',
+    'Ằ': 'A',
+    'Ắ': 'A',
+    'Ẳ': 'A',
+    'Ẵ': 'A',
+    'Ặ': 'A',
+    'Â': 'A',
+    'Ầ': 'A',
+    'Ấ': 'A',
+    'Ẩ': 'A',
+    'Ẫ': 'A',
+    'Ậ': 'A',
+    'È': 'E',
+    'É': 'E',
+    'Ẻ': 'E',
+    'Ẽ': 'E',
+    'Ẹ': 'E',
+    'Ê': 'E',
+    'Ề': 'E',
+    'Ế': 'E',
+    'Ể': 'E',
+    'Ễ': 'E',
+    'Ệ': 'E',
+    'Ì': 'I',
+    'Í': 'I',
+    'Ỉ': 'I',
+    'Ĩ': 'I',
+    'Ị': 'I',
+    'Ò': 'O',
+    'Ó': 'O',
+    'Ỏ': 'O',
+    'Õ': 'O',
+    'Ọ': 'O',
+    'Ô': 'O',
+    'Ồ': 'O',
+    'Ố': 'O',
+    'Ổ': 'O',
+    'Ỗ': 'O',
+    'Ộ': 'O',
+    'Ơ': 'O',
+    'Ờ': 'O',
+    'Ớ': 'O',
+    'Ở': 'O',
+    'Ỡ': 'O',
+    'Ợ': 'O',
+    'Ù': 'U',
+    'Ú': 'U',
+    'Ủ': 'U',
+    'Ũ': 'U',
+    'Ụ': 'U',
+    'Ư': 'U',
+    'Ừ': 'U',
+    'Ứ': 'U',
+    'Ử': 'U',
+    'Ữ': 'U',
+    'Ự': 'U',
+    'Ỳ': 'Y',
+    'Ý': 'Y',
+    'Ỷ': 'Y',
+    'Ỹ': 'Y',
+    'Ỵ': 'Y',
     'Đ': 'D',
   };
   final b = StringBuffer();
@@ -192,6 +305,146 @@ String _removeDiacritics(String s) {
     b.write(map[ch] ?? ch);
   }
   return b.toString();
+}
+
+/// Rewrite Vietnamese date-street shorthand ("Đường 30/4", "30-4", "30.4")
+/// into the form OSM actually names it ("Đường 30 Tháng 4"). Only matches
+/// real dates (day ≤ 31 / month ≤ 12), so alley numbers like "Hẻm 130/21" are
+/// left alone. Returns null when there is nothing to rewrite.
+String? rewriteDateStreet(String s) {
+  final m = RegExp(
+    r'(?<![0-9])([0-9]{1,2})[/.\-]([0-9]{1,2})(?![0-9])',
+  ).firstMatch(s);
+  if (m == null) return null;
+  final d = int.parse(m.group(1)!);
+  final mo = int.parse(m.group(2)!);
+  if (d < 1 || d > 31 || mo < 1 || mo > 12) return null;
+  return s.replaceFirst(m.group(0)!, '${m.group(1)} Tháng ${m.group(2)}');
+}
+
+/// Split a leading Vietnamese house number from the street part of an
+/// address. Handles "62", "62A", "62/8", "62/8A":
+///   splitHouseNumber("62 đường 30/4") → ("62", "đường 30/4")
+/// Returns null when there is no leading house number.
+(String, String)? splitHouseNumber(String s) {
+  final m = RegExp(
+    r'^[0-9]+[A-Za-z]?(?:/[0-9]+[A-Za-z]?)?\s+',
+  ).matchAsPrefix(s);
+  if (m == null) return null;
+  return (m.group(0)!.trim(), s.substring(m.end).trim());
+}
+
+/// Photon (Komoot) search. Photon returns GeoJSON features without a ready
+/// display_name, so a human label is assembled from its address parts.
+/// Location-biases toward [focus] (the phone's GPS) so a street that exists
+/// in several cities ("Đường 30 Tháng 4" is in Tân Phú AND Thủ Dầu Một…)
+/// resolves to the nearby one.
+///
+/// A single query can miss a house number ("62 đường 30/4" — the "/" token
+/// and the number confuse Photon), so variants are tried and merged:
+///   1. the VN date-street rewrite of the FULL query ("30/4" → "30 Tháng 4",
+///      the form OSM actually names it — resolves far better, put first),
+///   2. the query as typed,
+///   3. when a leading house number is present ("62", "62A", "62/8"), the
+///      BARE STREET alone (rewritten, then as typed) — this is what actually
+///      resolves "62 đường 30/4" to "Đường 30 Tháng 4".
+Future<List<OsmSuggestion>> _photonSearch(
+  String text, {
+  int limit = 6,
+  LatLng? focus,
+}) async {
+  final original = text.trim();
+  // Split a leading Vietnamese house number ("62", "62A", "62/8", "62/8A")
+  // from the street so the street part can be searched on its own.
+  final split = splitHouseNumber(original);
+  final house = split?.$1;
+  final street = split?.$2 ?? '';
+
+  final out = <OsmSuggestion>[];
+  // 1) Full-query variants merged (date-street rewrite + as typed).
+  final fullVariants = <String>[];
+  final fullRewritten = rewriteDateStreet(original);
+  if (fullRewritten != null) fullVariants.add(fullRewritten);
+  if (!fullVariants.contains(original)) fullVariants.add(original);
+  for (final v in fullVariants) {
+    out.addAll(await _photonSearchRaw(v, limit: limit, focus: focus));
+  }
+  // 2) House-number query with no hits → bare street (rewritten, then typed).
+  if (out.isEmpty && house != null && street.isNotEmpty) {
+    final streetVariants = <String>[];
+    final streetRewritten = rewriteDateStreet(street);
+    if (streetRewritten != null) streetVariants.add(streetRewritten);
+    if (!streetVariants.contains(street)) streetVariants.add(street);
+    for (final v in streetVariants) {
+      out.addAll(await _photonSearchRaw(v, limit: limit, focus: focus));
+    }
+  }
+  // De-duplicate by OSM ref (Photon repeats some features).
+  final seen = <String>{};
+  return [
+    for (final s in out)
+      if (seen.add(s.refId)) s,
+  ].take(limit).toList();
+}
+
+/// One Photon query. NOTE: no `lang=` param — Photon only supports
+/// default/de/en/fr and REJECTS the whole request for any other language
+/// (e.g. `lang=vi` returns an error body and zero results, silently breaking
+/// every search).
+Future<List<OsmSuggestion>> _photonSearchRaw(
+  String text, {
+  int limit = 6,
+  LatLng? focus,
+}) async {
+  final bias = focus == null
+      ? ''
+      : '&lat=${focus.latitude}&lon=${focus.longitude}';
+  final url =
+      '$_photonBase'
+      '?q=${Uri.encodeQueryComponent(text)}'
+      '&limit=$limit'
+      '&countrycode=vn'
+      '$bias';
+  final res = await http
+      .get(Uri.parse(url), headers: {'User-Agent': _ua})
+      .timeout(const Duration(seconds: 8));
+  if (res.statusCode != 200) {
+    throw Exception('Photon HTTP ${res.statusCode}');
+  }
+  final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+  final features = (data['features'] as List? ?? [])
+      .cast<Map<String, dynamic>>();
+  final out = <OsmSuggestion>[];
+  for (final f in features) {
+    final geo = f['geometry'] as Map<String, dynamic>?;
+    final coords = (geo?['coordinates'] as List?)?.cast<num>();
+    if (coords == null || coords.length < 2) continue;
+    final props = f['properties'] as Map<String, dynamic>? ?? {};
+    final name = (props['name'] ?? '') as String;
+    if (name.isEmpty) continue;
+    final addr = (props['osm_value'] ?? '') as String;
+    final district = (props['district'] ?? '') as String;
+    final city = (props['city'] ?? '') as String;
+    final state = (props['state'] ?? '') as String;
+    final display = <String>[
+      name,
+      if (addr.isNotEmpty && addr != name) addr,
+      if (district.isNotEmpty) district,
+      if (city.isNotEmpty) city,
+      if (state.isNotEmpty) state,
+    ].join(', ');
+    final osmType = (props['osm_type'] ?? 'relation') as String;
+    final id = props['osm_id'];
+    out.add(
+      OsmSuggestion(
+        refId: '$osmType/${id ?? '${coords[1]},${coords[0]}'}',
+        display: display,
+        lat: coords[1].toDouble(),
+        lng: coords[0].toDouble(),
+      ),
+    );
+  }
+  return out;
 }
 
 /// Search suggestions for a partial query (min ~2 chars).
@@ -230,8 +483,25 @@ Future<List<OsmSuggestion>> osmAutocomplete(
     ].take(limit).toList();
   }
 
-  // Google Maps geocoding — used as the primary search when a key is
-  // configured (far better Vietnamese results than Nominatim).
+  // Google Places AUTOCOMPLETE — the best type-ahead for Vietnamese
+  // house-number addresses ("62 đường 30/4"). Used first when a Places key is
+  // configured; suggestions carry only a place_id (coordinates are resolved
+  // on selection via googlePlaceDetails).
+  if (VietmapConfig.googlePlacesKey.isNotEmpty) {
+    try {
+      final g = await googlePlaceAutocomplete(text, limit: limit, focus: focus);
+      if (g.isNotEmpty) {
+        _searchCache[key] = g;
+        unawaited(_saveSearchCache());
+        return g;
+      }
+    } catch (_) {
+      // fall through to Vietmap / Nominatim
+    }
+  }
+
+  // Google Maps geocoding — full-address search when a key is configured (far
+  // better Vietnamese results than Nominatim).
   if (VietmapConfig.googleApiKey.isNotEmpty) {
     try {
       final g = await googleGeocode(text, limit: limit);
@@ -245,7 +515,11 @@ Future<List<OsmSuggestion>> osmAutocomplete(
     }
   }
 
-  if (dataSource == 'vietmap') {
+  // Vietmap autocomplete — fast, VN-focused. Used when the user picked
+  // Vietmap as the geocoding provider, OR implicitly by the Vietmap data
+  // source. (On the OSM data source a chosen Vietmap provider still resolves
+  // coordinates via a place call on selection.)
+  if (geocodingProvider == 'vietmap' || dataSource == 'vietmap') {
     try {
       final vm = await vietmapAutocomplete(text, focus: focus);
       final out = <OsmSuggestion>[
@@ -259,6 +533,21 @@ Future<List<OsmSuggestion>> osmAutocomplete(
           ),
       ];
       if (out.isNotEmpty) return out;
+    } catch (_) {
+      // fall through to Nominatim
+    }
+  }
+
+  // Photon (Komoot) — free, no key, faster + better Vietnamese results than
+  // Nominatim. Default provider; Nominatim is the fallback below.
+  if (geocodingProvider != 'nominatim') {
+    try {
+      final out = await _photonSearch(text, limit: limit, focus: focus);
+      if (out.isNotEmpty) {
+        _searchCache[key] = out;
+        unawaited(_saveSearchCache());
+        return out;
+      }
     } catch (_) {
       // fall through to Nominatim
     }
@@ -356,4 +645,82 @@ Future<List<OsmSuggestion>> googleGeocode(String text, {int limit = 6}) async {
     );
   }
   return out;
+}
+
+/// Google Places AUTOCOMPLETE — true type-ahead search, and the best online
+/// option for Vietnamese house-number addresses ("62 đường 30/4"). Each
+/// prediction carries only a place_id ([OsmSuggestion.refId]); coordinates
+/// are resolved on selection via [googlePlaceDetails]. Returns [] when no
+/// key / no results / request failed.
+Future<List<OsmSuggestion>> googlePlaceAutocomplete(
+  String text, {
+  int limit = 6,
+  LatLng? focus,
+}) async {
+  final key = VietmapConfig.googlePlacesKey;
+  if (key.isEmpty) return const [];
+  var url =
+      'https://maps.googleapis.com/maps/api/place/autocomplete/json'
+      '?input=${Uri.encodeQueryComponent(text)}'
+      '&components=country:vn'
+      '&language=vi'
+      '&types=address|establishment'
+      '&key=$key';
+  if (focus != null) {
+    // Bias suggestions toward the phone (~50 km circle) so a street that
+    // exists in several cities resolves to the nearby one.
+    url += '&locationbias=circle:50000@${focus.latitude},${focus.longitude}';
+  }
+  final res = await http
+      .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
+      .timeout(const Duration(seconds: 15));
+  if (res.statusCode != 200) return const [];
+  final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+  if (data['status'] != 'OK') return const [];
+  final out = <OsmSuggestion>[];
+  for (final r
+      in (data['predictions'] as List? ?? []).cast<Map<String, dynamic>>().take(
+        limit,
+      )) {
+    final desc = (r['description'] ?? '') as String;
+    if (desc.isEmpty) continue;
+    out.add(
+      OsmSuggestion(
+        refId: (r['place_id'] ?? '') as String,
+        display: desc,
+        lat: 0,
+        lng: 0,
+        source: 'google',
+      ),
+    );
+  }
+  return out;
+}
+
+/// Resolve a Google Places autocomplete prediction ([place_id]) to
+/// coordinates + a formatted address. One transaction per call (only fired
+/// when the user picks a suggestion). Returns (lat, lng, display) or null.
+Future<(double, double, String)?> googlePlaceDetails(String placeId) async {
+  final key = VietmapConfig.googlePlacesKey;
+  if (key.isEmpty) return null;
+  final url =
+      'https://maps.googleapis.com/maps/api/place/details/json'
+      '?place_id=${Uri.encodeQueryComponent(placeId)}'
+      '&fields=geometry,formatted_address'
+      '&language=vi'
+      '&key=$key';
+  final res = await http
+      .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
+      .timeout(const Duration(seconds: 15));
+  if (res.statusCode != 200) return null;
+  final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+  if (data['status'] != 'OK') return null;
+  final result = data['result'] as Map<String, dynamic>?;
+  if (result == null) return null;
+  final loc = result['geometry']?['location'] as Map<String, dynamic>?;
+  final lat = (loc?['lat'] as num?)?.toDouble();
+  final lng = (loc?['lng'] as num?)?.toDouble();
+  if (lat == null || lng == null) return null;
+  final display = (result['formatted_address'] ?? '') as String;
+  return (lat, lng, display);
 }

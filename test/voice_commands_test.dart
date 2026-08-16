@@ -56,6 +56,22 @@ void main() {
       expect(parseVoiceCommand('help').type, VoiceCommandType.help);
     });
 
+    test('always-on wake-word toggles', () {
+      expect(
+        parseVoiceCommand('bật nghe luôn').type,
+        VoiceCommandType.alwaysOnOn,
+      );
+      expect(
+        parseVoiceCommand('nghe liên tục').type,
+        VoiceCommandType.alwaysOnOn,
+      );
+      expect(
+        parseVoiceCommand('tắt nghe luôn').type,
+        VoiceCommandType.alwaysOnOff,
+      );
+      expect(parseVoiceCommand('dừng nghe').type, VoiceCommandType.alwaysOnOff);
+    });
+
     test('empty and unknown input map to none', () {
       expect(parseVoiceCommand('').type, VoiceCommandType.none);
       expect(parseVoiceCommand('   ').type, VoiceCommandType.none);

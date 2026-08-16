@@ -65,21 +65,109 @@ const String _ua = 'navbridge/1.0 (BLE portable navigation; road info)';
   _ => ('Đường', 50),
 };
 
+/// Vietnamese statutory default limit (km/h) per highway class per vehicle.
+/// OSM rarely tags `maxspeed` in VN cities, so this fills the gap. The car
+/// table mirrors [classInfo]; motorbike / truck are lower (motorbikes are
+/// prohibited on motorways — capped rather than 0 so the chip never shows an
+/// empty limit).
+int statutoryLimit(String highway, {String vehicle = 'car'}) {
+  const car = {
+    'motorway': 120,
+    'motorway_link': 100,
+    'trunk': 90,
+    'trunk_link': 80,
+    'primary': 80,
+    'primary_link': 60,
+    'secondary': 60,
+    'secondary_link': 50,
+    'tertiary': 50,
+    'tertiary_link': 50,
+    'unclassified': 50,
+    'residential': 50,
+    'living_street': 20,
+    'service': 30,
+    'pedestrian': 10,
+    'footway': 10,
+    'cycleway': 20,
+  };
+  const motorbike = {
+    'motorway': 80,
+    'motorway_link': 60,
+    'trunk': 80,
+    'trunk_link': 60,
+    'primary': 70,
+    'primary_link': 50,
+    'secondary': 60,
+    'secondary_link': 50,
+    'tertiary': 60,
+    'tertiary_link': 50,
+    'unclassified': 50,
+    'residential': 40,
+    'living_street': 20,
+    'service': 30,
+    'pedestrian': 10,
+    'footway': 10,
+    'cycleway': 20,
+  };
+  const truck = {
+    'motorway': 80,
+    'motorway_link': 70,
+    'trunk': 70,
+    'trunk_link': 60,
+    'primary': 60,
+    'primary_link': 50,
+    'secondary': 50,
+    'secondary_link': 40,
+    'tertiary': 50,
+    'tertiary_link': 40,
+    'unclassified': 40,
+    'residential': 40,
+    'living_street': 20,
+    'service': 30,
+    'pedestrian': 10,
+    'footway': 10,
+    'cycleway': 20,
+  };
+  final table = switch (vehicle) {
+    'motorbike' => motorbike,
+    'truck' => truck,
+    _ => car,
+  };
+  return table[highway] ?? 50;
+}
+
 /// Parse a raw OSM maxspeed tag into km/h: "50", "50 km/h", "30 mph",
 /// "15 knots", "none", … Unknown/non-numeric values return [fallback].
+///
+/// Quality guards:
+///  * multi-value / conditional tags ("50;30", "50-60", "30 @ (06:00-22:00)")
+///    → take the FIRST numeric value (the base posted limit).
+///  * absurd values (typos like "999", or a garbage bit-pattern from a
+///    mis-decoded GraphHopper edge) → return [fallback], never a nonsense
+///    limit. This is what turned a real 50 km/h limit into a bogus "31".
 int parseMaxspeed(String? raw, int fallback) {
   if (raw == null || raw.isEmpty) return fallback;
   final t = raw.toLowerCase().trim();
-  if (t == 'none' || t == 'signals' || t == 'variable' || t == 'walk') {
+  if (t == 'none' ||
+      t == 'signals' ||
+      t == 'variable' ||
+      t == 'walk' ||
+      t == 'urban' ||
+      t == 'rural') {
     return fallback;
   }
   final m = RegExp(r'(\d+(?:\.\d+)?)').firstMatch(t);
   if (m == null) return fallback;
   final v = double.parse(m.group(1)!);
   // OSM stores imperial units verbatim — convert to km/h (the chip is km/h).
-  if (t.contains('mph')) return (v * 1.609344).round();
-  if (t.contains('knot')) return (v * 1.852).round();
-  return v.round();
+  var kmh = t.contains('mph')
+      ? v * 1.609344
+      : t.contains('knot')
+      ? v * 1.852
+      : v;
+  // A posted limit outside 5..200 km/h is data noise, not a real road.
+  if (kmh < 5 || kmh > 200) return fallback;
+  return kmh.round();
 }
 
 /// Simple client-side cache: last result + where we queried it.
@@ -93,7 +181,13 @@ final _Cache _cache = _Cache();
 /// Fetch the road under [pos]. Reuses the cached result while the fix is
 /// within ~25 m of the last query (a road is ~10 m wide, so that means we are
 /// still on the same road). Returns the last known value on failure.
-Future<RoadInfo?> fetchRoadInfo(LatLng pos) async {
+/// [vehicle] selects the statutory fallback (car/motorbike/truck); a positive
+/// [override] (km/h) wins over both the tagged maxspeed and the fallback.
+Future<RoadInfo?> fetchRoadInfo(
+  LatLng pos, {
+  String vehicle = 'car',
+  int override = 0,
+}) async {
   final cached = _cache.last;
   if (cached != null && _cache.at != null) {
     if (distanceMeters(pos, _cache.at!) < 25) return cached;
@@ -152,17 +246,43 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos) async {
 
   final tags = (best['tags'] as Map<String, dynamic>? ?? {});
   final highway = (tags['highway'] ?? '') as String;
-  final (label, fallback) = classInfo(highway);
+  final (label, _) = classInfo(highway);
+  final fallback = statutoryLimit(highway, vehicle: vehicle);
   final info = RoadInfo(
     name: (tags['name'] ?? '') as String,
     highway: highway,
-    maxspeed: tags['maxspeed'] as String?,
+    // Prefer the plain maxspeed, then the directional / conditional
+    // variants. `maxspeed:forward` is usually a superset of `maxspeed` on
+    // dual carriageways (both directions are posted separately), but the
+    // plain tag is the more reliable base value, so it wins when present.
+    maxspeed: _effectiveMaxspeed(tags),
     label: label,
-    speedLimit: parseMaxspeed(tags['maxspeed'] as String?, fallback),
+    speedLimit: override > 0
+        ? override
+        : parseMaxspeed(_effectiveMaxspeed(tags), fallback),
   );
   _cache.last = info;
   _cache.at = pos;
   return info;
+}
+
+/// Best maxspeed tag on the way: `maxspeed` (base), falling back to
+/// `maxspeed:forward` / `maxspeed:backward` / `maxspeed:conditional`.
+/// OSM often only posts one of these on Vietnamese dual carriageways.
+String? _effectiveMaxspeed(Map<String, dynamic> tags) {
+  final plain = tags['maxspeed'];
+  if (plain is String && plain.trim().isNotEmpty) return plain.trim();
+  for (final k in [
+    'maxspeed:forward',
+    'maxspeed:backward',
+    'maxspeed:conditional',
+    'maxspeed:forward:conditional',
+    'maxspeed:backward:conditional',
+  ]) {
+    final v = tags[k];
+    if (v is String && v.trim().isNotEmpty) return v.trim();
+  }
+  return null;
 }
 
 bool _isDrivable(String hw) => !const {

@@ -21,6 +21,15 @@ class VietmapConfig {
     'GOOGLE_GEOCODE_KEY',
   );
 
+  /// Google Places API key — used for AUTOCOMPLETE + place-details search
+  /// when provided (the best Vietnamese house-number address search, e.g.
+  /// "62 đường 30/4"). Requires the Places API enabled + billing in Google
+  /// Cloud Console. Empty = search falls back to Vietmap / Photon. Also
+  /// --dart-define only: `--dart-define=GOOGLE_PLACES_KEY=...`.
+  static const String googlePlacesKey = String.fromEnvironment(
+    'GOOGLE_PLACES_KEY',
+  );
+
   static const String autocomplete =
       'https://maps.vietmap.vn/api/autocomplete/v4';
   static const String place = 'https://maps.vietmap.vn/api/place/v4';
@@ -50,3 +59,9 @@ String dataSource = 'osm';
 /// `navbridge/assets/offline_map/` with `python3 -m http.server` and use
 /// `http://10.0.2.2:8080` from the emulator or the host's LAN IP from a phone.
 const String navMapDownloadBaseUrl = String.fromEnvironment('NAVMAP_URL');
+
+/// Base URL the app downloads the offline GraphHopper routing graph (`.ghz`)
+/// from. Empty = graph download disabled (a graph must be placed manually).
+/// Set at build time via `--dart-define=GRAPH_URL=http://<host>/` — the file
+/// is expected at `$GRAPH_URL/graph.ghz` (built with `tools/build_graph.sh`).
+const String graphDownloadBaseUrl = String.fromEnvironment('GRAPH_URL');

@@ -57,6 +57,12 @@ tools/data/sources/
 tools/saigon_z16.pmtiles
 tools/data/saigon.pmtiles
 
+# Recorded test media + trip replay data (large; dev-only artifacts)
+*.mp4
+recorded_replay.json
+2026-08-08_200603_*.json
+assets/trips/
+
 # Local secrets — never commit. Vietmap keys live in .env and are loaded by
 # tool/env.sh -> --dart-define at build time.
 .env

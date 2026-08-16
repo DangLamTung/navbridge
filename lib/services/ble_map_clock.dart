@@ -23,6 +23,11 @@ abstract final class MapDisplayGatt {
   static const String serviceUuid = '5a7e1000-2b2f-4f66-9f9a-5c0f8e1a2b3c';
   static const String writeCharUuid = '5a7e1001-2b2f-4f66-9f9a-5c0f8e1a2b3c';
 
+  /// Second service: weather (phone -> ESP), same binary framing.
+  static const String weatherServiceUuid =
+      '5a7e2000-2b2f-4f66-9f9a-5c0f8e1a2b3c';
+  static const String weatherCharUuid = '5a7e2001-2b2f-4f66-9f9a-5c0f8e1a2b3c';
+
   /// Advertise names we accept (board = "NAV-OSM"; future boards may say
   /// "NAVMAP-ESP32").
   static const List<String> acceptedNames = ['NAV-OSM', 'NAVMAP'];
@@ -31,9 +36,12 @@ abstract final class MapDisplayGatt {
 class BleMapClock {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _write;
+  BluetoothCharacteristic? _weatherWrite;
   final _linkController = StreamController<ClockLink>.broadcast();
   final _scanController =
       StreamController<List<ScannedClockDevice>>.broadcast();
+  final _gpsController = StreamController<String>.broadcast();
+  StreamSubscription<List<int>>? _notifySub;
   final Map<String, ScannedClockDevice> _devices = {};
   ClockLink _link = ClockLink.off;
   StreamSubscription<List<ScanResult>>? _scanSub;
@@ -51,6 +59,9 @@ class BleMapClock {
 
   /// Live list of BLE devices seen while the picker scan is running.
   Stream<List<ScannedClockDevice>> get deviceStream => _scanController.stream;
+
+  /// Raw NMEA lines broadcast by the ESP GPS (when enabled + a fix exists).
+  Stream<String> get gpsNmeaStream => _gpsController.stream;
 
   BluetoothDevice? get device => _device;
 
@@ -208,8 +219,8 @@ class BleMapClock {
 
   Future<void> _findCharacteristic() async {
     for (final s in _device!.servicesList) {
-      if (s.uuid.str128.toLowerCase() ==
-          MapDisplayGatt.serviceUuid.toLowerCase()) {
+      final svc = s.uuid.str128.toLowerCase();
+      if (svc == MapDisplayGatt.serviceUuid.toLowerCase()) {
         for (final c in s.characteristics) {
           if (c.uuid.str128.toLowerCase() ==
               MapDisplayGatt.writeCharUuid.toLowerCase()) {
@@ -217,11 +228,48 @@ class BleMapClock {
             debugPrint(
               '[MAP] write char props: '
               'write=${c.properties.write} '
-              'writeWithoutResponse=${c.properties.writeWithoutResponse}',
+              'writeWithoutResponse=${c.properties.writeWithoutResponse} '
+              'notify=${c.properties.notify}',
             );
+            // Subscribe so the ESP can broadcast GPS NMEA to us (type-agnostic:
+            // the nav char's NOTIFY carries raw NMEA lines when GPS is on).
+            if (c.properties.notify) {
+              await c.setNotifyValue(true);
+              _notifySub?.cancel();
+              _notifySub = c.onValueReceived.listen((v) {
+                final s2 = String.fromCharCodes(v).trim();
+                if (s2.isNotEmpty && s2.startsWith(r'$')) {
+                  _gpsController.add(s2);
+                }
+              });
+              debugPrint('[MAP] subscribed to GPS NMEA notify');
+            }
+          }
+        }
+      } else if (svc == MapDisplayGatt.weatherServiceUuid.toLowerCase()) {
+        for (final c in s.characteristics) {
+          if (c.uuid.str128.toLowerCase() ==
+              MapDisplayGatt.weatherCharUuid.toLowerCase()) {
+            _weatherWrite = c;
+            debugPrint('[MAP] weather write char found');
           }
         }
       }
+    }
+  }
+
+  /// Send a weather frame to the ESP's weather service (type 0x07). Best-effort.
+  Future<bool> sendWeatherFrame(Uint8List frame) async {
+    final w = _weatherWrite;
+    if (w == null) return false;
+    try {
+      await w
+          .write(frame, withoutResponse: true)
+          .timeout(const Duration(seconds: 4));
+      return true;
+    } catch (e) {
+      debugPrint('[MAP] weather write failed: $e');
+      return false;
     }
   }
 
@@ -285,11 +333,14 @@ class BleMapClock {
   Future<void> disconnect() async {
     _scanSub?.cancel();
     _scanSub = null;
+    _notifySub?.cancel();
+    _notifySub = null;
     if (FlutterBluePlus.isScanningNow) {
       await FlutterBluePlus.stopScan();
     }
     final dev = _device;
     _write = null;
+    _weatherWrite = null;
     _device = null;
     hello = '';
     _setLink(ClockLink.off);
@@ -299,7 +350,9 @@ class BleMapClock {
   }
 
   void dispose() {
+    _notifySub?.cancel();
     _linkController.close();
     _scanController.close();
+    _gpsController.close();
   }
 }

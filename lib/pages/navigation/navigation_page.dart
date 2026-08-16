@@ -12,7 +12,7 @@
 library;
 
 import 'dart:async';
-import 'dart:math' show Point, Random, max;
+import 'dart:math' show Point, max;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -27,9 +27,10 @@ import 'package:navbridge/services/ble_map_clock.dart';
 import 'package:navbridge/ui/device_picker.dart';
 import 'package:navbridge/services/elevation.dart';
 import 'package:navbridge/services/nav_engine.dart';
+import 'package:navbridge/services/offline_cameras.dart';
 import 'package:navbridge/core/nav_protocol.dart';
 import 'package:navbridge/core/map_protocol.dart';
-import 'package:navbridge/pages/offline_screen.dart';
+import 'package:navbridge/pages/settings_screen.dart';
 import 'package:navbridge/services/offline_poi.dart';
 import 'package:navbridge/services/offline_router.dart';
 import 'package:navbridge/services/offline_tiles.dart';
@@ -41,16 +42,21 @@ import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/overpass.dart';
 import 'package:navbridge/services/trip_logger.dart';
 import 'package:navbridge/core/trip_plan.dart';
-import 'package:navbridge/pages/trips_screen.dart';
 import 'package:navbridge/ui/arrival_card.dart';
+import 'package:navbridge/ui/cctv_icon.dart';
 import 'package:navbridge/ui/vector_nav_map.dart';
 import 'package:navbridge/services/vietmap_api.dart';
 import 'package:navbridge/services/vietmap_config.dart';
-import 'package:navbridge/services/vietmap_intent.dart';
+import 'package:navbridge/pages/vietmap_nav_screen.dart';
+import 'package:navbridge/services/ai_assistant.dart';
+import 'package:navbridge/ui/ai_chat_panel.dart';
 import 'package:navbridge/services/voice_commands.dart';
 import 'package:navbridge/services/voice_guide.dart';
 import 'package:navbridge/services/weather.dart';
+import 'package:navbridge/services/nav_foreground.dart';
+import 'package:navbridge/services/pip_service.dart';
 import 'package:navbridge/ui/displays_button.dart';
+import 'package:navbridge/ui/directions_bar.dart';
 import 'package:navbridge/ui/elevation_chart.dart';
 import 'package:navbridge/ui/map_controls.dart';
 import 'package:navbridge/ui/nav_status_bar.dart';
@@ -64,16 +70,26 @@ import 'package:navbridge/ui/stops_panel.dart';
 import 'package:navbridge/ui/suggestions_list.dart';
 import 'package:navbridge/ui/widgets.dart';
 
-part 'nav_bars.dart';
-part 'nav_gps.dart';
-part 'nav_map.dart';
-part 'nav_navigation.dart';
-part 'nav_poi.dart';
-part 'nav_route_edit.dart';
-part 'nav_screens.dart';
-part 'nav_search.dart';
-part 'nav_voice.dart';
-part 'nav_weather.dart';
+part 'modules/nav_bars.dart';
+part 'modules/nav_build.dart';
+part 'modules/nav_gps.dart';
+part 'modules/nav_map.dart';
+part 'modules/nav_navigation.dart';
+part 'modules/nav_poi.dart';
+part 'modules/nav_route_edit.dart';
+part 'modules/nav_screens.dart';
+part 'modules/nav_search.dart';
+part 'modules/nav_simple.dart';
+part 'modules/nav_voice.dart';
+part 'modules/nav_weather.dart';
+part 'modules/nav_widgets.dart';
+
+/// Which directions-mode field a suggestion or map-tap fills.
+enum _NavField { start, end }
+
+/// App/isolate start — used to measure startup latency (first frame, graph
+/// load timing) via the STARTUP / ROUTER debug logs.
+final DateTime _appStart = DateTime.now();
 
 class NavigationPage extends StatefulWidget {
   const NavigationPage({super.key});
@@ -98,6 +114,27 @@ class _NavigationPageState extends State<NavigationPage>
   // --- search -----------------------------------------------------------
   final _searchCtrl = TextEditingController();
   final _searchFocus = FocusNode();
+
+  /// True = Google-Maps-style DIRECTIONS mode (start + end fields, add
+  /// stops, tap-map to pick points). False = plain search/browse mode where
+  /// tapping a result drops a pin + shows a place card with a "Chỉ đường"
+  /// button (no route is built until the user asks for directions).
+  bool _directionsMode = false;
+
+  /// Start-point controller for directions mode ("" = use current location).
+  final _startCtrl = TextEditingController();
+  final _startFocus = FocusNode();
+
+  /// User-chosen start point (null = current location).
+  LatLng? _originOverride;
+  String _originName = '';
+
+  /// Which directions field a suggestion / map-tap fills.
+  _NavField _navField = _NavField.end;
+
+  /// Place dropped in search (browse) mode — shown as a pin + place card
+  /// with a "Chỉ đường" button (Google-Maps style). Null = no picked place.
+  OsmSuggestion? _pickedPlace;
 
   /// Once the user declines "go online for this search", don't nag again
   /// for the rest of the session.
@@ -130,12 +167,19 @@ class _NavigationPageState extends State<NavigationPage>
   /// heading-up camera never flicker. Passed to the vector map as `bearing`.
   double _routeBearing = 0;
 
-  bool _headingUp = true; // rotate map so travel direction points up
+  bool _headingUp = !const bool.fromEnvironment(
+    'FORCE_NORTH',
+  ); // rotate map so travel direction points up
   String _carIcon = 'arrow';
   RouteProfile _routeProfile = RouteProfile.car; // road type for routing
   NavProgress? _progress;
   StreamSubscription<Position>? _gpsSub;
   bool _navigating = false;
+
+  /// True while the OS Picture-in-Picture window is on screen (nav only). When
+  /// set, the page renders a compact PiP layout so the big banner/controls
+  /// don't overflow the tiny floating window.
+  bool _pipActive = false;
   String _clockStatus = 'off';
   String _mapStatus = 'off';
 
@@ -143,11 +187,22 @@ class _NavigationPageState extends State<NavigationPage>
   /// only pushed when the minute ticks over.
   int _lastMapClockMinute = -1;
 
+  /// Last time the ESP display's path-ahead was re-sent. The board only shows
+  /// ~1.5 km of map (zoom 15), so we push the near path-ahead window and
+  /// refresh it on a timer while navigating — not on every GPS fix.
+  DateTime? _lastMapRouteSend;
+
   // --- Google-style extras: step list, alternative routes ----------------
   bool _showSteps = false; // expanded turn-banner step list
   List<OsrmRoute> _alternativeRoutes = []; // Vietmap alternative routes
   int _selectedRoute = 0; // index into [_alternativeRoutes]
   List<LatLng> _planPoints = []; // route points for re-fitting the camera
+
+  /// Serial for route builds — each [_buildPlanRoute] bumps it; a build whose
+  /// number is stale (a newer build already started) drops its result, so a
+  /// fast double-trigger (e.g. profile change + re-plan) never makes the
+  /// route build/flicker twice.
+  int _planSeq = 0;
 
   // --- draggable route (Google-style grab-the-line to add a via point) ---
   // One handle per route segment (a simple A→B route has exactly one).
@@ -165,14 +220,116 @@ class _NavigationPageState extends State<NavigationPage>
   /// Current air temperature (°C) for the bottom status bar (Open-Meteo).
   WeatherInfo? _weather;
   Timer? _weatherTimer; // refreshes the weather while navigating
+
+  /// Weather a few km AHEAD along the route (Open-Meteo, sampled at points
+  /// along the polyline and merged by severity). Shown in the PiP window so
+  /// you can see what's coming while you drive.
+  WeatherInfo? _weatherAhead;
   double? _scrubProgress; // 0..1 while the user drags the progress line
 
+  // --- camera alerts (phạt nguội DB) ------------------------------------
+  /// Nearest camera AHEAD on the route (from `offline_cameras.dart`), used
+  /// for the PiP camera chip + the alert trigger distance.
+  CameraAhead? _nextCamera;
+  String? _lastCameraSig; // dedupe: only alert once per camera
+  DateTime? _lastCameraCheck;
+
+  /// All bundled cameras, shown as a map layer when [cameraAlerts] is on.
+  List<OfflineCamera> _cameras = [];
+
+  /// True once the camera index load has been requested (one-shot, so the
+  /// browse map with camera alerts on still shows cameras — but loaded AFTER
+  /// the first build, not at boot).
+  bool _camerasRequested = false;
+
+  /// Cameras near the CAR — during navigation the map layer shows ONLY the
+  /// cameras ahead of the car on the route (within ~1.5 km), not a whole-
+  /// route corridor, so the driver sees the cameras they're actually
+  /// approaching. Refreshed on route set/clear and kept fresh every ~1 s by
+  /// `_cameraAheadAsync` while navigating.
+  List<OfflineCamera> _routeCameras = [];
+
+  /// How far ahead of the car (metres) the nav-map camera layer shows.
+  /// Matches the alert window used by `_checkCameraAhead`.
+  static const double kNavMapCameraAheadMeters = 1500;
+
+  /// Recompute [_routeCameras] — CAR-CENTRIC: cameras ahead of the car on
+  /// the route, not a whole-route corridor. Called when the route is planned
+  /// / re-planned / cleared and when camera alerts toggle on (during nav
+  /// `_cameraAheadAsync` keeps it fresh each second).
+  Future<void> _refreshRouteCameras() async {
+    final cur = _current;
+    final r = _route;
+    final near = (cur == null || r == null || r.geometry.length < 2)
+        ? const <OfflineCamera>[]
+        : [
+            for (final a in await camerasAheadOnRoute(
+              cur,
+              r.geometry,
+              maxAheadMeters: kNavMapCameraAheadMeters,
+            ))
+              a.camera,
+          ];
+    if (!mounted) return;
+    setNavState(() => _routeCameras = near);
+  }
+
+  /// Load the on-device GraphHopper routing graph — kicked off in the
+  /// BACKGROUND right after startup ([initState]) so offline/GraphHopper
+  /// routes are ready without a long wait, and re-triggered on demand when
+  /// the app actually goes offline mid-session. The graph is a ~450 MB load
+  /// (~60 s on low-end phones), so it must never block the first frame:
+  /// idempotent (no-ops when already loaded), checks the graph is present
+  /// first, defers ~1 s, and the native load itself runs on a background
+  /// executor.
+  Future<void> _maybeLoadRoutingGraph() async {
+    if (OfflineRouter.instance.isLoaded) return;
+    if (!await routingGraphPresent()) return;
+    final path = await routingGraphPath();
+    final t0 = DateTime.now();
+    debugPrint('ROUTER: graph load scheduled (background preload)');
+    // Small defer so it never competes with the first frames of a route
+    // build; the native load itself runs on a background executor.
+    await Future<void>.delayed(const Duration(seconds: 1));
+    if (!mounted) return;
+    debugPrint(
+      'ROUTER: graph load STARTING (t+'
+      '${DateTime.now().difference(t0).inMilliseconds}ms)',
+    );
+    final ok = await OfflineRouter.instance.load(path);
+    debugPrint(
+      'ROUTER: on-device graph loaded=$ok (load took '
+      '${DateTime.now().difference(t0).inMilliseconds - 1000}ms)',
+    );
+  }
+
+  /// Lazily load the offline camera index (once, cached) — only when the
+  /// user turns camera alerts ON or a route is set (the map needs it then).
+  /// Not at boot, so cold start stays fast.
+  Future<void> _ensureCameras() async {
+    final cams = await loadOfflineCameras();
+    if (!mounted) return;
+    setNavState(() => _cameras = cams);
+  }
+
   // --- nav map: 3D perspective tilt (Google-style) ----------------------
-  bool _tilt3d = true; // tilted perspective camera (turn off = flat 2D)
+  // 3D is an OPTION (toggle in the layers menu) and OFF by default: the
+  // tilted camera + building extrusion cost GPU, and on the flat map the
+  // pitch alone barely showed. When enabled, [_buildStyleString] also loads
+  // the `building-3d` fill-extrusion layer so buildings render with height.
+  bool _tilt3d = false; // tilted perspective camera (turn off = flat 2D)
   bool _terrain3d = false; // true 3D terrain relief (needs offline DEM)
   bool _nightMode = false; // night/dark map
   bool _satellite = false; // satellite imagery basemap (real terrain)
-  bool _showStatusBar = true; // Google-style bottom time bar
+  bool _showStatusBar = false; // Google-style bottom info bar (default off)
+
+  /// Dark theme for simple nav mode (no map) — toggled on the simple screen.
+  bool _simpleDark = false;
+
+  /// Draggable position of the nav auto-center ("my_location") button, in
+  /// logical pixels (top-left of the overlay). Null = the default spot
+  /// (bottom-right). Session-only for now.
+  Offset? _centerBtnOffset;
   NavBarMode _barMode = NavBarMode.time; // bottom slide: time or elevation
 
   // --- quick POI search (gas / food / hotel / … during navigation) ------
@@ -181,6 +338,11 @@ class _NavigationPageState extends State<NavigationPage>
   PoiResult? _selectedPoi; // tapped POI — shown on the map until "Đi đến"
   bool _poiBusy = false;
 
+  /// Places found by the nav-mode search bar, drawn as markers on the vector
+  /// map so the driver can SEE the options ahead (not just the text list).
+  /// Ranked by route position (ahead 10–20 km, same side of road first).
+  List<PoiResult> _searchResults = [];
+
   // --- offline POI browse (bundled vietnam_pois.json) --------------------
   List<OfflinePoiCategory>? _offlinePoiCats; // loaded lazily once
   bool _offlinePoiBusy = false;
@@ -188,12 +350,6 @@ class _NavigationPageState extends State<NavigationPage>
 
   // --- nav-map camera follow (drives the auto-center button) -------------
   final VectorNavMapController _vmFollow = VectorNavMapController();
-
-  // --- simulated drive (test mode) ---
-  Timer? _simTimer;
-  bool _simulating = false;
-  double _simDist = 0;
-  bool _simOffRoute = false; // NAVTEST: drive off-route to exercise re-routing
 
   // --- road info (Overpass) ---
   RoadInfo? _roadInfo;
@@ -206,7 +362,20 @@ class _NavigationPageState extends State<NavigationPage>
   // --- offline mode ---
   OfflineTileProvider _tileProvider = OfflineTileProvider();
   bool _offline = false;
+
+  /// Whether to show the transient "Đang ngoại tuyến" banner. Shown briefly
+  /// when the app goes offline (or starts offline), then auto-hides after a
+  /// few seconds — it's just a heads-up, it adds no ongoing info.
+  bool _showOfflineBanner = false;
+  Timer? _offlineBannerTimer;
   StreamSubscription<bool>? _connSub;
+
+  /// Debounce for the offline transition. `connectivity_plus` on some ROMs
+  /// (e.g. itel) intermittently reports `none` even when the network is up —
+  /// without this, `_offline` flaps and the nav map's `vietmapBase` toggles,
+  /// which reloads the whole map style on every blip ("the map type keeps
+  /// changing"). We only commit to offline after the reading holds ~3 s.
+  Timer? _offlineDebounce;
 
   // --- changeable basemap layers ----------------------------------------
   static const Map<String, String> _tileLayers = {
@@ -241,6 +410,20 @@ class _NavigationPageState extends State<NavigationPage>
   final VoiceGuide _voice = VoiceGuide();
   final VoiceCommands _commands = VoiceCommands();
   bool _listening = false;
+
+  /// LIVE recognized text for the mic "listening…" banner (partial results
+  /// stream in while the user speaks). Cleared when the session ends.
+  String _voiceText = '';
+
+  /// True while a listening/command banner should be shown (listening state
+  /// OR the just-recognized text to confirm what was heard).
+  bool _voiceBannerVisible = false;
+  Timer? _voiceBannerTimer;
+
+  /// Always-on wake-word listening ("NavBridge, …") — toggled by a LONG-PRESS
+  /// on the mic button. Keeps the recognizer running and only acts when the
+  /// wake word is heard, so hands-free commands work without touching the map.
+  bool _alwaysOnVoice = false;
   bool _voiceOn = true; // spoken turn-by-turn guidance enabled
   bool _spokenFar = false;
   bool _spokenNear = false;
@@ -255,10 +438,28 @@ class _NavigationPageState extends State<NavigationPage>
   double _lastSpeedMps = 0;
   DateTime? _offRouteSince; // when the car first went >50 m off-route
 
+  // --- wrong-way (inverse) detection -------------------------------
+  /// Last RAW GPS fix — used to compute the travel heading for wrong-way
+  /// detection (consecutive fixes are more reliable than GPS heading).
+  LatLng? _lastFixPos;
+
+  /// When the car started driving AGAINST the route direction (null = fine).
+  DateTime? _wrongWaySince;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Preload the on-device GraphHopper routing graph in the BACKGROUND right
+    // after start, so an offline / GraphHopper route build never stalls
+    // waiting for the ~450 MB graph. Safe for cold start: [_maybeLoadRoutingGraph]
+    // is idempotent, checks the graph is present before touching disk, defers
+    // ~1 s, and the native load runs on a background executor.
+    unawaited(_maybeLoadRoutingGraph());
+    // Picture-in-Picture (Part C): wire up the native PiP-mode callback and
+    // swap to the compact layout whenever the OS PiP window appears.
+    PipService.instance.init();
+    PipService.instance.isPipMode.addListener(_onPipChanged);
     _clock.linkStream.listen((l) {
       if (!mounted) return;
       setState(() {
@@ -280,12 +481,17 @@ class _NavigationPageState extends State<NavigationPage>
       });
     });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      debugPrint(
+        'STARTUP: first frame at t+'
+        '${DateTime.now().difference(_appStart).inMilliseconds}ms',
+      );
       if (await _requestPermission()) _startGps();
-      // Load the on-device routing graph if one is already downloaded.
-      if (await routingGraphPresent()) {
-        final ok = await OfflineRouter.instance.load(await routingGraphPath());
-        debugPrint('ROUTER: on-device graph loaded=$ok');
-      }
+      // NOTE: the app boots ONLINE-FIRST — routing stays on the fast online
+      // OSRM/Vietmap path. The heavy offline camera index is NOT preloaded
+      // here (see [_ensureCameras]); it loads lazily when the user turns
+      // camera alerts on. The GraphHopper routing graph, however, is already
+      // loading in the background from initState ([_maybeLoadRoutingGraph]),
+      // so a forced-offline / graphhopper route is ready without a long wait.
       // Initial camera for the route drag handle (kept fresh by
       // onPositionChanged).
       try {
@@ -293,35 +499,57 @@ class _NavigationPageState extends State<NavigationPage>
       } catch (_) {}
     });
     _connSub = onlineStream().listen((online) {
-      if (!mounted) return;
-      setState(() => _offline = !online || forceOffline);
-      if (_offline) unawaited(_ensureOfflinePoiCats());
+      _applyConnectivity(online);
     });
     isOnline().then((on) {
       if (!mounted) return;
-      setState(() => _offline = !on || forceOffline);
-      if (_offline) unawaited(_ensureOfflinePoiCats());
+      _applyConnectivity(on);
     });
-    // Restore the persisted offline/online mode + data-source choice.
+    // Restore the persisted offline/online mode + data-source choice + the
+    // navigation preferences (vehicle / speed override / geocoder / routing
+    // engine / smooth camera).
     loadSettings().then((s) {
       if (!mounted) return;
       forceOffline = s.forceOffline;
       dataSource = s.dataSource;
+      vehicleType = s.vehicleType;
+      speedOverride = s.speedOverride;
+      geocodingProvider = s.geocodingProvider;
+      routingEngine = s.routingEngine;
+      smoothCamera = s.smoothCamera;
+      simpleMode = s.simpleMode;
+      cameraAlerts = s.cameraAlerts;
       setState(() => _offline = _offline || forceOffline);
+      _flashOfflineBanner();
+      // The camera index loads lazily when the user toggles camera alerts on
+      // or a route is set (not at boot). The GraphHopper graph is already
+      // being loaded in the background from initState (idempotent — no-op
+      // here if the preload beat us to it).
     });
-    // Opt-in simulator test harness (see [_maybeRunNavTest]).
-    unawaited(_maybeRunNavTest());
     // Voice: spoken turn-by-turn (→ Bluetooth speaker) + mic commands.
-    _voice.init();
-    _commands.init(
-      onStatus: (s) {
-        // Speech session ended (final result / silence / error) → release mic.
-        if (s == 'done' || s == 'notListening') {
-          _listening = false;
-          if (mounted) setState(() {});
-        }
-      },
-    );
+    // TTS + speech-recognition init is deferred OFF the boot path: binding
+    // the Android TTS/STT engines during startup competes with the GPS
+    // permission flow + the first map frame for the platform thread on
+    // low-end phones. Both are only used once the user navigates / taps the
+    // mic — well after this delay — and each init already no-ops safely if it
+    // fails. (Always-on voice is user-triggered via the mic long-press, so
+    // there's no boot-time listener that needs it earlier.)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future<void>.delayed(const Duration(milliseconds: 1500), () {
+        if (!mounted) return;
+        _voice.init();
+        _commands.init(
+          onStatus: (s) {
+            // Speech session ended (final result / silence / error) → release
+            // mic.
+            if (s == 'done' || s == 'notListening') {
+              _listening = false;
+              if (mounted) setState(() {});
+            }
+          },
+        );
+      });
+    });
   }
 
   /// When the app comes back to the foreground (e.g. after the user enabled
@@ -331,20 +559,33 @@ class _NavigationPageState extends State<NavigationPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
-    if (_simulating) return;
     Future(() async {
-      if (await _requestPermission() && !_simulating) _startGps();
+      if (await _requestPermission()) _startGps();
     });
+  }
+
+  /// OS PiP window appeared/disappeared → swap between the compact PiP layout
+  /// and the full nav UI. (PiP is nav-only; browsing never enters it.)
+  void _onPipChanged() {
+    if (!mounted) return;
+    final pip = PipService.instance.isPipMode.value;
+    if (pip == _pipActive) return;
+    setNavState(() => _pipActive = pip);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    PipService.instance.isPipMode.removeListener(_onPipChanged);
     _debounce?.cancel();
+    _offlineBannerTimer?.cancel();
+    _offlineDebounce?.cancel();
+    _voiceBannerTimer?.cancel();
     _searchCtrl.dispose();
     _searchFocus.dispose();
+    _startCtrl.dispose();
+    _startFocus.dispose();
     _gpsSub?.cancel();
-    _simTimer?.cancel();
     _connSub?.cancel();
     _voice.stop();
     _commands.stop();
@@ -359,705 +600,61 @@ class _NavigationPageState extends State<NavigationPage>
     super.dispose();
   }
 
-  // ---- opt-in simulator test harness -----------------------------------
-
-  /// With `--dart-define=NAVTEST=true` the app auto-builds a route and starts
-  /// the SIM drive, so the full turn-by-turn pipeline (voice announcements,
-  /// nav UI, clock frames, road info) can be exercised from logcat without UI
-  /// taps:
-  ///   - `NAVTEST=true`      → Chợ Bến Thành (~10 km) + drives off-route at
-  ///                           20 s to exercise re-routing.
-  ///   - `NAVTEST_LONG=true` → Hà Nội (~1 600 km) to verify long-distance
-  ///                           planning + engine.
-  ///   - `NAVTEST_MOUNTAIN=true` → Đà Lạt (Lang Biang → Đà Lạt city) with 3D
-  ///                           terrain ON, to verify hillshading/elevation in
-  ///                           a mountainous region.
-  ///   - `NAVTEST_OFFLINE=true` → HCMC, forceOffline=ON — routes + navigates
-  ///                           using ONLY on-device data (GraphHopper graph +
-  ///                           bundled saigon pmtiles). Needs the HCMC graph
-  ///                           downloaded.
-  /// Normal builds (no defines) are completely unaffected.
-
-  // ---- GPS -------------------------------------------------------------
-
-  /// Online GPS road-snapping: send the rolling trace to OSRM /match
-  /// (throttled to 5 s) to refine the on-route position when online. The
-  /// matched point is projected onto the route polyline and only accepted
-  /// when it's close — between matches (and fully offline) the always-on
-  /// `engine.snapToRoute` projection keeps the car on the road, so the match
-  /// never causes the puck to bounce off/on the route (the old flicker).
-
-  /// Restart the GPS stream shortly after it ends/errors — some devices
-  /// drop the stream, which would silently freeze both the UI updates and
-  /// the off-route re-routing.
-
-  /// Shared by real GPS and the simulated drive: snap, update the card,
-  /// push to the clock and keep the camera on the car.
-
-  /// Look up the current road (type + speed limit). Prefers the on-device
-  /// GraphHopper graph (instant + offline); falls back to Overpass.
-
-  /// Road info straight from the on-device graph (nearest edge), with the
-  /// same Vietnamese statutory defaults as the Overpass path.
-
-  /// Feed the active trip logger (real GPS or simulated fixes).
-
-  /// Start recording a trip (no-op if one is already active).
-
-  /// Stop recording and save the trip to disk (Google Takeout Records.json).
-
-  /// Re-navigation: fetch a fresh route from [from] to the destination.
-  /// Keeps the current navigation running and snaps straight into the new
-  /// route so the UI + clock update immediately.
-
-  /// Start/stop the simulated drive along the current route.
-
-  /// Inject realistic GPS error (±~12 m) into a SIM fix so road-snapping is
-  /// exercised. The error is CROSS-TRACK (perpendicular to the road) — that's
-  /// the component the snapping must correct; along-track error just slides
-  /// the car forward/back on the road and adds no value. Only used by the
-  /// NAVTEST harness (no effect on normal builds).
-
-  // ---- search (Nominatim → OSRM route) ---------------------------------
-
-  /// When forced-offline is active, ask the user whether to go online for an
-  /// action that needs the network (search / routing). Accepting lifts the
-  /// offline lock for THIS session only — the persisted setting is unchanged,
-  /// so a restart goes back to forced offline. Returns true when the action
-  /// may proceed online.
-
-  /// Add [name]@[lat]/[lng] as the destination and build the route.
-
-  /// Route through all planned stops (origin → stop1 → … → last stop).
-
-  /// Switch to alternative route [i] (Google's tap-to-choose preview).
-
-  /// Best-effort start position: live fix, last known, or the app default.
-  /// Never throws; falls back to the default city (HCMC) when GPS is
-  /// unavailable so route planning + simulation still work.
-
-  // ---- BLE clock -------------------------------------------------------
-
-  // ---- map helpers -----------------------------------------------------
-
-  // ---- voice: spoken turn-by-turn (Bluetooth speaker) ------------------
-
-  /// Speak the upcoming maneuver AHEAD of the turn at speed-aware distances
-  /// so the Bluetooth-speaker announcement always lands before the maneuver
-  /// (never after it): first heads-up ~`max(150, speed×20)` m out, a closer
-  /// heads-up ~`max(80, speed×8)` m, then a final "rẽ trái" at ~40 m. At
-  /// speed, the callouts move earlier; the fixed fallbacks keep them sane
-  /// when stationary.
-
-  // ---- voice: commands (mic) -------------------------------------------
-
-  /// Cycle the car marker icon (arrow → fun emojis).
-
-  /// "Điểm 2/3" for multi-stop trips ('' for a single destination).
-
-  /// Min distance (meters) from [p] to a polyline — used to make the
-  /// alternative route lines tappable.
-
-  // ---- draggable route handles -----------------------------------------
-
-  /// One drag handle per route segment (origin→stop1, stop1→stop2, …).
-  /// A simple A→B route gets exactly one handle; adding stops or a long
-  /// trip yields one per segment.
-
-  /// The user finished dragging handle [segIndex] → insert the point as a
-  /// via stop in that segment and re-plan (the route now goes through it).
-
-  /// Best-effort elevation (ascent/descent) for the route card, cached per
-  /// route. Never fatal — shows nothing when it can't be fetched.
-
-  /// Re-plan avoiding motorways (traffic/road-type criteria).
-
-  /// Re-plan avoiding ferries.
-
-  /// Toggle night (dark) map mode.
-
-  /// Toggle the Google-style bottom status bar (clock / distance / ETA).
-
-  /// A styled layer-menu row (icon + label + active checkmark).
-  PopupMenuItem<String> _layerItem(
-    String value,
-    IconData icon,
-    String label,
-    bool active,
-  ) {
-    return PopupMenuItem<String>(
-      value: value,
-      height: 46,
-      child: Row(
-        children: [
-          Icon(
-            icon,
-            size: 20,
-            color: active ? kAppBlue : const Color(0xFF5F6368),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF202124),
-              ),
-            ),
-          ),
-          if (active) const Icon(Icons.check, size: 18, color: kAppBlue),
-        ],
-      ),
-    );
+  /// Shows the "Đang ngoại tuyến" banner for a few seconds (or right away if
+  /// already offline) when connectivity state changes. It's just a transient
+  /// heads-up — it provides no ongoing info, so it fades out on its own.
+  void _flashOfflineBanner({bool wasOffline = false}) {
+    // Only flash when we actually *transitioned into* offline mode, so the
+    // banner doesn't keep popping up while we're already offline.
+    if (!_offline || wasOffline) return;
+    _offlineBannerTimer?.cancel();
+    if (!mounted) return;
+    setState(() => _showOfflineBanner = true);
+    _offlineBannerTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() => _showOfflineBanner = false);
+    });
   }
 
-  // ---- quick POI search (gas / food / hotel / …) -----------------------
-
-  /// Lazily-loaded category chips for the BUNDLED offline POI index (ATM,
-  /// xăng, nhà hàng, …) — browse "nearest X" with no network.
-
-  /// Find the nearest POIs of [type] around the current position and
-  /// highlight them on the map.
-
-  /// Load the bundled offline POI index (once) so the category chips show.
-
-  /// Browse one bundled offline category: show its POIs sorted by distance
-  /// from the current position as search suggestions (tap → info card).
-
-  /// Show a tapped POI on the map: center the camera on it (pausing the
-  /// follow) so the user can see where it is before deciding to go there.
-
-  /// Navigate to a picked POI, keeping the current navigation running.
-  ///
-  /// When a destination is already planned (the user is driving somewhere),
-  /// the POI is ADDED as a stop / waypoint just before the destination —
-  /// the final destination (and any other planned stops) is never dropped:
-  /// origin → … → gas station → destination. With no planned destination the
-  /// POI simply becomes the destination.
-
-  /// Switch the basemap layer (OSM → CARTO → Topo → Satellite → …).
-
-  // ---- trips history ---------------------------------------------------
+  /// Commit a connectivity reading to [_offline]. Going ONLINE applies
+  /// immediately (safe: restores Vietmap/online basemap right away); going
+  /// OFFLINE is debounced ~3 s so a transient `connectivity_plus` `none`
+  /// blip (common on the itel ROM) doesn't flip `_offline` → `vietmapBase` →
+  /// reload the whole map style back and forth.
+  void _applyConnectivity(bool online) {
+    if (!mounted) return;
+    _offlineDebounce?.cancel();
+    if (online) {
+      final wasOffline = _offline;
+      setState(() => _offline = forceOffline);
+      _flashOfflineBanner(wasOffline: wasOffline);
+      return;
+    }
+    // Still offline after 3 s → commit (banner + POI categories + basemap).
+    _offlineDebounce = Timer(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      final wasOffline = _offline;
+      setState(() => _offline = true);
+      if (_offline) {
+        unawaited(_ensureOfflinePoiCats());
+        // Going offline means online routing is gone — load the on-device
+        // graph so offline routing keeps working.
+        unawaited(_maybeLoadRoutingGraph());
+      }
+      _flashOfflineBanner(wasOffline: wasOffline);
+    });
+  }
 
   // ---- UI composition --------------------------------------------------
 
+  /// Composes the page UI. The heavy lifting lives in `modules/nav_build.dart`
+  /// (`_buildPipLayout` / `_buildMainLayout`) so the State class stays a thin
+  /// shell of state + wiring.
   @override
   Widget build(BuildContext context) {
-    final route = _route;
-    final current = _current;
-    return Scaffold(
-      body: Stack(
-        children: [
-          // Navigation mode renders the offline VECTOR map with the
-          // Vietmap-navigation-style banner + ETA bar (ui/nav_top_bar.dart +
-          // ui/navigation_card.dart). Browsing/search keeps the raster map.
-          _navigating
-              ? VectorNavMap(
-                  routeGeometry: route?.geometry ?? const [],
-                  routeSteps: route?.steps ?? const [],
-                  routeStartIndex: _routeStartIndex,
-                  current: current,
-                  bearing: _routeBearing,
-                  heading: _heading,
-                  headingUp: _headingUp,
-                  tilt3D: _tilt3d,
-                  terrain3D: _terrain3d,
-                  nightMode: _nightMode,
-                  satellite: _satellite,
-                  // Vietmap light basemap in nav mode when the Vietmap data
-                  // source is active, online, and real keys are compiled in.
-                  vietmapBase:
-                      dataSource == 'vietmap' &&
-                      !_offline &&
-                      VietmapConfig.hasKeys,
-                  carIcon: _carIcon,
-                  pois: _pois,
-                  selectedPoi: _selectedPoi,
-                  stops: _stops,
-                  controller: _vmFollow,
-                )
-              : _buildMap(route, current),
-          Positioned.fill(
-            child: SafeArea(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  // Pin the top area to the top — the banner and, under it,
-                  // the road-info chip flow together so a tall banner (long
-                  // destination / expanded step list) can never overlap the
-                  // chip.
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _navigating ? _navTopBar() : _topBar(),
-                        if (_navigating)
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(12, 6, 10, 0),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                RoadInfoChip(
-                                  info: _roadInfo,
-                                  loading: _roadLoading,
-                                  speedMps: _progress?.speedMps,
-                                ),
-                                const Spacer(),
-                                Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    RoundActionButton(
-                                      icon: _headingUp
-                                          ? Icons.explore
-                                          : Icons.navigation,
-                                      color: _headingUp
-                                          ? kAppBlue
-                                          : const Color(0xFF5F6368),
-                                      onTap: () => setState(
-                                        () => _headingUp = !_headingUp,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    // Map layers: 3D / terrain / satellite
-                                    // grouped into ONE picker button.
-                                    PopupMenuButton<String>(
-                                      tooltip: 'Lớp bản đồ',
-                                      position: PopupMenuPosition.under,
-                                      offset: const Offset(-120, 8),
-                                      color: Colors.white,
-                                      elevation: 8,
-                                      shadowColor: Colors.black38,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(14),
-                                      ),
-                                      onSelected: (v) {
-                                        if (v == '3d') {
-                                          setState(() => _tilt3d = !_tilt3d);
-                                        } else if (v == 'terrain') {
-                                          setState(
-                                            () => _terrain3d = !_terrain3d,
-                                          );
-                                        } else if (v == 'satellite') {
-                                          setState(
-                                            () => _satellite = !_satellite,
-                                          );
-                                        }
-                                      },
-                                      itemBuilder: (context) => [
-                                        _layerItem(
-                                          '3d',
-                                          Icons.threed_rotation,
-                                          '3D (nghiêng)',
-                                          _tilt3d,
-                                        ),
-                                        _layerItem(
-                                          'terrain',
-                                          Icons.terrain,
-                                          'Địa hình',
-                                          _terrain3d,
-                                        ),
-                                        _layerItem(
-                                          'satellite',
-                                          Icons.satellite_alt,
-                                          'Vệ tinh',
-                                          _satellite,
-                                        ),
-                                      ],
-                                      child: Material(
-                                        color: Colors.white,
-                                        elevation: 4,
-                                        shadowColor: Colors.black26,
-                                        shape: const CircleBorder(),
-                                        child: SizedBox(
-                                          width: 46,
-                                          height: 46,
-                                          child: Icon(
-                                            Icons.layers,
-                                            color:
-                                                (_tilt3d ||
-                                                    _terrain3d ||
-                                                    _satellite)
-                                                ? kAppBlue
-                                                : const Color(0xFF5F6368),
-                                            size: 22,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    RoundActionButton(
-                                      icon: _nightMode
-                                          ? Icons.dark_mode
-                                          : Icons.light_mode,
-                                      color: _nightMode
-                                          ? kAppBlue
-                                          : const Color(0xFF5F6368),
-                                      onTap: _toggleNight,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    RoundActionButton(
-                                      icon: _showStatusBar
-                                          ? Icons.bar_chart
-                                          : Icons.bar_chart_outlined,
-                                      color: _showStatusBar
-                                          ? kAppBlue
-                                          : const Color(0xFF5F6368),
-                                      onTap: _toggleStatusBar,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    RoundActionButton(
-                                      icon: Icons.emoji_emotions_outlined,
-                                      color: const Color(0xFFF4B400),
-                                      onTap: _cycleCarIcon,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    RoundActionButton(
-                                      icon: _voiceOn
-                                          ? Icons.volume_up
-                                          : Icons.volume_off,
-                                      color: _voiceOn
-                                          ? const Color(0xFF34A853)
-                                          : const Color(0xFF5F6368),
-                                      onTap: () =>
-                                          setState(() => _voiceOn = !_voiceOn),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    RoundActionButton(
-                                      icon: _listening
-                                          ? Icons.mic
-                                          : Icons.mic_none,
-                                      color: _listening
-                                          ? const Color(0xFFEA4335)
-                                          : const Color(0xFFF4B400),
-                                      onTap: _toggleListening,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    RoundActionButton(
-                                      icon: Icons.local_gas_station,
-                                      color: const Color(0xFFF4B400),
-                                      onTap: _findNearestGas,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    RoundActionButton(
-                                      icon: Icons.directions_car,
-                                      color: const Color(0xFF1A73E8),
-                                      onTap: _openVietmapNav,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  if (_offline)
-                    Positioned(
-                      top: 58,
-                      left: 12,
-                      right: 12,
-                      child: Material(
-                        elevation: 4,
-                        shadowColor: Colors.black26,
-                        borderRadius: BorderRadius.circular(10),
-                        color: const Color(0xFF5F6368),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          child: Row(
-                            children: const [
-                              Icon(
-                                Icons.cloud_off,
-                                size: 16,
-                                color: Colors.white,
-                              ),
-                              SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  'Đang ngoại tuyến — bản đồ & lộ trình đã tải vẫn hoạt động',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  // Offline POI category chips (ATM / xăng / nhà hàng / …)
-                  // — shown while browsing, hidden while a route is being
-                  // planned (suggestions take the spot below).
-                  if (_offline && !_navigating && _suggestions.isEmpty)
-                    Positioned(
-                      top: _offline ? 104 : 70,
-                      left: 12,
-                      right: 66,
-                      child: _offlinePoiBar(),
-                    ),
-                  if (!_navigating)
-                    Positioned(
-                      left: 12,
-                      right: 66,
-                      top: _offline ? (_suggestions.isEmpty ? 152 : 104) : 70,
-                      child: _suggestions.isNotEmpty
-                          ? SuggestionList(
-                              suggestions: _suggestions,
-                              onSelected: _selectSuggestion,
-                            )
-                          : (_stops.isNotEmpty
-                                ? StopsPanel(
-                                    stops: _stops,
-                                    onAdd: () {
-                                      _searchCtrl.clear();
-                                      _searchFocus.requestFocus();
-                                    },
-                                    onMoveUp: (i) => _moveStop(i, -1),
-                                    onMoveDown: (i) => _moveStop(i, 1),
-                                    onRemove: _removeStop,
-                                    onSave: _savePlan,
-                                  )
-                                : const SizedBox.shrink()),
-                    ),
-                  // Raster-only controls (zoom/locate target the raster map
-                  // controller) — hide during vector navigation mode.
-                  if (!_navigating)
-                    Positioned(
-                      right: 10,
-                      top: 64,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          MapControls(
-                            onZoomIn: () => _zoomBy(1),
-                            onZoomOut: () => _zoomBy(-1),
-                            onLocate: _locateMe,
-                            hasPosition: current != null,
-                          ),
-                          const SizedBox(height: 8),
-                          RoundActionButton(
-                            icon: _simulating ? Icons.stop : Icons.play_arrow,
-                            color: _simulating
-                                ? Colors.orange
-                                : const Color(0xFF34A853),
-                            onTap: _toggleSimulation,
-                          ),
-                          const SizedBox(height: 8),
-                          RoundActionButton(
-                            icon: Icons.settings,
-                            color: kAppBlue,
-                            onTap: _openOffline,
-                          ),
-                          const SizedBox(height: 8),
-                          PopupMenuButton<String>(
-                            tooltip: 'Lớp bản đồ',
-                            position: PopupMenuPosition.under,
-                            offset: const Offset(-150, 8),
-                            color: Colors.white,
-                            elevation: 8,
-                            shadowColor: Colors.black38,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            onSelected: _selectTileLayer,
-                            itemBuilder: (context) => [
-                              for (final name in _tileLayerNames)
-                                _layerItem(
-                                  name,
-                                  _tileLayerIcon(name),
-                                  _tileLayerLabel(name),
-                                  name == _tileSource,
-                                ),
-                            ],
-                            child: Material(
-                              color: Colors.white,
-                              elevation: 4,
-                              shadowColor: Colors.black26,
-                              shape: const CircleBorder(),
-                              child: SizedBox(
-                                width: 46,
-                                height: 46,
-                                child: Icon(
-                                  Icons.layers_outlined,
-                                  color: const Color(0xFF7B1FA2),
-                                  size: 22,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: _bottomArea(),
-                  ),
-                  // Auto-center button — rendered in this overlay so it sits
-                  // ABOVE the MapLibre platform view (a sibling inside the
-                  // map's own Stack is occluded by it). Blue when the user
-                  // has panned/zoomed away (follow paused); tapping recenters
-                  // the camera on the car and resumes auto-follow. `bottom`
-                  // is logical dp: the POI bar + ETA card are ~110dp tall, so
-                  // 140dp clears them (a value like 340dp would sit mid-screen).
-                  Positioned(
-                    right: 14,
-                    bottom: 140,
-                    child: ListenableBuilder(
-                      listenable: _vmFollow,
-                      builder: (context, child) {
-                        final following = _vmFollow.following;
-                        return Material(
-                          color: following
-                              ? Colors.white
-                              : const Color(0xFF1A73E8),
-                          shape: const CircleBorder(),
-                          elevation: 6,
-                          child: InkWell(
-                            customBorder: const CircleBorder(),
-                            onTap: _vmFollow.recenter,
-                            child: Padding(
-                              padding: const EdgeInsets.all(11),
-                              child: Icon(
-                                Icons.my_location,
-                                color: following
-                                    ? const Color(0xFF1A73E8)
-                                    : Colors.white,
-                                size: 24,
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Compact header shown while navigating (replaces the search bar).
-
-  /// Minutes remaining to the destination (from remaining duration).
-
-  /// Fixed arrival moment for the live ETA countdown on the navigation card
-  /// (now + remaining duration). The card counts down to it every second.
-  DateTime _arrivalTime() {
-    final route = _route;
-    final nav = _progress;
-    if (route == null || route.duration <= 0) return DateTime.now();
-    final remain = route.duration * (1 - (nav?.progress ?? 0));
-    return DateTime.now().add(Duration(seconds: remain.round()));
-  }
-
-  /// While the user drags the progress line: remember the scrubbed fraction
-  /// so the elevation marker + preview distance follow the finger.
-
-  /// Compact elevation/terrain chart for the nav status bar (tap to
-  /// expand/collapse). The progress marker follows the live progress, or the
-  /// scrubbed preview while the user drags the progress line.
-  Widget? _elevationChart(NavProgress? nav) {
-    final e = _elevation;
-    if (e == null || e.profile.isEmpty) return null;
-    final progress = _scrubProgress ?? nav?.progress ?? 0;
-    return GestureDetector(
-      onTap: () => setState(() => _elevationExpanded = !_elevationExpanded),
-      behavior: HitTestBehavior.opaque,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.terrain, size: 16, color: kAppBlue),
-              const SizedBox(width: 6),
-              const Text(
-                'Độ cao',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-              ),
-              const Spacer(),
-              Icon(
-                _elevationExpanded ? Icons.expand_less : Icons.expand_more,
-                size: 18,
-                color: const Color(0xFF5F6368),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          ElevationChart(
-            profile: e.profile,
-            minElev: e.minElev,
-            maxElev: e.maxElev,
-            up: e.up,
-            down: e.down,
-            progress: progress,
-            compact: !_elevationExpanded,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Google-style draggable route handle: a grab dot on the route that the
-/// user drags to insert a via point and re-plan. Drawn as a Flutter widget
-/// on top of the map so its pan gesture doesn't fight the map's own pan.
-class _RouteDragHandle extends StatelessWidget {
-  const _RouteDragHandle({
-    super.key,
-    required this.via,
-    required this.cameraListenable,
-    required this.onDrag,
-    required this.onDragEnd,
-  });
-
-  final LatLng via;
-  final ValueListenable<MapCamera?> cameraListenable;
-  final ValueChanged<Offset> onDrag;
-  final VoidCallback onDragEnd;
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<MapCamera?>(
-      valueListenable: cameraListenable,
-      builder: (context, cam, _) {
-        if (cam == null) return const SizedBox.shrink();
-        final p = cam.latLngToScreenPoint(via);
-        return Positioned(
-          left: p.x - 18,
-          top: p.y - 18,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onPanUpdate: (d) => onDrag(d.delta),
-            onPanEnd: (_) => onDragEnd(),
-            child: Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(color: kAppBlue, width: 3),
-                boxShadow: const [
-                  BoxShadow(color: Colors.black38, blurRadius: 4),
-                ],
-              ),
-              child: const Icon(Icons.drag_handle, size: 16, color: kAppBlue),
-            ),
-          ),
-        );
-      },
-    );
+    if (_pipActive && _navigating) return _buildPipLayout();
+    // Simple mode: hide the map — just a big arrow + voice commands.
+    if (simpleMode && _navigating) return _buildSimpleNavLayout();
+    return _buildMainLayout();
   }
 }

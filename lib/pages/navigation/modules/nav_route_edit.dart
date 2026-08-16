@@ -1,4 +1,4 @@
-part of 'navigation_page.dart';
+part of '../navigation_page.dart';
 
 /// Google-style interactive route editing on the preview map: draggable via
 /// handles, long-press to insert a via point, elevation loading, and the
@@ -22,6 +22,8 @@ extension _NavRouteEdit on _NavigationPageState {
     _buildPlanRoute();
   }
 
+  /// Min distance (meters) from [p] to a polyline — used to make the
+  /// alternative route lines tappable.
   double _distToLine(LatLng p, List<LatLng> poly) {
     if (poly.isEmpty) return double.infinity;
     var best = distanceMeters(p, poly.first);
@@ -32,6 +34,9 @@ extension _NavRouteEdit on _NavigationPageState {
     return best;
   }
 
+  /// One drag handle per route segment (origin→stop1, stop1→stop2, …).
+  /// A simple A→B route gets exactly one handle; adding stops or a long
+  /// trip yields one per segment.
   void _updateDragHandles(OsrmRoute? route) {
     _dragHandles = [];
     final g = route?.geometry ?? const <LatLng>[];
@@ -47,6 +52,8 @@ extension _NavRouteEdit on _NavigationPageState {
     }
   }
 
+  /// The user finished dragging handle [segIndex] → insert the point as a
+  /// via stop in that segment and re-plan (the route now goes through it).
   void _commitDragHandle(int segIndex) {
     if (segIndex < 0 || segIndex >= _dragHandles.length) return;
     final via = _dragHandles[segIndex];
@@ -64,6 +71,8 @@ extension _NavRouteEdit on _NavigationPageState {
     _buildPlanRoute();
   }
 
+  /// Best-effort elevation (ascent/descent) for the route card, cached per
+  /// route. Never fatal — shows nothing when it can't be fetched.
   Future<void> _loadElevation(OsrmRoute route) async {
     final key = '${route.distance.round()}:${route.geometry.length}';
     final cached = _elevationCache[key];
@@ -80,11 +89,13 @@ extension _NavRouteEdit on _NavigationPageState {
     if (mounted) setNavState(() => _elevation = e);
   }
 
+  /// Re-plan avoiding motorways (traffic/road-type criteria).
   void _toggleAvoidHighway() {
     setNavState(() => _avoidHighway = !_avoidHighway);
     if (_stops.isNotEmpty) _buildPlanRoute();
   }
 
+  /// Re-plan avoiding ferries.
   void _toggleAvoidFerry() {
     setNavState(() => _avoidFerry = !_avoidFerry);
     if (_stops.isNotEmpty) _buildPlanRoute();

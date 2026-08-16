@@ -36,6 +36,19 @@ const Map<int, String> iconNames = {
   iconArrive: 'arrive',
 };
 
+/// A compact arrow symbol for an [iconCode] — used by notifications and the
+/// ESP banner text (ASCII-safe). '→' left, '←' right, '↑' straight, '↩' u-turn.
+String iconSymbol(int iconCode) => switch (iconCode) {
+  iconTurnLeft => '←',
+  iconTurnRight => '→',
+  iconSlightLeft => '↙',
+  iconSlightRight => '↘',
+  iconUturnLeft || iconUturnRight => '↩',
+  iconRoundabout => '↻',
+  iconArrive => '⛳',
+  _ => '↑', // straight / unknown
+};
+
 /// Build the navigation frame bytes to send over BLE.
 Uint8List buildNavFrame({
   required int meter,
@@ -68,8 +81,11 @@ int iconForManeuver(String? type, String? modifier) {
   final m = (modifier ?? '').toLowerCase().replaceAll(' ', '');
 
   if (t == 'arrive') return iconArrive;
-  if (t == 'roundabout' || t == 'rotary' || t == 'roundaboutturn' ||
-      t == 'exitroundabout' || t == 'exitrotary') {
+  if (t == 'roundabout' ||
+      t == 'rotary' ||
+      t == 'roundaboutturn' ||
+      t == 'exitroundabout' ||
+      t == 'exitrotary') {
     return iconRoundabout;
   }
   if (t == 'uturn' || m == 'uturn') {
@@ -85,7 +101,8 @@ int iconForManeuver(String? type, String? modifier) {
 /// ETA as (hour, minute) from the remaining seconds until arrival.
 (int, int) etaFromRemaining(double remainingSeconds) {
   final now = DateTime.now();
-  final totalMin = (now.hour * 60 + now.minute + (remainingSeconds / 60).round()) % 1440;
+  final totalMin =
+      (now.hour * 60 + now.minute + (remainingSeconds / 60).round()) % 1440;
   return ((totalMin ~/ 60) % 24, totalMin % 60);
 }
 
@@ -100,12 +117,12 @@ String formatDistance(num meters) {
 /// Vietnamese guidance verb for a clock icon code ("rẽ trái", "đi thẳng", …).
 /// Shared by the spoken announcements and the on-screen Vietmap-style banner.
 String maneuverVerb(int code) => switch (code) {
-      iconTurnLeft => 'rẽ trái',
-      iconTurnRight => 'rẽ phải',
-      iconSlightLeft => 'rẽ trái nhẹ',
-      iconSlightRight => 'rẽ phải nhẹ',
-      iconUturnLeft || iconUturnRight => 'quay đầu',
-      iconRoundabout => 'đi theo vòng xuyến',
-      iconArrive => 'đến nơi',
-      _ => 'đi thẳng',
-    };
+  iconTurnLeft => 'rẽ trái',
+  iconTurnRight => 'rẽ phải',
+  iconSlightLeft => 'rẽ trái nhẹ',
+  iconSlightRight => 'rẽ phải nhẹ',
+  iconUturnLeft || iconUturnRight => 'quay đầu',
+  iconRoundabout => 'đi theo vòng xuyến',
+  iconArrive => 'đến nơi',
+  _ => 'đi thẳng',
+};

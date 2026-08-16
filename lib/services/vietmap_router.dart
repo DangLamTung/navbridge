@@ -36,37 +36,60 @@ Future<List<OsrmRoute>> fetchVietmapRoutes(
 }) async {
   if (points.length < 2) throw Exception('Cần ít nhất 2 điểm để định tuyến');
   final pts = points.map((p) => 'point=${p.latitude},${p.longitude}').join('&');
-  final url = '${VietmapConfig.route}?apikey=${VietmapConfig.apiKey}'
-      '&$pts&vehicle=$vehicle&points_encoded=false'
+  // `points_encoded=true` (Google polyline) is ESSENTIAL on slow phones: the
+  // raw `false` format returns a giant nested [[lon,lat],...] array — ~1 MB
+  // and tens of thousands of points for a long route (e.g. HCMC → Hà Giang),
+  // which the low-end itel chokes on (slow download + JSON parse) and it kept
+  // "stopping" / timing out. Encoded = ~2.6× smaller and far cheaper to parse.
+  final url =
+      '${VietmapConfig.route}?apikey=${VietmapConfig.apiKey}'
+      '&$pts&vehicle=$vehicle&points_encoded=true'
       '&annotations=congestion,toll&alternative=true';
+  // Server-side route computation for a long route can take 10–15 s even on
+  // good internet; on a mobile connection it can be much slower. 60 s so we
+  // don't bail out to OSRM (also slow for long routes) before Vietmap answers.
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': _ua})
-      .timeout(const Duration(seconds: 30));
+      .timeout(const Duration(seconds: 60));
   if (res.statusCode != 200) throw Exception('Vietmap HTTP ${res.statusCode}');
   final data = jsonDecode(utf8.decode(res.bodyBytes));
-  final paths =
-      (data is Map && data['code'] == 'OK') ? data['paths'] as List? : null;
+  final paths = (data is Map && data['code'] == 'OK')
+      ? data['paths'] as List?
+      : null;
   if (paths == null || paths.isEmpty) {
     throw Exception('Không tìm thấy tuyến đường');
   }
   return [
     for (final p in paths)
-      if (p is Map) _parsePath(Map<String, dynamic>.from(p))
+      if (p is Map) _parsePath(Map<String, dynamic>.from(p)),
   ].take(maxAlternatives).toList();
 }
 
 /// Parse one Vietmap `paths[]` entry into an [OsrmRoute] (geometry, steps,
 /// congestion, tolls).
 OsrmRoute _parsePath(Map<String, dynamic> r) {
-  // Geometry: GeoJSON LineString → [[lon, lat], ...].
-  final coords = (((r['points'] as Map?)?['coordinates'] as List?) ?? const [])
-      .cast<dynamic>()
-      .map((p) => LatLng((p[1] as num).toDouble(), (p[0] as num).toDouble()))
-      .toList();
+  // Geometry. With `points_encoded=true` `points` is a Google polyline string
+  // (or a list of segments); otherwise it's a GeoJSON LineString
+  // `{coordinates: [[lon, lat], ...]}`. Decode whichever we got.
+  final rawPts = r['points'];
+  final List<LatLng> coords;
+  if (rawPts is String) {
+    coords = _decodePolyline(rawPts);
+  } else if (rawPts is List) {
+    coords = [
+      for (final seg in rawPts)
+        if (seg is String) ..._decodePolyline(seg),
+    ];
+  } else {
+    coords = (((r['points'] as Map?)?['coordinates'] as List?) ?? const [])
+        .cast<dynamic>()
+        .map((p) => LatLng((p[1] as num).toDouble(), (p[0] as num).toDouble()))
+        .toList();
+  }
 
   final congestion = _parseCongestion(r['annotations']);
-  final rawSteps = (r['instructions'] as List?)
-          ?.cast<Map<String, dynamic>>() ??
+  final rawSteps =
+      (r['instructions'] as List?)?.cast<Map<String, dynamic>>() ??
       const <Map<String, dynamic>>[];
   final steps = <OsrmStep>[];
   final stopCum = <double>[];
@@ -81,15 +104,17 @@ OsrmRoute _parsePath(Map<String, dynamic> r) {
     final maneuver = mi < coords.length
         ? coords[mi]
         : (coords.isEmpty ? const LatLng(0, 0) : coords.last);
-    steps.add(OsrmStep(
-      name: '${s['street_name'] ?? ''}',
-      distance: dist,
-      duration: ((s['time'] ?? 0) as num).toDouble() / 1000.0,
-      type: type,
-      modifier: modifier,
-      maneuver: maneuver,
-      congestion: _congestionFor(interval: iv, segments: congestion),
-    ));
+    steps.add(
+      OsrmStep(
+        name: '${s['street_name'] ?? ''}',
+        distance: dist,
+        duration: ((s['time'] ?? 0) as num).toDouble() / 1000.0,
+        type: type,
+        modifier: modifier,
+        maneuver: maneuver,
+        congestion: _congestionFor(interval: iv, segments: congestion),
+      ),
+    );
     if (sign == 5 || sign == 4) stopCum.add(cum);
   }
   if (stopCum.isEmpty && cum > 0) stopCum.add(cum);
@@ -104,12 +129,14 @@ OsrmRoute _parsePath(Map<String, dynamic> r) {
       final name = '${t['name'] ?? ''}'.trim();
       final addr = '${t['address'] ?? ''}'.trim();
       if (name.isEmpty && addr.isEmpty) continue;
-      tolls.add(TollInfo(
-        name: name,
-        address: addr,
-        type: '${t['type'] ?? ''}',
-        price: ((t['price'] ?? 0) as num).toInt(),
-      ));
+      tolls.add(
+        TollInfo(
+          name: name,
+          address: addr,
+          type: '${t['type'] ?? ''}',
+          price: ((t['price'] ?? 0) as num).toInt(),
+        ),
+      );
     }
   }
 
@@ -138,7 +165,7 @@ List<_CongSeg> _parseCongestion(dynamic annotations) {
           value: '${e['value'] ?? 'unknown'}',
           first: ((e['first'] ?? 0) as num).toInt(),
           last: ((e['last'] ?? 0) as num).toInt(),
-        )
+        ),
   ];
 }
 
@@ -167,14 +194,47 @@ int? _congestionFor({
 
 /// Vietmap/GraphHopper instruction sign → OSRM-style maneuver.
 (String, String?) _maneuverForSign(int sign) => switch (sign) {
-      -3 => ('turn', 'sharp left'),
-      -2 => ('turn', 'left'),
-      -1 => ('turn', 'slight left'),
-      0 => ('continue', 'straight'),
-      1 => ('turn', 'slight right'),
-      2 => ('turn', 'right'),
-      3 => ('turn', 'sharp right'),
-      6 => ('roundabout', 'left'),
-      4 || 5 => ('arrive', null),
-      _ => ('continue', 'straight'),
-    };
+  -3 => ('turn', 'sharp left'),
+  -2 => ('turn', 'left'),
+  -1 => ('turn', 'slight left'),
+  0 => ('continue', 'straight'),
+  1 => ('turn', 'slight right'),
+  2 => ('turn', 'right'),
+  3 => ('turn', 'sharp right'),
+  6 => ('roundabout', 'left'),
+  4 || 5 => ('arrive', null),
+  _ => ('continue', 'straight'),
+};
+
+/// Decode a Google-encoded polyline string into a list of [LatLng]
+/// (the format returned by Vietmap/GraphHopper when `points_encoded=true`).
+/// Fixed-point delta encoding, 1e5 precision.
+List<LatLng> _decodePolyline(String encoded) {
+  final out = <LatLng>[];
+  var index = 0;
+  var lat = 0;
+  var lng = 0;
+  while (index < encoded.length) {
+    var result = 0;
+    var shift = 0;
+    int b;
+    do {
+      b = encoded.codeUnitAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    final dlat = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+    lat += dlat;
+    result = 0;
+    shift = 0;
+    do {
+      b = encoded.codeUnitAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    final dlng = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+    lng += dlng;
+    out.add(LatLng(lat / 1e5, lng / 1e5));
+  }
+  return out;
+}

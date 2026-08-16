@@ -44,13 +44,29 @@ const Duration _minTileGap = Duration(milliseconds: 1000);
 /// How long to pause ALL fetches when every server has blocked us.
 const Duration _blockBackoff = Duration(minutes: 5);
 
-/// Fallback OSM-based tile servers (no API key, attribution required), used
-/// when the primary (tile.openstreetmap.org) fails. `{s}` is substituted
-/// with a/b/c for providers that use subdomains.
-const List<String> _fallbackTileTemplates = [
-  'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-  'https://tile.opentopomap.org/{z}/{x}/{y}.png',
-];
+/// Fallback tile servers PER BASEMAP SOURCE (no API key, attribution
+/// required), used when the primary server fails. Each source only fails
+/// over to servers with the SAME VISUAL STYLE — so a blocked/rate-limited
+/// OSM never silently makes the map look like CARTO or terrain (the old
+/// global fallback mixed styles → "the map type keeps changing"). `{s}` is
+/// substituted with a/b/c for providers that use subdomains.
+const Map<String, List<String>> _fallbackTileTemplatesBySource = {
+  // OSM-standard style mirrors (same look as tile.openstreetmap.org).
+  'osm': [
+    'https://tile.openstreetmap.de/{z}/{x}/{y}.png',
+    'https://tile.openstreetmap.fr/{z}/{x}/{y}.png',
+  ],
+  // CARTO Voyager: same style, balanced across subdomains.
+  'carto': [
+    'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+    'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+    'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+  ],
+  // OpenTopoMap terrain: no free mirror — degrade to transparent if blocked.
+  'topo': <String>[],
+  // ESRI satellite: no free mirror — degrade to transparent if blocked.
+  'esri': <String>[],
+};
 
 DateTime _lastTileRequest = DateTime.fromMillisecondsSinceEpoch(0);
 DateTime _tileBlockedUntil = DateTime.fromMillisecondsSinceEpoch(0);
@@ -98,8 +114,13 @@ Future<http.Response?> _fetchTile(
   // (Re)build the server rotation whenever the primary template changes
   // (i.e. the user switched basemap layer) — otherwise a new layer like ESRI
   // would never be requested because its URL is not in the stale list.
+  // The fallback list is STYLE-MATCHED to the active source so a blocked
+  // primary never swaps the map to a different look (OSM → CARTO/terrain).
   if (_serverList.isEmpty || _serverList.first != primary) {
-    _serverList = [primary, ..._fallbackTileTemplates];
+    _serverList = [
+      primary,
+      ...(_fallbackTileTemplatesBySource[source] ?? const []),
+    ];
     _serverIndex = 0;
   }
 
@@ -237,6 +258,54 @@ Future<bool> _looksLikeBlockPlaceholder(Uint8List bytes) async {
 /// disk (no network fetches), routing is on-device only and search is
 /// cache-only. Toggled by the user (offline screen) and persisted.
 bool forceOffline = false;
+
+/// Vehicle used for speed-limit defaults: 'car' | 'motorbike' | 'truck'.
+/// Persisted; applied on top of the road's OSM `maxspeed` (when tagged).
+String vehicleType = 'car';
+
+/// Manual speed-limit override in km/h (0 = use road maxspeed / statutory).
+/// Overrides both the tagged maxspeed and the vehicle statutory default, and
+/// is sent to the ESP32 display as the POS frame speed-limit byte.
+int speedOverride = 0;
+
+/// Online geocoding provider: 'photon' (Komoot, default — free, no key,
+/// faster + better Vietnamese results) | 'nominatim' | 'vietmap' (Vietnam-
+/// focused search — needs VIETMAP_API_KEY).
+String geocodingProvider = 'photon';
+
+/// Routing engine preference for car routes:
+///   'auto'         — on-device GraphHopper graph when loaded, else OSRM.
+///   'graphhopper'  — on-device graph only (fails fast if not loaded).
+///   'osrm'         — always the online OSRM server.
+String routingEngine = 'auto';
+
+/// Google-style smooth map movement: a ticker eases the camera toward the
+/// live (dead-reckoned) car position every frame instead of one ~500 ms jump
+/// per 1 Hz GPS fix. Off → the old per-fix jump.
+bool smoothCamera = true;
+
+/// Riding mode: prefer the Bluetooth headset mic + short-command recognizer
+/// model + longer wind-tolerant silence when recognizing voice commands on a
+/// moving motorbike. Set by the UI (persisted in AppSettings.ridingMode) and
+/// read by the speech recognizer.
+bool ridingMode = false;
+
+/// Simple nav mode: hide the map while navigating and show only a big
+/// maneuver arrow + distance/ETA + voice commands (cleaner, lighter).
+/// Set by the UI (persisted in AppSettings.simpleMode) and read by the nav
+/// page to pick the simple layout.
+bool simpleMode = false;
+
+/// Speed/red-light camera alerts while navigating (phạt nguội DB). Shared
+/// global (like [ridingMode]/[simpleMode]) so the nav-page toggle AND the
+/// settings pages read/write the same source of truth — previously this was
+/// page-local state, so saving any setting from the settings screens reset
+/// it back to the default `true`.
+bool cameraAlerts = true;
+
+/// Picture-in-Picture window shape while navigating (persisted):
+///   'portrait' (9:16, default) | 'landscape' (4:3)
+String pipAspect = '34';
 
 /// Base URL for bulk region tile downloads.
 ///

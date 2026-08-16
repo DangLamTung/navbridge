@@ -1,0 +1,739 @@
+part of '../navigation_page.dart';
+
+/// The `build()` UI composition, split out of the State class into an
+/// extension so each overlay (PiP, top bar, controls, offline banner, …)
+/// lives in its own method and the page shell stays small.
+extension _NavBuild on _NavigationPageState {
+  /// Top offset for the suggestions / stops / offline-POI overlays. These sit
+  /// just BELOW the top bar so they never overlap it. The directions bar is
+  /// much taller than the single search pill (2 fields + add-stop row), so in
+  /// directions mode the overlay starts lower. Values are LOGICAL pixels:
+  /// search pill ends ~y95, directions bar ends ~y195.
+  double get _overlayTop {
+    return _directionsMode ? 200 : 100;
+  }
+
+  /// Picture-in-Picture layout: ONLY the map + a slim maneuver bar — no
+  /// search, no controls, no cards. The tiny OS floating window can't fit
+  /// the full nav UI.
+  Widget _buildPipLayout() {
+    // Simple (no-map) mode → compact arrow PiP, not the map.
+    if (simpleMode) return _buildPipSimple();
+    final route = _route;
+    final current = _current;
+    return Scaffold(
+      backgroundColor: Colors.white,
+      // Column (NOT a Stack overlay) so the bars own their space and the map
+      // never renders underneath them:
+      //   1. speed top bar   — speed + speed limit in a white bar
+      //   2. Expanded map    — fills the middle, no overlap with either bar
+      //   3. maneuver bar    — bottom edge (arrow + road + distance/ETA)
+      body: Column(
+        children: [
+          _pipTopBar(),
+          Expanded(
+            child: VectorNavMap(
+              routeGeometry: route?.geometry ?? const [],
+              routeSteps: route?.steps ?? const [],
+              routeStartIndex: _routeStartIndex,
+              current: current,
+              bearing: _routeBearing,
+              heading: _heading,
+              headingUp: _headingUp,
+              tilt3D: _tilt3d,
+              terrain3D: _terrain3d,
+              nightMode: _nightMode,
+              satellite: _satellite,
+              vietmapBase:
+                  dataSource == 'vietmap' && !_offline && VietmapConfig.hasKeys,
+              // Keep the user's chosen basemap (OSM/CARTO/topo/…) on the nav
+              // map's online fallback — never a surprise style switch.
+              tileSource: _tileSource,
+              carIcon: _carIcon,
+              pois: _pois,
+              selectedPoi: _selectedPoi,
+              searchPois: _searchResults,
+              stops: _stops,
+              // During nav only cameras near the route are loaded (not all
+              // ~1,800 nationwide) — the driver sees what's on their road.
+              cameras: cameraAlerts ? _routeCameras : const [],
+              controller: _vmFollow,
+              smoothCamera: smoothCamera,
+              // No compass in the tiny PiP window — it just eats space.
+              showCompass: false,
+            ),
+          ),
+          _pipManeuverBar(),
+        ],
+      ),
+    );
+  }
+
+  /// Full-page layout (browse + navigation modes): the map layer, the top
+  /// bar/banner, the route card, the controls and the overlay chips.
+  Widget _buildMainLayout() {
+    final route = _route;
+    final current = _current;
+    return Scaffold(
+      body: Stack(
+        children: [
+          // Navigation mode renders the offline VECTOR map with the
+          // Vietmap-navigation-style banner + ETA bar (ui/nav_top_bar.dart +
+          // ui/navigation_card.dart). Browsing/search keeps the raster map.
+          _navigating
+              ? VectorNavMap(
+                  routeGeometry: route?.geometry ?? const [],
+                  routeSteps: route?.steps ?? const [],
+                  routeStartIndex: _routeStartIndex,
+                  current: current,
+                  bearing: _routeBearing,
+                  heading: _heading,
+                  headingUp: _headingUp,
+                  tilt3D: _tilt3d,
+                  terrain3D: _terrain3d,
+                  nightMode: _nightMode,
+                  satellite: _satellite,
+                  // Vietmap light basemap in nav mode when the Vietmap data
+                  // source is active, online, and real keys are compiled in.
+                  vietmapBase:
+                      dataSource == 'vietmap' &&
+                      !_offline &&
+                      VietmapConfig.hasKeys,
+                  // Keep the user's chosen basemap (OSM/CARTO/topo/…) on the
+                  // nav map's online fallback — never a surprise style switch.
+                  tileSource: _tileSource,
+                  carIcon: _carIcon,
+                  pois: _pois,
+                  selectedPoi: _selectedPoi,
+                  // Search-bar results drawn as blue place markers ahead.
+                  searchPois: _searchResults,
+                  stops: _stops,
+                  // During nav only cameras near the route are loaded (not all
+                  // ~1,800 nationwide) — the driver sees what's on their road.
+                  cameras: cameraAlerts ? _routeCameras : const [],
+                  controller: _vmFollow,
+                  smoothCamera: smoothCamera,
+                )
+              : _buildMap(route, current),
+          Positioned.fill(
+            child: SafeArea(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Pin the top area to the top — the banner and, under it,
+                  // the road-info chip flow together so a tall banner (long
+                  // destination / expanded step list) can never overlap the
+                  // chip.
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _navigating ? _navTopBar() : _topBar(),
+                        if (_navigating)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 6, 10, 0),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                RoadInfoChip(
+                                  info: _roadInfo,
+                                  loading: _roadLoading,
+                                  speedMps: _progress?.speedMps,
+                                ),
+                                const Spacer(),
+                                // Nav controls: a scrollable column capped to
+                                // the space ABOVE the bottom bars so it can
+                                // NEVER overlap the ETA card / status bar (it
+                                // used to run the full height and hid the AI
+                                // button behind the bottom chrome).
+                                ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxHeight:
+                                        MediaQuery.of(context).size.height *
+                                        0.5,
+                                  ),
+                                  child: SingleChildScrollView(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        // AI assistant — FIRST so it is always
+                                        // visible (was last → hidden).
+                                        RoundActionButton(
+                                          icon: Icons.auto_awesome,
+                                          color: const Color(0xFF7B1FA2),
+                                          onTap: () => _openAiAssistant(),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        RoundActionButton(
+                                          icon: _headingUp
+                                              ? Icons.explore
+                                              : Icons.navigation,
+                                          color: _headingUp
+                                              ? kAppBlue
+                                              : const Color(0xFF5F6368),
+                                          onTap: () => setNavState(
+                                            () => _headingUp = !_headingUp,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        // Map layers: 3D / terrain / satellite
+                                        // grouped into ONE picker button.
+                                        PopupMenuButton<String>(
+                                          tooltip: 'Lớp bản đồ',
+                                          position: PopupMenuPosition.under,
+                                          offset: const Offset(-120, 8),
+                                          color: Colors.white,
+                                          elevation: 8,
+                                          shadowColor: Colors.black38,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              14,
+                                            ),
+                                          ),
+                                          onSelected: (v) {
+                                            if (v == '3d') {
+                                              setNavState(
+                                                () => _tilt3d = !_tilt3d,
+                                              );
+                                            } else if (v == 'terrain') {
+                                              setNavState(
+                                                () => _terrain3d = !_terrain3d,
+                                              );
+                                            } else if (v == 'satellite') {
+                                              setNavState(
+                                                () => _satellite = !_satellite,
+                                              );
+                                            }
+                                          },
+                                          itemBuilder: (context) => [
+                                            _layerItem(
+                                              '3d',
+                                              Icons.threed_rotation,
+                                              '3D (nghiêng)',
+                                              _tilt3d,
+                                            ),
+                                            _layerItem(
+                                              'terrain',
+                                              Icons.terrain,
+                                              'Địa hình',
+                                              _terrain3d,
+                                            ),
+                                            _layerItem(
+                                              'satellite',
+                                              Icons.satellite_alt,
+                                              'Vệ tinh',
+                                              _satellite,
+                                            ),
+                                          ],
+                                          child: Material(
+                                            color: Colors.white,
+                                            elevation: 4,
+                                            shadowColor: Colors.black26,
+                                            shape: const CircleBorder(),
+                                            child: SizedBox(
+                                              width: 46,
+                                              height: 46,
+                                              child: Icon(
+                                                Icons.layers,
+                                                color:
+                                                    (_tilt3d ||
+                                                        _terrain3d ||
+                                                        _satellite)
+                                                    ? kAppBlue
+                                                    : const Color(0xFF5F6368),
+                                                size: 22,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        RoundActionButton(
+                                          icon: _nightMode
+                                              ? Icons.dark_mode
+                                              : Icons.light_mode,
+                                          color: _nightMode
+                                              ? kAppBlue
+                                              : const Color(0xFF5F6368),
+                                          onTap: _toggleNight,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        RoundActionButton(
+                                          icon: _showStatusBar
+                                              ? Icons.bar_chart
+                                              : Icons.bar_chart_outlined,
+                                          color: _showStatusBar
+                                              ? kAppBlue
+                                              : const Color(0xFF5F6368),
+                                          onTap: _toggleStatusBar,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        RoundActionButton(
+                                          icon: Icons.emoji_emotions_outlined,
+                                          color: const Color(0xFFF4B400),
+                                          onTap: _cycleCarIcon,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        // Picture-in-Picture (Part C): shrink the
+                                        // nav into a floating window (Google-Maps
+                                        // style). Only shown on capable devices.
+                                        RoundActionButton(
+                                          icon: Icons.picture_in_picture_alt,
+                                          color: const Color(0xFF1A73E8),
+                                          onTap: () => _enterPip(),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        RoundActionButton(
+                                          icon: _voiceOn
+                                              ? Icons.volume_up
+                                              : Icons.volume_off,
+                                          color: _voiceOn
+                                              ? const Color(0xFF34A853)
+                                              : const Color(0xFF5F6368),
+                                          onTap: () => setNavState(
+                                            () => _voiceOn = !_voiceOn,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        // Camera alerts toggle (phạt nguội DB).
+                                        RoundActionButton(
+                                          icon: Icons.videocam,
+                                          color: cameraAlerts
+                                              ? const Color(0xFFD93025)
+                                              : const Color(0xFF5F6368),
+                                          onTap: _toggleCameraAlerts,
+                                          child: CctvIcon(
+                                            size: 22,
+                                            color: cameraAlerts
+                                                ? const Color(0xFFD93025)
+                                                : const Color(0xFF5F6368),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        _micButton(),
+                                        const SizedBox(height: 8),
+                                        RoundActionButton(
+                                          icon: Icons.local_gas_station,
+                                          color: const Color(0xFFF4B400),
+                                          onTap: _findNearestGas,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        RoundActionButton(
+                                          icon: Icons.directions_car,
+                                          color: const Color(0xFF1A73E8),
+                                          onTap: _openVietmapNav,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (_offline && _showOfflineBanner)
+                    Positioned(
+                      top: 58,
+                      left: 12,
+                      right: 12,
+                      child: Material(
+                        elevation: 4,
+                        shadowColor: Colors.black26,
+                        borderRadius: BorderRadius.circular(10),
+                        color: const Color(0xFF5F6368),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          child: Row(
+                            children: const [
+                              Icon(
+                                Icons.cloud_off,
+                                size: 16,
+                                color: Colors.white,
+                              ),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Đang ngoại tuyến — bản đồ & lộ trình đã tải vẫn hoạt động',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  // Voice/mic banner: shows live "Đang nghe… <text>" while the
+                  // recognizer streams partial results, then confirms the
+                  // recognized command text for a few seconds. Rendered below
+                  // the top bar so it never overlaps the search/controls.
+                  if (_voiceBannerVisible)
+                    Positioned(
+                      top: _navigating ? 150 : 58,
+                      left: 12,
+                      right: 12,
+                      child: Material(
+                        elevation: 5,
+                        shadowColor: Colors.black38,
+                        borderRadius: BorderRadius.circular(12),
+                        color: _listening
+                            ? const Color(0xFFEA4335)
+                            : const Color(0xFF1A73E8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 9,
+                          ),
+                          child: Row(
+                            children: [
+                              _listening
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.check_circle,
+                                      size: 18,
+                                      color: Colors.white,
+                                    ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _listening
+                                      ? (_voiceText.isEmpty
+                                            ? 'Đang nghe…'
+                                            : 'Đang nghe: “$_voiceText”')
+                                      : (_voiceText.isEmpty
+                                            ? 'Không nghe rõ, thử lại'
+                                            : 'Đã nghe: “$_voiceText”'),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  // Voice/mic + BLE displays buttons — floated on the RIGHT,
+                  // just BELOW the search/directions bar (they used to sit
+                  // inside the top bar and squeezed it → overflow, and the
+                  // BLE button looked glued to the bar). Hidden while the
+                  // suggestions / stops panel is showing so they never float
+                  // on top of it. In nav mode the mic lives in the controls
+                  // column instead.
+                  if (!_navigating && _suggestions.isEmpty && _stops.isEmpty)
+                    Positioned(
+                      right: 12,
+                      top: _directionsMode ? 200 : 100,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          DisplaysButton(
+                            status: _displaysStatus,
+                            onTap: _toggleDisplays,
+                          ),
+                          const SizedBox(width: 8),
+                          _micButton(size: 44),
+                        ],
+                      ),
+                    ),
+                  // Offline POI category chips (ATM / xăng / nhà hàng / …)
+                  // — shown while browsing, hidden while a route is being
+                  // planned (suggestions take the spot below).
+                  if (_offline && !_navigating && _suggestions.isEmpty)
+                    Positioned(
+                      top: _overlayTop,
+                      left: 12,
+                      right: 66,
+                      child: _offlinePoiBar(),
+                    ),
+                  if (!_navigating)
+                    Positioned(
+                      left: 12,
+                      right: 66,
+                      top: _overlayTop,
+                      child: _suggestions.isNotEmpty
+                          ? SuggestionList(
+                              suggestions: _suggestions,
+                              onSelected: _selectSuggestion,
+                            )
+                          : (_stops.isNotEmpty
+                                ? StopsPanel(
+                                    stops: _stops,
+                                    onMoveUp: (i) => _moveStop(i, -1),
+                                    onMoveDown: (i) => _moveStop(i, 1),
+                                    onRemove: _removeStop,
+                                    onSave: _savePlan,
+                                  )
+                                : const SizedBox.shrink()),
+                    ),
+                  // Raster-only controls (zoom/locate target the raster map
+                  // controller) — hide during vector navigation mode.
+                  // Positioned BELOW the floated BLE + voice buttons (which
+                  // sit top-right under the search bar) so they don't overlap.
+                  if (!_navigating)
+                    Positioned(
+                      right: 10,
+                      top: _directionsMode ? 252 : 150,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          MapControls(
+                            onZoomIn: () => _zoomBy(1),
+                            onZoomOut: () => _zoomBy(-1),
+                            onLocate: _locateMe,
+                            hasPosition: current != null,
+                          ),
+                          const SizedBox(height: 8),
+                          RoundActionButton(
+                            icon: Icons.settings,
+                            color: kAppBlue,
+                            onTap: _openSettings,
+                          ),
+                          const SizedBox(height: 8),
+                          // Speed/red-light camera layer + alerts toggle —
+                          // also available while browsing (matches the nav
+                          // controls button).
+                          RoundActionButton(
+                            icon: Icons.videocam,
+                            color: cameraAlerts
+                                ? const Color(0xFFD93025)
+                                : const Color(0xFF5F6368),
+                            onTap: _toggleCameraAlerts,
+                            child: CctvIcon(
+                              size: 22,
+                              color: cameraAlerts
+                                  ? const Color(0xFFD93025)
+                                  : const Color(0xFF5F6368),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          PopupMenuButton<String>(
+                            tooltip: 'Lớp bản đồ',
+                            position: PopupMenuPosition.under,
+                            offset: const Offset(-150, 8),
+                            color: Colors.white,
+                            elevation: 8,
+                            shadowColor: Colors.black38,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            onSelected: _selectTileLayer,
+                            itemBuilder: (context) => [
+                              for (final name in _tileLayerNames)
+                                _layerItem(
+                                  name,
+                                  _tileLayerIcon(name),
+                                  _tileLayerLabel(name),
+                                  name == _tileSource,
+                                ),
+                            ],
+                            child: Material(
+                              color: Colors.white,
+                              elevation: 4,
+                              shadowColor: Colors.black26,
+                              shape: const CircleBorder(),
+                              child: SizedBox(
+                                width: 46,
+                                height: 46,
+                                child: Icon(
+                                  Icons.layers_outlined,
+                                  color: const Color(0xFF7B1FA2),
+                                  size: 22,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: _bottomArea(),
+                  ),
+                  // Auto-center button — rendered in this overlay so it sits
+                  // ABOVE the MapLibre platform view (a sibling inside the
+                  // map's own Stack is occluded by it). Blue when the user
+                  // has panned/zoomed away (follow paused); tapping recenters
+                  // the camera on the car and resumes auto-follow. NAV-ONLY:
+                  // in browse mode the MapControls locate button already
+                  // centers the map — showing this one too made a duplicate
+                  // "center" button AND it overlapped the route card's
+                  // "Bắt đầu chỉ đường" button (which made taps on Start
+                  // silently hit this button instead → "does nothing").
+                  // The button is DRAGGABLE — hold and drag it anywhere on
+                  // the map (the position is remembered for the session).
+                  if (_navigating) _autoCenterButton(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The draggable auto-center ("my_location") button shown while navigating.
+  /// Hold and drag to reposition it anywhere on the map; tap to recenter on
+  /// the car and resume auto-follow. Blue when follow is paused.
+  Widget _autoCenterButton() {
+    const button = 46.0; // RoundActionButton-ish size
+    final size = MediaQuery.of(context).size;
+    // Default: bottom-right (was right:14 / bottom:230).
+    final pos =
+        _centerBtnOffset ??
+        Offset(size.width - 14 - button, size.height - 230 - button);
+    return Positioned(
+      left: pos.dx,
+      top: pos.dy,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        // Drag anywhere on the map; clamped to the screen so it never slides
+        // off. (A plain tap still hits the InkWell → recenter.)
+        onPanUpdate: (d) {
+          final s = MediaQuery.of(context).size;
+          setNavState(() {
+            _centerBtnOffset = Offset(
+              (pos.dx + d.delta.dx).clamp(0.0, s.width - button),
+              (pos.dy + d.delta.dy).clamp(0.0, s.height - button),
+            );
+          });
+        },
+        child: ListenableBuilder(
+          listenable: _vmFollow,
+          builder: (context, child) {
+            final following = _vmFollow.following;
+            return Material(
+              color: following ? Colors.white : const Color(0xFF1A73E8),
+              shape: const CircleBorder(),
+              elevation: 6,
+              shadowColor: Colors.black38,
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: _vmFollow.recenter,
+                child: Padding(
+                  padding: const EdgeInsets.all(11),
+                  child: Icon(
+                    Icons.my_location,
+                    color: following ? const Color(0xFF1A73E8) : Colors.white,
+                    size: 24,
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// A styled layer-menu row (icon + label + active checkmark).
+  PopupMenuItem<String> _layerItem(
+    String value,
+    IconData icon,
+    String label,
+    bool active,
+  ) {
+    return PopupMenuItem<String>(
+      value: value,
+      height: 46,
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            size: 20,
+            color: active ? kAppBlue : const Color(0xFF5F6368),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF202124),
+              ),
+            ),
+          ),
+          if (active) const Icon(Icons.check, size: 18, color: kAppBlue),
+        ],
+      ),
+    );
+  }
+
+  /// Fixed arrival moment for the live ETA countdown on the navigation card
+  /// (now + remaining duration). The card counts down to it every second.
+  DateTime _arrivalTime() {
+    final route = _route;
+    final nav = _progress;
+    if (route == null || route.duration <= 0) return DateTime.now();
+    final remain = route.duration * (1 - (nav?.progress ?? 0));
+    return DateTime.now().add(Duration(seconds: remain.round()));
+  }
+
+  /// Compact elevation/terrain chart for the nav status bar (tap to
+  /// expand/collapse). The progress marker follows the live progress, or the
+  /// scrubbed preview while the user drags the progress line.
+  Widget? _elevationChart(NavProgress? nav) {
+    final e = _elevation;
+    if (e == null || e.profile.isEmpty) return null;
+    final progress = _scrubProgress ?? nav?.progress ?? 0;
+    return GestureDetector(
+      onTap: () => setNavState(() => _elevationExpanded = !_elevationExpanded),
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.terrain, size: 16, color: kAppBlue),
+              const SizedBox(width: 6),
+              const Text(
+                'Độ cao',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              Icon(
+                _elevationExpanded ? Icons.expand_less : Icons.expand_more,
+                size: 18,
+                color: const Color(0xFF5F6368),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          ElevationChart(
+            profile: e.profile,
+            minElev: e.minElev,
+            maxElev: e.maxElev,
+            up: e.up,
+            down: e.down,
+            progress: progress,
+            compact: !_elevationExpanded,
+          ),
+        ],
+      ),
+    );
+  }
+}

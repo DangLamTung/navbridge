@@ -13,6 +13,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // flutter_local_notifications requires core library desugaring.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     defaultConfig {
@@ -59,7 +61,18 @@ kotlin {
     }
 }
 
+configurations.configureEach {
+    // maplibre-android-sdk pulls in com.jakewharton.timber:timber, but the
+    // Vietmap maps-sdk-android AAR (used by vietmap_flutter_navigation)
+    // bundles the same timber.log.* classes → "Duplicate class timber.log.Timber".
+    // Drop the standalone artifact; the copy bundled in the Vietmap AAR
+    // satisfies maplibre's runtime need (timber's API is stable).
+    exclude(group = "com.jakewharton.timber", module = "timber")
+}
+
 dependencies {
+    // flutter_local_notifications requires core library desugaring.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     // On-device offline routing (GraphHopper core, MIT, runs on Android).
     // 7.0 is the last line with classic setVehicle/setWeighting("fastest")
     // (no custom-model expression compilation → works on Android ART;

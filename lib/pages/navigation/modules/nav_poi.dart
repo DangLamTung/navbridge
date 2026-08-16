@@ -1,4 +1,4 @@
-part of 'navigation_page.dart';
+part of '../navigation_page.dart';
 
 extension _NavPoi on _NavigationPageState {
   Widget _poiArea() {
@@ -117,6 +117,8 @@ extension _NavPoi on _NavigationPageState {
     );
   }
 
+  /// Lazily-loaded category chips for the BUNDLED offline POI index (ATM,
+  /// xăng, nhà hàng, …) — browse "nearest X" with no network.
   Widget _offlinePoiBar() {
     return SizedBox(
       height: 40,
@@ -217,6 +219,10 @@ extension _NavPoi on _NavigationPageState {
     );
   }
 
+  /// Find POIs of [type] for the driver. When navigating, prefer results
+  /// AHEAD on the route (10–20 km window) on the SAME side of the road (so
+  /// the driver doesn't have to cross / U-turn); otherwise the nearest
+  /// around the car.
   Future<void> _searchPoi(PoiType type) async {
     final c = _current ?? _origin;
     if (c == null) return;
@@ -226,9 +232,17 @@ extension _NavPoi on _NavigationPageState {
       _selectedPoi = null;
     });
     try {
-      final r = await searchPois(type, c);
+      // Search a wider radius (up to ~15 km) so there are route-ahead
+      // candidates to rank; the ranking below prefers the ones up the road.
+      var r = await searchPois(type, c, radius: 15000, limit: 30);
+      // During navigation rank by route position (ahead + same side).
+      final route = _route?.geometry ?? const <LatLng>[];
+      final startIdx =
+          (_engine?.snappedSegmentIndex ?? 0).clamp(0, max(0, route.length - 1))
+              as int;
+      r = rankPoisForRoute(r, route, startIndex: startIdx);
       if (!mounted) return;
-      setNavState(() => _pois = r);
+      setNavState(() => _pois = r.take(8).toList());
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -282,11 +296,12 @@ extension _NavPoi on _NavigationPageState {
     }
   }
 
-  /// "Điều hướng bằng Vietmap": hand the current destination to the Vietmap
-  /// Maps app (browser fallback) through an Android intent / deep link.
+  /// "Điều hướng bằng Vietmap": open the real Vietmap turn-by-turn screen
+  /// (official Vietmap navigation SDK) for the current destination.
   Future<void> _openVietmapNav() async {
     final dest = _destination ?? (_stops.isEmpty ? null : _stops.last.pos);
-    if (dest == null) {
+    final origin = _current ?? _origin;
+    if (dest == null || origin == null) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
@@ -294,20 +309,34 @@ extension _NavPoi on _NavigationPageState {
         );
       return;
     }
-    final ok = await openVietmapNavigation(dest, label: _destinationName);
-    if (!ok && mounted) {
+    if (!VietmapConfig.hasKeys) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text('Không mở được Vietmap.')));
+        ..showSnackBar(
+          const SnackBar(content: Text('Thiếu khóa Vietmap để dẫn đường.')),
+        );
+      return;
     }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => VietmapNavScreen(
+          origin: origin,
+          destination: dest,
+          destinationName: _destinationName,
+        ),
+      ),
+    );
   }
 
+  /// Load the bundled offline POI index (once) so the category chips show.
   Future<void> _ensureOfflinePoiCats() async {
     if (_offlinePoiCats != null) return;
     final cats = await offlinePoiCategories();
     if (mounted) setNavState(() => _offlinePoiCats = cats);
   }
 
+  /// Browse one bundled offline category: show its POIs sorted by distance
+  /// from the current position as search suggestions (tap → info card).
   Future<void> _searchOfflineCategory(String key) async {
     await _ensureOfflinePoiCats();
     final near = _current ?? _origin;
@@ -349,10 +378,19 @@ extension _NavPoi on _NavigationPageState {
     }
   }
 
+  /// Show a tapped POI on the map: center the camera on it (pausing the
+  /// follow) so the user can see where it is before deciding to go there.
   void _showPoiOnMap(PoiResult p) {
     setNavState(() => _selectedPoi = p);
   }
 
+  /// Navigate to a picked POI, keeping the current navigation running.
+  ///
+  /// When a destination is already planned (the user is driving somewhere),
+  /// the POI is ADDED as a stop / waypoint just before the destination —
+  /// the final destination (and any other planned stops) is never dropped:
+  /// origin → … → gas station → destination. With no planned destination the
+  /// POI simply becomes the destination.
   Future<void> _rerouteToPoi(PoiResult p) async {
     final from = _current ?? _origin;
     if (from == null) return;
@@ -399,6 +437,7 @@ extension _NavPoi on _NavigationPageState {
         _updateDragHandles(route);
       });
       unawaited(_loadElevation(route));
+      unawaited(_refreshRouteCameras());
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(

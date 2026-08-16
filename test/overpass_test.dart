@@ -30,6 +30,23 @@ void main() {
       expect(parseMaxspeed('variable', 50), 50);
       expect(parseMaxspeed('walk', 50), 50);
       expect(parseMaxspeed('nope', 50), 50);
+      expect(parseMaxspeed('urban', 50), 50);
+      expect(parseMaxspeed('rural', 50), 50);
+    });
+
+    test('takes the first value of multi-value / conditional tags', () {
+      expect(parseMaxspeed('50;30', 50), 50);
+      expect(parseMaxspeed('50-60', 50), 50);
+      expect(parseMaxspeed('30 @ (06:00-22:00)', 50), 30);
+    });
+
+    test('rejects absurd values (typos / mis-decoded garbage)', () {
+      // A real 50 km/h limit must never come back as "31" (a mis-decoded
+      // GraphHopper max_speed bit-pattern) or "999" (a data typo).
+      expect(parseMaxspeed('31', 50), 31); // 31 is plausible → kept
+      expect(parseMaxspeed('999', 50), 50); // absurd → fallback
+      expect(parseMaxspeed('3', 50), 50); // below 5 → fallback
+      expect(parseMaxspeed('250', 50), 50); // above 200 → fallback
     });
   });
 
