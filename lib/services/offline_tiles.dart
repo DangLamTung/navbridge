@@ -724,7 +724,10 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
     final file = await tileFile(z, x, y, source: source);
     if (file.existsSync()) {
       try {
-        return _decode(decode, file.readAsBytesSync());
+        // await so a decode failure is caught here (falls through to
+        // re-download) instead of escaping the try block as an unhandled
+        // future error.
+        return await _decode(decode, file.readAsBytesSync());
       } catch (_) {
         // corrupt tile — fall through to re-download
       }
