@@ -379,6 +379,7 @@ extension _NavNavigation on _NavigationPageState {
     _routeStartIndex = 0; // full route at the start of navigation
     _gpsWindow.clear();
     _startWeather();
+    unawaited(_refreshRouteCameras()); // nav-map camera layer for the route
     unawaited(WakelockPlus.enable()); // keep the screen on while navigating
     unawaited(
       NavForegroundService.instance.start(),
@@ -388,6 +389,62 @@ extension _NavNavigation on _NavigationPageState {
     unawaited(PipService.instance.setAspect(pipAspect));
     unawaited(PipService.instance.setAutoEnter(true));
     if (mounted) setNavState(() {});
+  }
+
+  /// Simulated drive (testing without GPS): walk the car along the route at
+  /// ~58 km/h via [TurnByTurnEngine.positionAtDistance], feeding the same
+  /// `_handleNav` pipeline as real GPS so maneuvers / voice / camera checks
+  /// all fire. Real fixes are ignored while [_simulating].
+  Future<void> _startSimulation() async {
+    final engine = _engine;
+    if (engine == null || _route == null) return;
+    _simTimer?.cancel();
+    _simDist = 0; // walk the route from its start
+    setNavState(() {
+      _navigating = true;
+      _simulating = true;
+    });
+    _beginTrip();
+    _spokenFar = false;
+    _spokenNear = false;
+    _spokenFinal = false;
+    _arrivedSpoken = false;
+    _lastManeuverSig = null;
+    _lastCameraSig = null;
+    _lastCameraCheck = null; // camera checks run fresh during the sim
+    _offRouteSince = null;
+    _gpsWindow.clear();
+    _startWeather();
+    unawaited(_refreshRouteCameras()); // nav-map camera layer for the route
+    unawaited(WakelockPlus.enable());
+    unawaited(NavForegroundService.instance.start());
+    unawaited(PipService.instance.setAspect(pipAspect));
+    debugPrint(
+      'SIM: simulation START (route ${engine.route.distance.round()}m)',
+    );
+    _simTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (!mounted) return;
+      final e = _engine;
+      if (e == null) return;
+      _simDist += 8; // ~58 km/h
+      if (_simDist >= e.route.distance) {
+        _simDist = e.route.distance;
+        _stopSimulation();
+      }
+      final pos = e.positionAtDistance(_simDist);
+      _handleNav(pos, speedMps: 16);
+      setNavState(() {});
+    });
+    if (mounted) setNavState(() {});
+  }
+
+  /// Stop the simulated drive (real navigation keeps running).
+  void _stopSimulation() {
+    _simTimer?.cancel();
+    _simTimer = null;
+    if (!_simulating) return;
+    setNavState(() => _simulating = false);
+    debugPrint('SIM: simulation stopped');
   }
 
   /// Re-route from the car's current position to the planned destination and
@@ -444,8 +501,10 @@ extension _NavNavigation on _NavigationPageState {
 
   Future<void> _exitNavigation() async {
     debugPrint('SIM: EXIT navigation called');
+    _stopSimulation(); // cancel the simulated-drive timer if running
     setNavState(() {
       _navigating = false;
+      _simulating = false;
       _route = null;
       _engine = null;
       _destination = null;

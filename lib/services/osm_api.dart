@@ -724,3 +724,50 @@ Future<(double, double, String)?> googlePlaceDetails(String placeId) async {
   final display = (result['formatted_address'] ?? '') as String;
   return (lat, lng, display);
 }
+
+/// Google Places TEXT SEARCH — find REAL POIs (gas, food, hotel…) near
+/// [center]. Requires the Places API (Text Search) enabled + billing.
+/// Returns (name, lat, lng) tuples, empty on failure. Used to ground the AI
+/// assistant's "tìm xăng / nhà hàng gần đây" answers in real, current data
+/// instead of letting the LLM invent coordinates.
+Future<List<(String, double, double)>> googlePlaceTextSearch(
+  String query,
+  LatLng center, {
+  int radius = 5000,
+  int limit = 6,
+}) async {
+  final key = VietmapConfig.googlePlacesKey;
+  if (key.isEmpty) return const [];
+  final url =
+      'https://maps.googleapis.com/maps/api/place/textsearch/json'
+      '?query=${Uri.encodeQueryComponent(query)}'
+      '&location=${center.latitude},${center.longitude}'
+      '&radius=$radius'
+      '&language=vi'
+      '&key=$key';
+  try {
+    final res = await http
+        .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode != 200) return const [];
+    final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (data['status'] != 'OK') return const [];
+    final results = (data['results'] as List? ?? [])
+        .cast<Map<String, dynamic>>();
+    final out = <(String, double, double)>[];
+    for (final r in results.take(limit)) {
+      final name = (r['name'] ?? '') as String;
+      final geometry = r['geometry'] as Map<String, dynamic>?;
+      final loc = geometry?['location'] as Map<String, dynamic>?;
+      if (name.isEmpty || loc == null) continue;
+      out.add((
+        name,
+        ((loc['lat'] ?? 0) as num).toDouble(),
+        ((loc['lng'] ?? 0) as num).toDouble(),
+      ));
+    }
+    return out;
+  } catch (_) {
+    return const [];
+  }
+}

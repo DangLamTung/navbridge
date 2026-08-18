@@ -383,6 +383,7 @@ extension _NavBars on _NavigationPageState {
         onProfile: _setRouteProfile,
         onStart: _startNavigation,
         onClear: _exitNavigation,
+        onSimulate: _startSimulation,
         tollCost: route.tollCost,
         alternativeLabels: [
           for (final r in _alternativeRoutes)

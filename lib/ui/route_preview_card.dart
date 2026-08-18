@@ -38,6 +38,7 @@ class RoutePreviewCard extends StatelessWidget {
     this.avoidFerry = false,
     this.onToggleAvoidFerry,
     this.elevation,
+    this.onSimulate,
   });
 
   /// e.g. "12 ph"
@@ -77,6 +78,10 @@ class RoutePreviewCard extends StatelessWidget {
 
   /// Route ascent/descent (best-effort; null = unknown).
   final ElevationInfo? elevation;
+
+  /// Optional: green play button that starts the SIMULATED drive (walks the
+  /// route without GPS — for testing maneuvers / camera alerts).
+  final VoidCallback? onSimulate;
 
   /// Active route/road type (car / motorbike / bicycle / walking).
   final RouteProfile profile;
@@ -259,20 +264,50 @@ class RoutePreviewCard extends StatelessWidget {
             const SizedBox(height: 10),
             SizedBox(
               height: 44,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: kAppBlue,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: kAppBlue,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      onPressed: onStart,
+                      icon: const Icon(Icons.navigation, size: 20),
+                      label: const Text(
+                        'Bắt đầu chỉ đường',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-                onPressed: onStart,
-                icon: const Icon(Icons.navigation, size: 20),
-                label: const Text(
-                  'Bắt đầu chỉ đường',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-                ),
+                  if (onSimulate != null) ...[const SizedBox(width: 8)],
+                  if (onSimulate != null)
+                    SizedBox(
+                      height: 44,
+                      width: 52,
+                      child: Tooltip(
+                        message: 'Mô phỏng lái xe (thử nghiệm)',
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF34A853),
+                            foregroundColor: Colors.white,
+                            padding: EdgeInsets.zero,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          onPressed: onSimulate,
+                          child: const Icon(Icons.play_arrow, size: 26),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
             TextButton.icon(

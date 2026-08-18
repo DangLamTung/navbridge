@@ -951,6 +951,7 @@ class _VectorNavMapState extends State<VectorNavMap>
     final sig = _cameraSignature(cams);
     if (sig == _lastCameraSig) return;
     _lastCameraSig = sig;
+    debugPrint('VECTORMAP: camera layer n=${cams.length}');
     for (final c in _cameraCircles) {
       try {
         ctrl.removeCircle(c);
@@ -964,31 +965,54 @@ class _VectorNavMapState extends State<VectorNavMap>
         _ => '#4285F4', // blue — general enforcement
       };
       try {
-        // A dark halo + bright dot + white ring so the marker pops on the
-        // dark nav map (the old single 6 px dot was easy to miss while
-        // driving). The halo is drawn first so it sits behind the dot.
-        final halo = await ctrl.addCircle(
+        // Camera-lens look (cheap native circles that read as a camera at a
+        // glance): soft coloured glow → coloured body with a white ring →
+        // white "lens" with a coloured pupil. The white ring + lens make the
+        // marker pop on the dark nav map (the old single dot was easy to
+        // miss while driving).
+        final glow = await ctrl.addCircle(
           CircleOptions(
             geometry: LatLng(c.lat, c.lng),
             circleColor: col,
-            circleRadius: 10.0,
+            circleRadius: 11.0,
             circleStrokeColor: '#202124',
             circleStrokeWidth: 3.0,
-            circleOpacity: 0.35,
+            circleOpacity: 0.30,
           ),
         );
-        final circ = await ctrl.addCircle(
+        final body = await ctrl.addCircle(
           CircleOptions(
             geometry: LatLng(c.lat, c.lng),
             circleColor: col,
-            circleRadius: 7.0,
+            circleRadius: 7.5,
             circleStrokeColor: '#FFFFFF',
             circleStrokeWidth: 2.5,
             circleOpacity: 1.0,
           ),
         );
-        _cameraCircles.add(halo);
-        _cameraCircles.add(circ);
+        final lens = await ctrl.addCircle(
+          CircleOptions(
+            geometry: LatLng(c.lat, c.lng),
+            circleColor: '#FFFFFF',
+            circleRadius: 3.2,
+            circleStrokeColor: '#202124',
+            circleStrokeWidth: 1.4,
+            circleOpacity: 1.0,
+          ),
+        );
+        final pupil = await ctrl.addCircle(
+          CircleOptions(
+            geometry: LatLng(c.lat, c.lng),
+            circleColor: col,
+            circleRadius: 1.6,
+            circleStrokeWidth: 0,
+            circleOpacity: 1.0,
+          ),
+        );
+        _cameraCircles.add(glow);
+        _cameraCircles.add(body);
+        _cameraCircles.add(lens);
+        _cameraCircles.add(pupil);
       } catch (_) {}
     }
   }

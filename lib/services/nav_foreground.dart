@@ -156,6 +156,28 @@ class NavForegroundService {
     );
   }
 
+  /// Keep the process + mic alive for BACKGROUND always-on wake-word
+  /// listening. The STT loop runs in the main isolate; a foreground service
+  /// stops Android from killing the process (or revoking mic access) while
+  /// the screen is off / the app is backgrounded. If navigation already
+  /// started the service we leave it as-is (nav keeps the process alive too).
+  Future<void> startVoiceService() async {
+    if (await FlutterForegroundTask.isRunningService) return;
+    await FlutterForegroundTask.startService(
+      notificationTitle: 'NavBridge — đang nghe lệnh thoại',
+      notificationText: 'Nói "NavBridge" để ra lệnh',
+      callback: startCallback,
+    );
+  }
+
+  /// Stop the foreground service — call ONLY when navigation is not active
+  /// (nav relies on the same service to keep running in the background).
+  Future<void> stopVoiceService() async {
+    if (await FlutterForegroundTask.isRunningService) {
+      await FlutterForegroundTask.stopService();
+    }
+  }
+
   /// Push a live nav update to the notification (throttle: ~1 Hz is plenty).
   Future<void> updateNav(NavProgress? nav, {String eta = ''}) async {
     if (nav == null) return;

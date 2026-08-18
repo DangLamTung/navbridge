@@ -25,13 +25,28 @@ class AiConfig {
   /// DeepSeek model — cheap, strong Vietnamese.
   static const String deepSeekModel = 'deepseek-chat';
 
-  /// Gemini endpoint (v1beta generative). The `key` is the API key.
+  /// Gemini endpoint builder (v1beta generative). The `key` is the API key.
+  static String geminiEndpointFor(String model) =>
+      'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent';
+
+  /// Primary Gemini endpoint (matches [geminiModel]).
   static const String geminiEndpoint =
       'https://generativelanguage.googleapis.com/v1beta/models/'
-      'gemini-2.0-flash:generateContent';
+      'gemini-3.7-flash:generateContent';
 
-  /// Gemini model id (also used as the fallback chat model).
-  static const String geminiModel = 'gemini-2.0-flash';
+  /// Gemini model ids tried in order — the assistant falls back to the next
+  /// one when a model id is "not found" for the key. gemini-2.0-flash was
+  /// RETIRED by Google (late 2025); the fast line is now 3.7-flash, with
+  /// older ids kept as safe fallbacks for keys without access to it.
+  static const List<String> geminiModels = [
+    'gemini-3.7-flash',
+    'gemini-3.5-flash',
+    'gemini-3.0-flash',
+    'gemini-2.5-flash',
+  ];
+
+  /// Primary Gemini model id.
+  static const String geminiModel = 'gemini-3.7-flash';
 
   /// Default system prompt — a Vietnamese navigation assistant grounded in
   /// the live drive context (position, route, ETA, camera ahead, …).
@@ -40,6 +55,9 @@ class AiConfig {
       'bằng tiếng Việt, thân thiện, tập trung vào việc giúp tài xế: '
       'giải thích lộ trình, ước lượng thời gian, tìm trạm xăng/nhà hàng/'
       'cà phê võng gần tuyến đường, cảnh báo camera, thời tiết, mẹo lái xe. '
+      'Khi tài xế hỏi tìm trạm xăng: CHỈ dùng danh sách "Trạm xăng gần đây" '
+      'được cung cấp trong câu hỏi (kèm khoảng cách), đừng bịa tên hoặc tọa '
+      'độ; nếu không có danh sách thì nói chưa tìm thấy trạm xăng gần đây. '
       'Nếu câu hỏi cần vị trí cụ thể mà ngữ cảnh không có, hãy hỏi lại. '
       'Không bịa thông tin; nếu không biết thì nói không chắc.';
 

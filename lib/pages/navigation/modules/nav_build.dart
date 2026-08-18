@@ -456,15 +456,30 @@ extension _NavBuild on _NavigationPageState {
                         ],
                       ),
                     ),
-                  // Offline POI category chips (ATM / xăng / nhà hàng / …)
-                  // — shown while browsing, hidden while a route is being
-                  // planned (suggestions take the spot below).
-                  if (_offline && !_navigating && _suggestions.isEmpty)
+                  // One-tap quick places (🏠 Nhà riêng / 💼 Cơ quan) RIGHT
+                  // below the search bar, with the offline POI category chips
+                  // stacked under them — one column, so nothing overlaps.
+                  // Shown while browsing with an EMPTY search box. Chips are
+                  // draggable to reorder.
+                  if (!_navigating &&
+                      _searchCtrl.text.isEmpty &&
+                      _suggestions.isEmpty &&
+                      _stops.isEmpty)
                     Positioned(
-                      top: _overlayTop,
                       left: 12,
                       right: 66,
-                      child: _offlinePoiBar(),
+                      top: _overlayTop,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _quickPlacesRow(),
+                          if (_offline) ...[
+                            const SizedBox(height: 6),
+                            _offlinePoiBar(),
+                          ],
+                        ],
+                      ),
                     ),
                   if (!_navigating)
                     Positioned(

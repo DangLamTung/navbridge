@@ -7,7 +7,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
-import 'offline_tiles.dart' show ridingMode;
+import 'offline_tiles.dart' show ridingMode, wakeWord;
 
 enum VoiceCommandType {
   searchAndNavigate,
@@ -128,12 +128,101 @@ class VoiceCommands {
   void Function()? _onWake;
   void Function(String)? _onPartial;
 
-  /// Wake word (Vietnamese + English variants). The recognizer only ACTS when
-  /// a phrase starts with one of these — random speech is ignored.
-  static final RegExp _wakeWord = RegExp(
-    r'^(?:này |hey |ê |ok |okay )?(?:nav ?bridge|navbridge|nabrig|na ?bridge)\b',
-    caseSensitive: false,
-  );
+  /// Wake word matcher. Returns the command text AFTER the wake word, or null
+  /// when the phrase has no wake word. The wake word is user-configurable
+  /// (default "dậy đi"). Matching is DIACRITIC-INSENSITIVE + space-insensitive
+  /// so the recognizer's unaccented transcription ("day di") still matches
+  /// the configured "dậy đi".
+  static String? _wakeCommand(String text) {
+    final norm = _norm(text);
+    final ww = _norm(wakeWord);
+    if (ww.isNotEmpty && norm.startsWith(ww)) {
+      return norm.substring(ww.length).trim();
+    }
+    return null;
+  }
+
+  /// Normalize for wake-word matching: lowercase, strip Vietnamese diacritics
+  /// (recognizers often return "day di" for "dậy đi"), drop spaces/dashes.
+  static String _norm(String s) {
+    final lower = s.toLowerCase();
+    final b = StringBuffer();
+    for (final ch in lower.split('')) {
+      b.write(_viMap[ch] ?? ch);
+    }
+    return b.toString().replaceAll(RegExp(r'[\s\-]'), '');
+  }
+
+  /// Vietnamese → ASCII accent map (tone marks + đ).
+  static const Map<String, String> _viMap = {
+    'à': 'a',
+    'á': 'a',
+    'ả': 'a',
+    'ã': 'a',
+    'ạ': 'a',
+    'ă': 'a',
+    'ằ': 'a',
+    'ắ': 'a',
+    'ẳ': 'a',
+    'ẵ': 'a',
+    'ặ': 'a',
+    'â': 'a',
+    'ầ': 'a',
+    'ấ': 'a',
+    'ẩ': 'a',
+    'ẫ': 'a',
+    'ậ': 'a',
+    'è': 'e',
+    'é': 'e',
+    'ẻ': 'e',
+    'ẽ': 'e',
+    'ẹ': 'e',
+    'ê': 'e',
+    'ề': 'e',
+    'ế': 'e',
+    'ể': 'e',
+    'ễ': 'e',
+    'ệ': 'e',
+    'ì': 'i',
+    'í': 'i',
+    'ỉ': 'i',
+    'ĩ': 'i',
+    'ị': 'i',
+    'ò': 'o',
+    'ó': 'o',
+    'ỏ': 'o',
+    'õ': 'o',
+    'ọ': 'o',
+    'ô': 'o',
+    'ồ': 'o',
+    'ố': 'o',
+    'ổ': 'o',
+    'ỗ': 'o',
+    'ộ': 'o',
+    'ơ': 'o',
+    'ờ': 'o',
+    'ớ': 'o',
+    'ở': 'o',
+    'ỡ': 'o',
+    'ợ': 'o',
+    'ù': 'u',
+    'ú': 'u',
+    'ủ': 'u',
+    'ũ': 'u',
+    'ụ': 'u',
+    'ư': 'u',
+    'ừ': 'u',
+    'ứ': 'u',
+    'ử': 'u',
+    'ữ': 'u',
+    'ự': 'u',
+    'ỳ': 'y',
+    'ý': 'y',
+    'ỷ': 'y',
+    'ỹ': 'y',
+    'ỵ': 'y',
+    'đ': 'd',
+  };
 
   bool get available => _available;
   bool get listening => _listening;
@@ -174,9 +263,14 @@ class VoiceCommands {
   ///   mid-phrase, a longer listen window, and the Bluetooth headset mic is
   ///   used when paired (Bluetooth stays enabled — the app has
   ///   BLUETOOTH_CONNECT).
+  ///
+  /// IMPORTANT: `onDevice: false` (network recognition via Google services)
+  /// — the low-end itel's ON-DEVICE Vietnamese model returns
+  /// `error_no_match`/`error_speech_timeout` for clear speech, so the cloud
+  /// recognizer (the device has Google Play Services) is far more accurate.
   stt.SpeechListenOptions _listenOptions() => stt.SpeechListenOptions(
     localeId: _vi ? 'vi_VN' : null,
-    onDevice: true,
+    onDevice: false,
     listenMode: ridingMode
         ? stt.ListenMode.search
         : stt.ListenMode.confirmation,
@@ -186,12 +280,12 @@ class VoiceCommands {
     // silence finalizes the result. RIDING uses a much longer pause so a
     // wind burst / engine gap between words can't cut the command short;
     // NORMAL stays short so commands feel instant.
-    listenFor: ridingMode
-        ? const Duration(seconds: 30)
-        : const Duration(seconds: 20),
+    // MINIMUM 20 s listen window in BOTH modes — the itel's recognizer tries
+    // to bail after ~1 s, so we force it to keep the mic open.
+    listenFor: const Duration(seconds: 30),
     pauseFor: ridingMode
-        ? const Duration(milliseconds: 3000)
-        : const Duration(milliseconds: 800),
+        ? const Duration(milliseconds: 4000)
+        : const Duration(milliseconds: 2500),
   );
 
   /// One-shot listen (tap the mic): returns one phrase. [onPartial] fires
@@ -236,6 +330,10 @@ class VoiceCommands {
   ) async {
     final delivered = Completer<bool>();
     try {
+      debugPrint(
+        'VOICE: listen start mode=${ridingMode ? "search" : "confirmation"} '
+        'onDevice=false vi=$_vi',
+      );
       await _speech.listen(
         onResult: (r) {
           if (r.recognizedWords.isNotEmpty) {
@@ -268,6 +366,7 @@ class VoiceCommands {
     void Function(String partial)? onPartial,
   }) async {
     if (!_available) return;
+    debugPrint('VOICE: always-on enabled (wake word = nav)');
     _alwaysOn = true;
     _primed = false;
     _onCommand = onCommand;
@@ -282,21 +381,27 @@ class VoiceCommands {
     try {
       await _speech.listen(
         onResult: (r) {
-          if (r.recognizedWords.isNotEmpty && !r.finalResult) {
+          if (r.recognizedWords.isEmpty) return;
+          if (!r.finalResult) {
             _onPartial?.call(r.recognizedWords);
+            // Wake word may appear in partials on this device — prime/ack as
+            // soon as it's heard instead of waiting (often never) for a final.
+            _tryAlwaysOn(r.recognizedWords, isPartial: true);
             return;
           }
-          if (!r.finalResult) return;
-          _handleAlwaysOnResult(r.recognizedWords);
-          // Restart after a short pause so the recognizer releases the mic.
-          _restartTimer?.cancel();
-          _restartTimer = Timer(const Duration(milliseconds: 350), () {
-            _listening = false;
-            _startAlwaysOnSession();
-          });
+          _tryAlwaysOn(r.recognizedWords);
         },
         listenOptions: _listenOptions(),
       );
+      // The recognizer session ended — either a final result, a silence
+      // timeout, or a silent error (no_match on this device). ALWAYS restart
+      // so the wake word keeps listening; otherwise the loop dies after one
+      // session and "nav" is never heard.
+      _restartTimer?.cancel();
+      _restartTimer = Timer(const Duration(milliseconds: 350), () {
+        _listening = false;
+        _startAlwaysOnSession();
+      });
     } catch (e) {
       debugPrint('VOICE: always-on session failed: $e');
       _listening = false;
@@ -306,29 +411,35 @@ class VoiceCommands {
     }
   }
 
-  /// Interpret one recognized phrase: act only on the wake word (+ command),
-  /// or a command when we're already "primed" (wake word heard just before).
-  void _handleAlwaysOnResult(String text) {
+  /// Interpret one recognized phrase (partial or final). The wake word is a
+  /// simple "NavBridge": hearing it (even a partial) primes the next utterance
+  /// as the command. A phrase that already contains the wake word + command is
+  /// executed on the FINAL result only (partials only prime/ack, so a
+  /// half-typed command like "navbridge tìm" never fires early).
+  void _tryAlwaysOn(String text, {bool isPartial = false}) {
     final clean = text.trim();
     if (clean.isEmpty) return;
-    final m = _wakeWord.firstMatch(clean);
-    if (m == null) {
-      // No wake word — but if we're primed, this is the command.
-      if (_primed) {
-        _primed = false;
-        if (clean.isNotEmpty) _onCommand?.call(clean);
+    final cmd = _wakeCommand(clean);
+    if (cmd != null) {
+      if (cmd.isEmpty) {
+        // Just the wake word → acknowledge and expect the command next.
+        if (!_primed) {
+          _primed = true;
+          _onWake?.call();
+        }
+        return;
       }
+      if (isPartial) return; // wait for the final result to run the command
+      _primed = false;
+      _onCommand?.call(cmd);
       return;
     }
-    final after = clean.substring(m.end).trim();
-    if (after.isEmpty) {
-      // Just the wake word → acknowledge and expect the command next.
-      _primed = true;
-      _onWake?.call();
-      return;
+    // No wake word — if we're primed, this whole phrase is the command.
+    if (isPartial) return;
+    if (_primed) {
+      _primed = false;
+      _onCommand?.call(clean);
     }
-    _primed = false;
-    _onCommand?.call(after);
   }
 
   Future<void> stop() async {

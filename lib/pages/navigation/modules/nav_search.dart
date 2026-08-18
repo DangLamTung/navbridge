@@ -365,8 +365,156 @@ extension _NavSearch on _NavigationPageState {
     }
   }
 
+  /// One-tap quick places row (Nhà riêng / Cơ quan). Chips are REORDERABLE:
+  /// LONG-PRESS a chip and drag it onto another to reorder. Tap a SET chip →
+  /// navigate straight there. Tap an UNSET chip (or long-press any chip) →
+  /// search an address to set/change it.
+  Widget _quickPlacesRow() {
+    final slots = QuickPlaces.instance.slots;
+    return SizedBox(
+      height: 42,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (var i = 0; i < slots.length; i++)
+              Padding(
+                key: ValueKey(slots[i].$1),
+                padding: const EdgeInsets.only(right: 8),
+                child: DragTarget<(String, int)>(
+                  onWillAcceptWithDetails: (d) => d.data.$2 != i,
+                  onAcceptWithDetails: (d) {
+                    final (id, from) = d.data;
+                    unawaited(_dropQuickPlace(id, from, i));
+                  },
+                  builder: (context, candidates, _) =>
+                      LongPressDraggable<(String, int)>(
+                        data: (slots[i].$1, i),
+                        feedback: Material(
+                          elevation: 6,
+                          borderRadius: BorderRadius.circular(18),
+                          child: _quickPlaceChipBody(
+                            slots[i].$1,
+                            slots[i].$2,
+                            QuickPlaces.instance.byId(slots[i].$1),
+                            dragging: true,
+                          ),
+                        ),
+                        childWhenDragging: Opacity(
+                          opacity: 0.3,
+                          child: _quickPlaceChipBody(
+                            slots[i].$1,
+                            slots[i].$2,
+                            QuickPlaces.instance.byId(slots[i].$1),
+                          ),
+                        ),
+                        child: _quickPlaceChipBody(
+                          slots[i].$1,
+                          slots[i].$2,
+                          QuickPlaces.instance.byId(slots[i].$1),
+                        ),
+                      ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Move [id] from [from] to [to] after a long-press drag drop.
+  Future<void> _dropQuickPlace(String id, int from, int to) async {
+    final order = [for (final s in QuickPlaces.instance.slots) s.$1];
+    if (from < 0 || from >= order.length || to < 0 || to >= order.length) {
+      return;
+    }
+    order.removeAt(from);
+    order.insert(to, id);
+    await QuickPlaces.instance.setOrder(order);
+    if (mounted) setNavState(() {});
+  }
+
+  Widget _quickPlaceChipBody(
+    String id,
+    String label,
+    QuickPlace? p, {
+    bool dragging = false,
+  }) {
+    final set = p != null;
+    final emoji = id == 'home'
+        ? '🏠'
+        : id == 'work'
+        ? '💼'
+        : '📍';
+    return Material(
+      color: set ? kAppBlue : Colors.white,
+      elevation: dragging ? 6 : 3,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () {
+          debugPrint('QUICK: tap id=$id set=$set');
+          if (set) {
+            // Set → navigate straight there.
+            _planToPoint(p.label, p.lat, p.lng);
+          } else {
+            // Unset → search an address to set it.
+            unawaited(_pickQuickPlace(id, label));
+          }
+        },
+        onLongPress: () {
+          // Long-press → change/set the address.
+          unawaited(_pickQuickPlace(id, label));
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                set ? '$emoji $label' : '+ $emoji $label',
+                style: TextStyle(
+                  color: set ? Colors.white : Colors.black87,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Open an address-search dialog to set/change a quick place, then navigate.
+  Future<void> _pickQuickPlace(String id, String label) async {
+    final picked = await showDialog<OsmSuggestion>(
+      context: context,
+      builder: (_) => _QuickPlacePicker(label: label, focus: _current),
+    );
+    if (picked == null || !mounted) return;
+    debugPrint(
+      'QUICK: set $id = "${picked.display}" ${picked.lat},${picked.lng}',
+    );
+    await QuickPlaces.instance.set(
+      id,
+      label,
+      picked.display,
+      picked.lat,
+      picked.lng,
+    );
+    if (mounted) setNavState(() {});
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Đã lưu $label: ${picked.display}.')),
+      );
+    }
+    await _planToPoint(picked.display, picked.lat, picked.lng);
+  }
+
   /// Add [name]@[lat]/[lng] as the destination and build the route.
   Future<void> _planToPoint(String name, double lat, double lng) async {
+    debugPrint('PLAN: to "$name" $lat,$lng');
     if (!mounted) return;
     setNavState(() {
       _suggestions = [];
@@ -830,4 +978,106 @@ String _stripDiacritics(String s) {
     b.write(map[ch] ?? ch);
   }
   return b.toString();
+}
+
+/// Search dialog to set a quick place (nhà riêng / cơ quan) by typing an
+/// address and picking a result. Uses the same geocoder as the main search.
+class _QuickPlacePicker extends StatefulWidget {
+  const _QuickPlacePicker({required this.label, this.focus});
+
+  final String label;
+  final LatLng? focus;
+
+  @override
+  State<_QuickPlacePicker> createState() => _QuickPlacePickerState();
+}
+
+class _QuickPlacePickerState extends State<_QuickPlacePicker> {
+  final _ctrl = TextEditingController();
+  Timer? _debounce;
+  bool _searching = false;
+  List<OsmSuggestion> _results = [];
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String text) {
+    _debounce?.cancel();
+    if (text.trim().length < 2) {
+      setState(() => _results = []);
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 400), () async {
+      setState(() => _searching = true);
+      try {
+        final r = await osmAutocomplete(text.trim(), focus: widget.focus);
+        if (mounted) setState(() => _results = r.take(6).toList());
+      } catch (_) {
+        if (mounted) setState(() => _results = []);
+      } finally {
+        if (mounted) setState(() => _searching = false);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Đặt ${widget.label}'),
+      content: SizedBox(
+        width: double.maxFinite,
+        height: 340,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _ctrl,
+              autofocus: true,
+              onChanged: _onChanged,
+              decoration: const InputDecoration(
+                hintText: 'Gõ địa chỉ…',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (_searching) const LinearProgressIndicator(minHeight: 2),
+            const SizedBox(height: 4),
+            Expanded(
+              child: _results.isEmpty
+                  ? const Center(
+                      child: Text('Gõ địa chỉ nhà / cơ quan rồi chọn kết quả.'),
+                    )
+                  : ListView.builder(
+                      itemCount: _results.length,
+                      itemBuilder: (_, i) {
+                        final s = _results[i];
+                        return ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.place, size: 18),
+                          title: Text(
+                            s.display,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onTap: () => Navigator.of(context).pop(s),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Huỷ'),
+        ),
+      ],
+    );
+  }
 }

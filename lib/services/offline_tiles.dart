@@ -290,6 +290,12 @@ bool smoothCamera = true;
 /// read by the speech recognizer.
 bool ridingMode = false;
 
+/// Always-on voice assistant wake word (default "dậy đi"). Customizable in
+/// Settings because cheap phones' recognizers transcribe it differently — the
+/// user sets whatever word their device actually hears. Read by the wake-word
+/// matcher in VoiceCommands.
+String wakeWord = 'dậy đi';
+
 /// Simple nav mode: hide the map while navigating and show only a big
 /// maneuver arrow + distance/ETA + voice commands (cleaner, lighter).
 /// Set by the UI (persisted in AppSettings.simpleMode) and read by the nav

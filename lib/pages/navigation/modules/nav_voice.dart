@@ -5,6 +5,10 @@ extension _NavVoice on _NavigationPageState {
   /// from the voice command "hỏi AI …"); null opens an empty chat.
   Future<void> _openAiAssistant({String? question}) async {
     if (!mounted) return;
+    // Fetch weather now (if not already) so the AI can answer weather
+    // questions even before a route starts. Open-Meteo is fast (~1 s).
+    await _ensureWeather();
+    if (!mounted) return;
     // Let the panel use OUR mic (shares permissions/state with the nav
     // screen) instead of spinning up its own recognizer.
     await showModalBottomSheet<void>(
@@ -28,14 +32,21 @@ extension _NavVoice on _NavigationPageState {
   }
 
   /// One-shot voice recognition returning the recognized phrase (or '').
+  /// The window is capped (~15 s) and ALWAYS resolves — a failed session on
+  /// this device (no_match) would otherwise leave the chat mic waiting forever.
   Future<String> _recognizeOnePhrase() async {
     if (!_commands.available) return '';
     final completer = Completer<String>();
     _listening = true;
     if (mounted) setNavState(() {});
-    await _commands.listen(completer.complete, onPartial: (_) {});
+    await _commands.listen(
+      completer.complete,
+      onPartial: (_) {},
+      budget: const Duration(seconds: 15),
+    );
     _listening = false;
     if (mounted) setNavState(() {});
+    if (!completer.isCompleted) completer.complete('');
     return completer.future;
   }
 
@@ -75,6 +86,7 @@ extension _NavVoice on _NavigationPageState {
       tripNotes: _stops.isEmpty
           ? null
           : 'Hành trình ${_stops.length} điểm dừng',
+      center: _current,
     );
   }
 
@@ -184,10 +196,15 @@ extension _NavVoice on _NavigationPageState {
     // Tap toggles ONE-SHOT listening. If always-on is active, a tap turns
     // everything off (mic red → back to normal).
     if (_listening || _alwaysOnVoice) {
+      final wasAlwaysOn = _alwaysOnVoice;
       _listening = false;
       _alwaysOnVoice = false;
       if (mounted) setNavState(() {});
       await _commands.stop();
+      // Stop the background voice service (unless nav keeps it alive).
+      if (wasAlwaysOn && !_navigating) {
+        await NavForegroundService.instance.stopVoiceService();
+      }
       return;
     }
     if (!_commands.available) {
@@ -303,6 +320,10 @@ extension _NavVoice on _NavigationPageState {
     _listening = false;
     setNavState(() => _alwaysOnVoice = true);
     _voice.speak('Đã bật nghe liên tục. Nói NavBridge để ra lệnh.');
+    // Background always-on: a foreground service keeps the process + mic
+    // alive so the wake word still works with the screen off / app minimized
+    // (the STT loop runs in the main isolate, the service just keeps it up).
+    unawaited(NavForegroundService.instance.startVoiceService());
     await _commands.listenAlwaysOn(
       onWake: () => _voice.speak('NavBridge, nghe rồi.'),
       onCommand: _handleCommandText,

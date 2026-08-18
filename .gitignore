@@ -73,3 +73,6 @@ tools/poi/*.geojson
 
 # Android build outputs
 android/build/
+
+# Local screenshots may contain personal info — never commit.
+docs/screenshots/

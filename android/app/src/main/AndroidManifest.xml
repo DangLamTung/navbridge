@@ -23,6 +23,9 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING"/>
+    <!-- Always-on wake-word in the background (Android 14+ requires the mic
+         service type + this permission). Harmless on Android 13. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <!-- TTS engine (voice guidance → Bluetooth speaker) -->
     <queries>
         <intent>
@@ -74,7 +77,7 @@
              background / screen off (Google-Maps style). -->
         <service
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
-            android:foregroundServiceType="dataSync|remoteMessaging|location"
+            android:foregroundServiceType="dataSync|remoteMessaging|location|microphone"
             android:stopWithTask="false"
             android:exported="false"/>
         <!-- Don't delete the meta-data below.

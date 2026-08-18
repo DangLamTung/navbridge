@@ -46,6 +46,11 @@ class AppSettings {
   /// maneuver arrow + distance/ETA + voice commands (cleaner, lighter).
   final bool simpleMode;
 
+  /// Wake word for the always-on voice assistant (default "nav"). Made
+  /// configurable because cheap phones' recognizers transcribe it
+  /// differently — the user sets whatever word their device actually hears.
+  final String wakeWord;
+
   const AppSettings({
     this.forceOffline = false,
     this.dataSource = 'osm',
@@ -58,6 +63,7 @@ class AppSettings {
     this.pipAspect = '34',
     this.ridingMode = false,
     this.simpleMode = false,
+    this.wakeWord = 'dậy đi',
   });
 
   Map<String, dynamic> toJson() => {
@@ -72,6 +78,7 @@ class AppSettings {
     'pipAspect': pipAspect,
     'ridingMode': ridingMode,
     'simpleMode': simpleMode,
+    'wakeWord': wakeWord,
   };
 }
 
@@ -102,6 +109,7 @@ Future<AppSettings> loadSettings() async {
           : rawPip,
       ridingMode: (j['ridingMode'] ?? false) as bool,
       simpleMode: (j['simpleMode'] ?? false) as bool,
+      wakeWord: (j['wakeWord'] ?? 'dậy đi') as String,
     );
   } catch (_) {
     return const AppSettings();

@@ -37,6 +37,7 @@ import 'package:navbridge/services/offline_tiles.dart';
 import 'package:navbridge/services/poi_search.dart';
 import 'package:navbridge/core/route_profile.dart';
 import 'package:navbridge/core/settings.dart';
+import 'package:navbridge/services/quick_places.dart';
 import 'package:navbridge/services/osm_api.dart';
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/overpass.dart';
@@ -242,34 +243,45 @@ class _NavigationPageState extends State<NavigationPage>
   /// the first build, not at boot).
   bool _camerasRequested = false;
 
-  /// Cameras near the CAR — during navigation the map layer shows ONLY the
-  /// cameras ahead of the car on the route (within ~1.5 km), not a whole-
-  /// route corridor, so the driver sees the cameras they're actually
-  /// approaching. Refreshed on route set/clear and kept fresh every ~1 s by
-  /// `_cameraAheadAsync` while navigating.
+  /// Cameras along the ROUTE — during navigation the map layer shows the
+  /// cameras within [kNavMapCameraCorridor] of the whole route polyline, so
+  /// the driver sees the cameras on the road they're taking for the entire
+  /// trip (the car-centric 1.5 km window was often empty and made the nav
+  /// map look like it had no cameras at all). The VOICE alert
+  /// (`_checkCameraAhead`) stays car-centric. Refreshed whenever the route is
+  /// set / re-planned / cleared and when camera alerts toggle on.
   List<OfflineCamera> _routeCameras = [];
 
-  /// How far ahead of the car (metres) the nav-map camera layer shows.
-  /// Matches the alert window used by `_checkCameraAhead`.
-  static const double kNavMapCameraAheadMeters = 1500;
+  /// Half-width (metres) of the band around the route shown on the nav map.
+  static const double kNavMapCameraCorridor = 500;
+
+  // --- simulated drive (testing without GPS — walks the route) ------------
+  /// True while the simulated-drive timer is advancing the car along the
+  /// route. While on, real GPS fixes are ignored so the sim drives cleanly.
+  bool _simulating = false;
+
+  /// Along-route distance (m) the sim has driven so far.
+  double _simDist = 0;
+
+  /// 500 ms ticker that advances [_simDist] by ~8 m (~58 km/h).
+  Timer? _simTimer;
 
   /// Recompute [_routeCameras] — CAR-CENTRIC: cameras ahead of the car on
   /// the route, not a whole-route corridor. Called when the route is planned
   /// / re-planned / cleared and when camera alerts toggle on (during nav
   /// `_cameraAheadAsync` keeps it fresh each second).
+  /// Recompute [_routeCameras] for the current route — all cameras within
+  /// [kNavMapCameraCorridor] of the route polyline (background isolate, so a
+  /// long route never blocks the UI). Called when the route is planned /
+  /// re-planned / cleared and when camera alerts toggle on.
   Future<void> _refreshRouteCameras() async {
-    final cur = _current;
     final r = _route;
-    final near = (cur == null || r == null || r.geometry.length < 2)
+    final near = (r == null || r.geometry.length < 2)
         ? const <OfflineCamera>[]
-        : [
-            for (final a in await camerasAheadOnRoute(
-              cur,
-              r.geometry,
-              maxAheadMeters: kNavMapCameraAheadMeters,
-            ))
-              a.camera,
-          ];
+        : await camerasNearRoute(
+            r.geometry,
+            corridorMeters: kNavMapCameraCorridor,
+          );
     if (!mounted) return;
     setNavState(() => _routeCameras = near);
   }
@@ -456,6 +468,8 @@ class _NavigationPageState extends State<NavigationPage>
     // is idempotent, checks the graph is present before touching disk, defers
     // ~1 s, and the native load runs on a background executor.
     unawaited(_maybeLoadRoutingGraph());
+    // Load saved quick destinations (home / work) for one-tap navigation.
+    unawaited(QuickPlaces.instance.load());
     // Picture-in-Picture (Part C): wire up the native PiP-mode callback and
     // swap to the compact layout whenever the OS PiP window appears.
     PipService.instance.init();
@@ -519,6 +533,10 @@ class _NavigationPageState extends State<NavigationPage>
       smoothCamera = s.smoothCamera;
       simpleMode = s.simpleMode;
       cameraAlerts = s.cameraAlerts;
+      wakeWord = s.wakeWord;
+      debugPrint(
+        'SETTINGS: cameraAlerts=$cameraAlerts (persisted=$s.cameraAlerts)',
+      );
       setState(() => _offline = _offline || forceOffline);
       _flashOfflineBanner();
       // The camera index loads lazily when the user toggles camera alerts on

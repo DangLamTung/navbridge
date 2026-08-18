@@ -22,6 +22,21 @@ extension _NavWeather on _NavigationPageState {
     _weatherTimer = null;
   }
 
+  /// Make sure the AI has CURRENT weather: fetch it now if we've never
+  /// fetched (e.g. the AI chat was opened BEFORE a route started, so
+  /// [_startWeather] never ran). Returns fast when weather is already known
+  /// or there is no location yet (then the AI just can't know — no position).
+  Future<void> _ensureWeather() async {
+    if (_weather != null) return;
+    final cur = _current ?? _origin;
+    if (cur == null) return;
+    final w = await fetchWeather(
+      cur.latitude,
+      cur.longitude,
+    ).timeout(const Duration(seconds: 8), onTimeout: () => null);
+    if (mounted && w != null) setNavState(() => _weather = w);
+  }
+
   Future<void> _refreshWeather() async {
     final cur = _current ?? _origin;
     if (cur == null) return;
@@ -67,7 +82,10 @@ extension _NavWeather on _NavigationPageState {
   /// feeds the PiP camera chip (updated every nav fix, cheap — straight-line
   /// reject then a 1.5 km along-route window).
   void _checkCameraAhead(LatLng snapped, List<LatLng> geometry) {
-    if (!cameraAlerts) return; // camera alerts toggled off
+    if (!cameraAlerts) {
+      debugPrint('CAMERA: SKIPPED (cameraAlerts=$cameraAlerts)');
+      return;
+    }
     // Throttle the projection work to ~1 Hz.
     final now = DateTime.now();
     if (_lastCameraCheck != null &&
@@ -75,7 +93,10 @@ extension _NavWeather on _NavigationPageState {
       return;
     }
     _lastCameraCheck = now;
-    if (geometry.length < 2) return;
+    if (geometry.length < 2) {
+      debugPrint('CAMERA: SKIPPED (geometry ${geometry.length})');
+      return;
+    }
     // Fire-and-forget: the projection is a small local computation, run async
     // so a huge camera list never blocks the nav loop.
     unawaited(_cameraAheadAsync(snapped, geometry));
@@ -87,16 +108,18 @@ extension _NavWeather on _NavigationPageState {
       geometry,
       maxAheadMeters: 1500,
     );
+    debugPrint(
+      'CAMERA: ahead=${ahead.length} '
+      'next=${ahead.isEmpty ? 0 : ahead.first.routeMeters.toStringAsFixed(0)}m',
+    );
     if (!mounted) return;
     final next = ahead.isEmpty ? null : ahead.first;
     final sig = next == null ? '' : '${next.camera.lat},${next.camera.lng}';
+    // Only the PiP chip / voice alert uses this — the MAP camera layer is
+    // route-wide (see `_refreshRouteCameras`), not car-centric, so it stays
+    // visible for the whole trip instead of being empty most of the time.
     setNavState(() {
       _nextCamera = next;
-      // Nav-map camera layer: cameras near the car (ahead within the window),
-      // replacing the old whole-route corridor — the driver sees only the
-      // cameras they're actually approaching. Signature-guarded redraw in
-      // `_updateCameras` means this only re-adds circles when the set changes.
-      _routeCameras = [for (final a in ahead) a.camera];
     });
 
     // Warn once per camera when it's near (<= ~600 m ahead). Deduped so the

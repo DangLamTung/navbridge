@@ -35,8 +35,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _geocodingProvider = 'photon';
   String _routingEngine = 'auto';
   bool _smoothCamera = true;
+  bool _cameraAlerts = true;
   String _pipAspect = '34';
   bool _ridingMode = false;
+  final _wakeWordCtrl = TextEditingController();
 
   // --- AI assistant keys (encrypted on-device) ---
   bool _aiKeysLoaded = false;
@@ -57,8 +59,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _geocodingProvider = geocodingProvider;
       _routingEngine = routingEngine;
       _smoothCamera = smoothCamera;
+      _cameraAlerts = cameraAlerts;
       _pipAspect = pipAspect;
       _ridingMode = ridingMode;
+      _wakeWordCtrl.text = wakeWord;
     });
     onlineStream().listen((o) => setState(() => _online = o));
     isOnline().then((o) => setState(() => _online = o));
@@ -79,6 +83,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     pipAspect: pipAspect,
     ridingMode: ridingMode,
     simpleMode: simpleMode,
+    wakeWord: wakeWord,
   );
 
   Future<void> _toggleSimpleMode(bool v) async {
@@ -134,6 +139,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await saveSettings(_currentSettings());
   }
 
+  /// Edit the always-on voice assistant wake word (custom per device — set
+  /// whatever word this phone's recognizer actually hears).
+  Future<void> _editWakeWord() async {
+    final newVal = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Từ khoá đánh thức'),
+        content: TextField(
+          controller: _wakeWordCtrl,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'Ví dụ: nav, ok, hey'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Huỷ'),
+          ),
+          TextButton(
+            onPressed: () {
+              _wakeWordCtrl.text = _wakeWordCtrl.text.trim();
+              Navigator.of(ctx).pop(_wakeWordCtrl.text);
+            },
+            child: const Text('Lưu'),
+          ),
+        ],
+      ),
+    );
+    if (newVal == null || !mounted) return;
+    setState(() => wakeWord = newVal.isEmpty ? 'nav' : newVal);
+    await saveSettings(_currentSettings());
+  }
+
   void _setRoutingEngine(String v) {
     if (routingEngine == v) return;
     setState(() {
@@ -147,6 +184,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _smoothCamera = v;
       smoothCamera = v;
+    });
+    await saveSettings(_currentSettings());
+  }
+
+  /// Speed/red-light camera alerts (phạt nguội DB): voice announce when a
+  /// camera is ~600 m ahead + camera markers on the map. Shared with the
+  /// on-map videocam toggle; persisted.
+  Future<void> _setCameraAlerts(bool v) async {
+    setState(() {
+      _cameraAlerts = v;
+      cameraAlerts = v;
     });
     await saveSettings(_currentSettings());
   }
@@ -564,6 +612,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: _ridingMode,
                   onChanged: _setRidingMode,
                 ),
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(
+                    Icons.record_voice_over,
+                    color: kAppBlue,
+                    size: 22,
+                  ),
+                  title: const Text(
+                    'Từ khoá đánh thức (wake word)',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'Nói từ này để gọi trợ lý khi bật "nghe liên tục". '
+                    'Mặc định "nav" — đổi nếu máy không nhận.',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                  trailing: Text(
+                    '"${_wakeWordCtrl.text.isEmpty ? wakeWord : _wakeWordCtrl.text}"',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                  ),
+                  onTap: _editWakeWord,
+                ),
                 const SizedBox(height: 12),
                 const Text(
                   'Công cụ tìm đường (ô tô)',
@@ -623,6 +694,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ? 'Bản đồ trượt liên tục giữa các lần GPS (1 Hz) — '
                               'như Google Maps.'
                         : 'Bản đồ nhảy theo từng lần GPS (1 Hz).',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _cameraAlerts,
+                  onChanged: _setCameraAlerts,
+                  activeThumbColor: kAppBlue,
+                  activeTrackColor: const Color(0xFFD93025),
+                  secondary: const Icon(
+                    Icons.videocam,
+                    color: Color(0xFFD93025),
+                    size: 22,
+                  ),
+                  title: const Text(
+                    'Cảnh báo camera phạt nguội',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    _cameraAlerts
+                        ? 'Báo bằng giọng nói khi tới gần camera và hiển thị '
+                              'chấm camera trên bản đồ.'
+                        : 'Tắt cảnh báo + ẩn camera trên bản đồ.',
                     style: TextStyle(fontSize: 11, color: Colors.grey[700]),
                   ),
                 ),

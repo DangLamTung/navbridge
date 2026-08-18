@@ -139,10 +139,15 @@ class _AiChatPanelState extends State<AiChatPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final h = MediaQuery.of(context).size.height;
+    final media = MediaQuery.of(context);
+    final h = media.size.height;
+    final kb = media.viewInsets.bottom;
+    // When the virtual keyboard opens, shrink the sheet to the space above it
+    // so the input row (mic / text / send) is never hidden behind the keys.
+    final sheetH = kb > 0 ? (h - kb).clamp(0.0, h) : h * 0.7;
     return SafeArea(
       child: SizedBox(
-        height: h * 0.7,
+        height: sheetH,
         child: Column(
           children: [
             // Header.

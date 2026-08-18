@@ -15,6 +15,9 @@ import 'package:http/http.dart' as http;
 import 'package:navbridge/core/ai_config.dart';
 import 'package:navbridge/core/ai_key_store.dart';
 import 'package:navbridge/core/ai_memory.dart';
+import 'package:navbridge/services/osm_api.dart';
+import 'package:navbridge/services/poi_search.dart';
+import 'package:latlong2/latlong.dart';
 
 /// Everything the assistant knows about the current drive, injected into the
 /// prompt so answers are grounded in reality.
@@ -29,6 +32,10 @@ class AiContext {
   final String? weather; // "30°C, mưa nhẹ"
   final String? tripNotes; // trip name / stop count
 
+  /// The car's position as coordinates (used for REAL POI lookups like
+  /// nearby gas stations — not included in the visible prompt).
+  final LatLng? center;
+
   const AiContext({
     this.position,
     this.road,
@@ -39,6 +46,7 @@ class AiContext {
     this.cameraAhead,
     this.weather,
     this.tripNotes,
+    this.center,
   });
 
   /// A compact Vietnamese block appended to the user question.
@@ -96,8 +104,21 @@ class AiAssistant {
         ? sd!
         : AiConfig.deepSeekApiKey;
     final geminiKey = (sg?.isNotEmpty ?? false) ? sg! : AiConfig.geminiApiKey;
+    debugPrint(
+      'AI: keys → deepseek=${deepSeekKey.isNotEmpty} '
+      'gemini=${geminiKey.isNotEmpty} '
+      '(store deepseek=${sd?.isNotEmpty ?? false} gemini=${sg?.isNotEmpty ?? false})',
+    );
     final ctx = context?.toPrompt() ?? '';
-    final userText = ctx.isEmpty ? question : '$question$ctx';
+    var userText = ctx.isEmpty ? question : '$question$ctx';
+    // REAL gas-station grounding: when the driver asks about fuel, run the
+    // app's Overpass POI search and hand the actual stations (name + distance)
+    // to the model so it NEVER invents coordinates (LLMs can't see a map).
+    final center = context?.center;
+    if (_isGasQuery(question) && center != null) {
+      final gas = await _nearbyGasBlock(center);
+      if (gas.isNotEmpty) userText = '$userText$gas';
+    }
     final sys = await _systemPrompt();
     final trimmed = _trimHistory(history);
 
@@ -145,6 +166,73 @@ class AiAssistant {
     return start == 0 ? list : list.sublist(start);
   }
 
+  /// Does [q] ask about fuel / gas stations?
+  static final RegExp _gasRx = RegExp(
+    r'(xăng|xang|trạm xăng|đổ xăng|gas|petrol|fuel)',
+    caseSensitive: false,
+  );
+
+  bool _isGasQuery(String q) => _gasRx.hasMatch(q);
+
+  /// Query REAL nearby gas stations and format them as a Vietnamese block
+  /// for the model. Prefers Google Places (better Vietnam coverage) via
+  /// [googlePlaceTextSearch], falls back to Overpass [searchPois]. Empty
+  /// string when none found.
+  Future<String> _nearbyGasBlock(LatLng center) async {
+    // 1) Google Places Text Search (best VN data when a key is configured).
+    try {
+      final g = await googlePlaceTextSearch(
+        'trạm xăng',
+        center,
+        radius: 5000,
+        limit: 6,
+      );
+      if (g.isNotEmpty) {
+        debugPrint('AI: gas search → Google Places ${g.length} stations');
+        return _formatStations(g, center, 'Google Maps');
+      }
+    } catch (e) {
+      debugPrint('AI: Google gas search failed: $e');
+    }
+    // 2) Overpass amenity=fuel fallback.
+    try {
+      final pois = await searchPois(
+        PoiType.fuel,
+        center,
+        radius: 5000,
+        limit: 6,
+      );
+      if (pois.isEmpty) return '';
+      debugPrint('AI: gas search → Overpass ${pois.length} stations');
+      const Distance d = Distance();
+      final lines = <String>[];
+      for (final p in pois) {
+        final m = d.as(LengthUnit.Meter, center, p.pos).round();
+        lines.add('${p.name.isNotEmpty ? p.name : 'Trạm xăng'} (cách ~$m m)');
+      }
+      return '\n\nTrạm xăng gần đây (OSM thật — chỉ dùng danh sách này):\n- '
+          '${lines.join('\n- ')}';
+    } catch (e) {
+      debugPrint('AI: gas search failed: $e');
+      return '';
+    }
+  }
+
+  String _formatStations(
+    List<(String, double, double)> stations,
+    LatLng center,
+    String source,
+  ) {
+    const Distance d = Distance();
+    final lines = <String>[];
+    for (final (name, lat, lng) in stations) {
+      final m = d.as(LengthUnit.Meter, center, LatLng(lat, lng)).round();
+      lines.add('$name (cách ~$m m)');
+    }
+    return '\n\nTrạm xăng gần đây ($source thật — chỉ dùng danh sách này):\n- '
+        '${lines.join('\n- ')}';
+  }
+
   @visibleForTesting
   List<ChatTurn> trimHistoryForTest(List<ChatTurn> history) =>
       _trimHistory(history);
@@ -156,53 +244,80 @@ class AiAssistant {
     String sys,
     void Function(String)? onToken,
   ) async {
-    final res = await http
-        .post(
-          Uri.parse(AiConfig.deepSeekEndpoint),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $key',
-          },
-          body: jsonEncode({
-            'model': AiConfig.deepSeekModel,
-            'stream': true,
-            'messages': [
-              {'role': 'system', 'content': sys},
-              for (final t in history)
-                {'role': t.isUser ? 'user' : 'assistant', 'content': t.text},
-              {'role': 'user', 'content': userText},
-            ],
-          }),
-        )
-        .timeout(const Duration(seconds: 60));
-    if (res.statusCode != 200) {
-      throw Exception('DeepSeek lỗi ${res.statusCode}: ${res.body}');
-    }
-    // SSE: "data: {...}\n\n" lines; accumulate deltas.
-    final buffer = StringBuffer();
-    final lines = const LineSplitter().convert(utf8.decode(res.bodyBytes));
-    for (final line in lines) {
-      if (!line.startsWith('data:')) continue;
-      final payload = line.substring(5).trim();
-      if (payload.isEmpty || payload == '[DONE]') continue;
-      try {
-        final j = jsonDecode(payload) as Map<String, dynamic>;
-        final delta = (j['choices'] as List? ?? const []);
-        if (delta.isEmpty) continue;
-        final c = (delta.first as Map? ?? const {})['delta'] as Map?;
-        final piece = c?['content'] as String? ?? '';
-        if (piece.isNotEmpty) {
-          buffer.write(piece);
-          onToken?.call(piece);
-        }
-      } catch (_) {
-        // skip malformed SSE frames
+    final request = http.Request('POST', Uri.parse(AiConfig.deepSeekEndpoint))
+      ..headers['Content-Type'] = 'application/json'
+      ..headers['Authorization'] = 'Bearer $key'
+      ..body = jsonEncode({
+        'model': AiConfig.deepSeekModel,
+        'stream': true,
+        'messages': [
+          {'role': 'system', 'content': sys},
+          for (final t in history)
+            {'role': t.isUser ? 'user' : 'assistant', 'content': t.text},
+          {'role': 'user', 'content': userText},
+        ],
+      });
+    final client = http.Client();
+    try {
+      final res = await client
+          .send(request)
+          .timeout(const Duration(seconds: 60));
+      if (res.statusCode != 200) {
+        final errBody = await res.stream.bytesToString();
+        throw Exception('DeepSeek lỗi ${res.statusCode}: $errBody');
       }
+      // SSE: "data: {...}\n\n" lines, read incrementally so tokens stream.
+      final buffer = StringBuffer();
+      final lineBuf = StringBuffer();
+      await for (final chunk in res.stream.transform(utf8.decoder)) {
+        lineBuf.write(chunk);
+        var s = lineBuf.toString();
+        var nl = s.indexOf('\n');
+        while (nl != -1) {
+          _consumeDeepSeekLine(s.substring(0, nl), buffer, onToken);
+          s = s.substring(nl + 1);
+          nl = s.indexOf('\n');
+        }
+        lineBuf
+          ..clear()
+          ..write(s);
+      }
+      if (lineBuf.isNotEmpty) {
+        _consumeDeepSeekLine(lineBuf.toString(), buffer, onToken);
+      }
+      if (buffer.isEmpty) {
+        throw Exception('DeepSeek không trả về nội dung.');
+      }
+      return AiReply(buffer.toString(), 'deepseek');
+    } on TimeoutException {
+      throw Exception('DeepSeek hết thời gian chờ (60s). Thử lại.');
+    } finally {
+      client.close();
     }
-    if (buffer.isEmpty) {
-      throw Exception('DeepSeek không trả về nội dung.');
+  }
+
+  /// Parse one SSE "data: …" line from DeepSeek and stream any content token.
+  void _consumeDeepSeekLine(
+    String line,
+    StringBuffer buffer,
+    void Function(String)? onToken,
+  ) {
+    if (!line.startsWith('data:')) return;
+    final payload = line.substring(5).trim();
+    if (payload.isEmpty || payload == '[DONE]') return;
+    try {
+      final j = jsonDecode(payload) as Map<String, dynamic>;
+      final delta = (j['choices'] as List? ?? const []);
+      if (delta.isEmpty) return;
+      final c = (delta.first as Map? ?? const {})['delta'] as Map?;
+      final piece = c?['content'] as String? ?? '';
+      if (piece.isNotEmpty) {
+        buffer.write(piece);
+        onToken?.call(piece);
+      }
+    } catch (_) {
+      // skip malformed SSE frames
     }
-    return AiReply(buffer.toString(), 'deepseek');
   }
 
   Future<AiReply> _askGemini(
@@ -212,49 +327,172 @@ class AiAssistant {
     String sys,
     void Function(String)? onToken,
   ) async {
-    final res = await http
-        .post(
-          Uri.parse('${AiConfig.geminiEndpoint}?key=$key'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'systemInstruction': {
-              'parts': [
-                {'text': sys},
-              ],
-            },
-            'contents': [
-              for (final t in history)
-                {
-                  'role': t.isUser ? 'user' : 'model',
-                  'parts': [
-                    {'text': t.text},
-                  ],
-                },
-              {
-                'role': 'user',
-                'parts': [
-                  {'text': userText},
-                ],
-              },
+    final body = jsonEncode({
+      'systemInstruction': {
+        'parts': [
+          {'text': sys},
+        ],
+      },
+      'contents': [
+        for (final t in history)
+          {
+            'role': t.isUser ? 'user' : 'model',
+            'parts': [
+              {'text': t.text},
             ],
-            'generationConfig': {'temperature': 0.6},
-          }),
-        )
-        .timeout(const Duration(seconds: 60));
-    if (res.statusCode != 200) {
-      throw Exception('Gemini lỗi ${res.statusCode}: ${res.body}');
+          },
+        {
+          'role': 'user',
+          'parts': [
+            {'text': userText},
+          ],
+        },
+      ],
+      'generationConfig': {'temperature': 0.6},
+    });
+
+    // Try newer models first, falling back when a model id is unavailable for
+    // this key (404 / "not found") OR overloaded (5xx / 429 — a just-launched
+    // model like 3.7-flash is often briefly overloaded). Uses
+    // streamGenerateContent?alt=sse so tokens stream into the UI live.
+    var lastSc = 503;
+    var lastBody = '{"error":{"message":"model overloaded"}}';
+    for (final model in AiConfig.geminiModels) {
+      final uri = Uri.parse(
+        '${AiConfig.geminiEndpointFor(model)}?alt=sse&key=$key',
+      );
+      final request = http.Request('POST', uri)
+        ..headers['Content-Type'] = 'application/json'
+        ..body = body;
+      final client = http.Client();
+      http.StreamedResponse streamed;
+      try {
+        streamed = await client
+            .send(request)
+            .timeout(const Duration(seconds: 60));
+      } on TimeoutException {
+        client.close();
+        throw Exception(
+          'Gemini hết thời gian chờ (60s). Thử lại hoặc dùng DeepSeek.',
+        );
+      }
+      if (streamed.statusCode != 200) {
+        final errBody = await streamed.stream.bytesToString();
+        client.close();
+        lastSc = streamed.statusCode;
+        lastBody = errBody;
+        debugPrint(
+          'AI: GEMINI HTTP ${streamed.statusCode} model=$model body=$errBody',
+        );
+        final sc = streamed.statusCode;
+        final fallback =
+            sc == 404 ||
+            sc >= 500 ||
+            sc == 429 ||
+            errBody.toLowerCase().contains('not found');
+        if (fallback) continue; // try the next model id down the chain
+        throw Exception(_friendlyGeminiError(sc, errBody));
+      }
+
+      final buffer = StringBuffer();
+      final lineBuf = StringBuffer();
+      try {
+        await for (final chunk in streamed.stream.transform(utf8.decoder)) {
+          lineBuf.write(chunk);
+          var s = lineBuf.toString();
+          var nl = s.indexOf('\n');
+          while (nl != -1) {
+            _consumeGeminiLine(s.substring(0, nl), buffer, onToken);
+            s = s.substring(nl + 1);
+            nl = s.indexOf('\n');
+          }
+          lineBuf
+            ..clear()
+            ..write(s);
+        }
+        if (lineBuf.isNotEmpty) {
+          _consumeGeminiLine(lineBuf.toString(), buffer, onToken);
+        }
+      } finally {
+        client.close();
+      }
+      if (buffer.isEmpty) {
+        throw Exception('Gemini không trả về nội dung.');
+      }
+      return AiReply(buffer.toString(), 'gemini');
     }
-    final j = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-    final candidates = (j['candidates'] as List? ?? const []);
-    if (candidates.isEmpty) throw Exception('Gemini không trả về nội dung.');
-    final parts =
-        (candidates.first as Map? ?? const {})['content']?['parts'] as List? ??
-        const [];
-    final text = parts
-        .map((p) => (p as Map? ?? const {})['text'] as String? ?? '')
-        .join();
-    if (text.isEmpty) throw Exception('Gemini không trả về nội dung.');
-    onToken?.call(text); // Gemini here is non-streamed — one token = full text
-    return AiReply(text, 'gemini');
+    throw Exception(_friendlyGeminiError(lastSc, lastBody));
+  }
+
+  /// Parse one SSE "data: …" line from Gemini and stream any text token out.
+  void _consumeGeminiLine(
+    String line,
+    StringBuffer buffer,
+    void Function(String)? onToken,
+  ) {
+    if (!line.startsWith('data:')) return;
+    final payload = line.substring(5).trim();
+    if (payload.isEmpty || payload == '[DONE]') return;
+    try {
+      final j = jsonDecode(payload) as Map<String, dynamic>;
+      final cands = (j['candidates'] as List? ?? const []);
+      if (cands.isEmpty) return;
+      final parts =
+          (cands.first as Map? ?? const {})['content']?['parts'] as List? ??
+          const [];
+      for (final p in parts) {
+        final piece = (p as Map? ?? const {})['text'] as String? ?? '';
+        if (piece.isNotEmpty) {
+          buffer.write(piece);
+          onToken?.call(piece);
+        }
+      }
+    } catch (_) {
+      // Skip malformed SSE frames.
+    }
+  }
+
+  /// Translate a Gemini API failure into a driver-friendly Vietnamese message
+  /// (key invalid / API not enabled / region-blocked / model / quota), so the
+  /// user knows WHAT to fix instead of a raw JSON dump.
+  String _friendlyGeminiError(int status, String body) {
+    String msg = '';
+    try {
+      final j = jsonDecode(body) as Map<String, dynamic>;
+      msg = ((j['error'] as Map? ?? const {})['message'] ?? '') as String;
+    } catch (_) {}
+    final lower = msg.toLowerCase();
+    if (lower.contains('api key not valid') ||
+        lower.contains('api key expired') ||
+        lower.contains('invalid api key')) {
+      return 'Gemini lỗi: khoá API không hợp lệ hoặc đã hết hạn. Vào ⚙ Cài đặt '
+          '→ Trợ lý AI → kiểm tra lại khoá Gemini (tạo mới tại '
+          'aistudio.google.com/apikey).';
+    }
+    if (lower.contains('unsupported country') ||
+        lower.contains('region') ||
+        lower.contains('territory')) {
+      return 'Gemini lỗi: Google không hỗ trợ Gemini API ở quốc gia/khu vực này '
+          '(thường chặn Việt Nam). Nên dùng DeepSeek (mặc định) hoặc đăng nhập '
+          'bằng tài khoản Google ở khu vực được hỗ trợ.';
+    }
+    if (lower.contains('not found')) {
+      return 'Gemini lỗi: mô hình ${AiConfig.geminiModel} không có sẵn cho khoá '
+          'này (kiểm tra quyền truy cập mô hình của khoá).';
+    }
+    if (lower.contains('api has not been used') ||
+        lower.contains('not been enabled') ||
+        lower.contains('permission')) {
+      return 'Gemini lỗi: chưa bật "Generative Language API" cho project của '
+          'khoá này (Google Cloud Console → APIs & Services → bật Generative '
+          'Language API).';
+    }
+    if (status == 429 ||
+        lower.contains('quota') ||
+        lower.contains('rate limit')) {
+      return 'Gemini lỗi: vượt quota / giới hạn tốc độ. Thử lại sau hoặc dùng '
+          'DeepSeek.';
+    }
+    return 'Gemini lỗi $status: ${msg.isEmpty ? body : msg}';
   }
 }

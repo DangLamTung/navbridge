@@ -116,6 +116,9 @@ extension _NavGps on _NavigationPageState {
   /// Shared GPS-fix handler (stream fixes + the fast seed). Updates the map,
   /// the engine and (in nav mode) the ETA/voice/clock.
   void _onGpsFix(Position p) {
+    // Simulated drive drives the route itself — ignore real (stationary) GPS
+    // so it can't yank the car back to the phone's location (T9).
+    if (_simulating) return;
     final pos = LatLng(p.latitude, p.longitude);
     _current = pos;
     _heading = p.heading.isNaN ? null : p.heading;
