@@ -92,7 +92,6 @@ class _OfflineScreenState extends State<OfflineScreen> {
     forceOffline: forceOffline,
     dataSource: dataSource,
     vehicleType: vehicleType,
-    speedOverride: speedOverride,
     geocodingProvider: geocodingProvider,
     routingEngine: routingEngine,
     smoothCamera: smoothCamera,

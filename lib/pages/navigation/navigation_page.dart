@@ -559,14 +559,13 @@ class _NavigationPageState extends State<NavigationPage>
       _applyConnectivity(on);
     });
     // Restore the persisted offline/online mode + data-source choice + the
-    // navigation preferences (vehicle / speed override / geocoder / routing
-    // engine / smooth camera).
+    // navigation preferences (vehicle / geocoder / routing engine / smooth
+    // camera).
     loadSettings().then((s) {
       if (!mounted) return;
       forceOffline = s.forceOffline;
       dataSource = s.dataSource;
       vehicleType = s.vehicleType;
-      speedOverride = s.speedOverride;
       geocodingProvider = s.geocodingProvider;
       routingEngine = s.routingEngine;
       smoothCamera = s.smoothCamera;

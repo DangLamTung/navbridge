@@ -313,11 +313,7 @@ extension _NavGps on _NavigationPageState {
     if (_roadLoading) return;
     setNavState(() => _roadLoading = true);
     try {
-      final r = await fetchRoadInfo(
-        pos,
-        vehicle: vehicleType,
-        override: speedOverride,
-      );
+      final r = await fetchRoadInfo(pos, vehicle: vehicleType);
       if (!mounted) return;
       setNavState(() => _roadInfo = r);
     } catch (_) {
@@ -335,11 +331,7 @@ extension _NavGps on _NavigationPageState {
     if (_roadLoading) return; // don't stack with the main fetch
     setNavState(() => _roadLoading = true);
     try {
-      final r = await fetchRoadInfo(
-        pos,
-        vehicle: vehicleType,
-        override: speedOverride,
-      );
+      final r = await fetchRoadInfo(pos, vehicle: vehicleType);
       if (mounted && r != null) setNavState(() => _roadInfo = r);
     } catch (_) {
       // keep the current (graph/statutory) value
@@ -366,10 +358,14 @@ extension _NavGps on _NavigationPageState {
     final ms = (msRaw is num && msRaw.isFinite && msRaw >= 5 && msRaw <= 200)
         ? msRaw.toInt()
         : null;
-    // Vehicle-aware statutory fallback + optional manual override (settings).
-    final limit = speedOverride > 0
-        ? speedOverride
-        : (ms ?? statutoryLimit(highway, vehicle: vehicleType));
+    // Vehicle-aware statutory fallback. The graph's max_speed is a CAR tag,
+    // so for motorbikes / trucks it only tightens the statutory class default
+    // — a motorbike never inherits the car's posted limit.
+    final limit = effectiveLimit(
+      highway,
+      vehicle: vehicleType,
+      taggedKmh: ms ?? 0,
+    );
     return RoadInfo(
       name: (g['name'] ?? '') as String,
       highway: highway,

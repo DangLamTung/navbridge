@@ -557,7 +557,6 @@ extension _NavBars on _NavigationPageState {
           forceOffline: s.forceOffline,
           dataSource: s.dataSource,
           vehicleType: s.vehicleType,
-          speedOverride: s.speedOverride,
           geocodingProvider: s.geocodingProvider,
           routingEngine: s.routingEngine,
           smoothCamera: s.smoothCamera,

@@ -62,4 +62,64 @@ void main() {
       expect(classInfo('unknown_class'), ('Đường', 50));
     });
   });
+
+  group('statutoryLimit', () {
+    test('per-vehicle defaults differ by road class', () {
+      // Cars: motorway 120, primary 80.
+      expect(statutoryLimit('motorway', vehicle: 'car'), 120);
+      expect(statutoryLimit('primary', vehicle: 'car'), 80);
+      // Motorbikes are capped lower (and banned on motorways — capped, not 0).
+      expect(statutoryLimit('motorway', vehicle: 'motorbike'), 80);
+      expect(statutoryLimit('primary', vehicle: 'motorbike'), 70);
+      expect(statutoryLimit('secondary', vehicle: 'motorbike'), 60);
+      // Trucks lower still.
+      expect(statutoryLimit('primary', vehicle: 'truck'), 60);
+    });
+  });
+
+  group('effectiveLimit', () {
+    test('car uses the tagged posted limit when present', () {
+      expect(effectiveLimit('primary', vehicle: 'car', taggedKmh: 80), 80);
+      expect(effectiveLimit('primary', vehicle: 'car', taggedKmh: 50), 50);
+    });
+
+    test('car falls back to the statutory class default when untagged', () {
+      expect(effectiveLimit('primary', vehicle: 'car'), 80);
+      expect(effectiveLimit('motorway', vehicle: 'car'), 120);
+    });
+
+    test('motorbike never inherits the car posted limit (OSM is car data)', () {
+      // A primary posted 80 for cars must NOT show 80 for a motorbike —
+      // the VN statutory motorbike default (70) wins.
+      expect(
+        effectiveLimit('primary', vehicle: 'motorbike', taggedKmh: 80),
+        70,
+      );
+      expect(
+        effectiveLimit('motorway', vehicle: 'motorbike', taggedKmh: 120),
+        80,
+      );
+    });
+
+    test(
+      'motorbike is capped by a posted limit LOWER than its statutory default',
+      () {
+        // A residential posted 30 applies to motorbikes too → 30, not 40.
+        expect(
+          effectiveLimit('residential', vehicle: 'motorbike', taggedKmh: 30),
+          30,
+        );
+      },
+    );
+
+    test('truck behaves like motorbike (statutory, capped by lower tag)', () {
+      expect(effectiveLimit('primary', vehicle: 'truck', taggedKmh: 80), 60);
+      expect(effectiveLimit('secondary', vehicle: 'truck', taggedKmh: 40), 40);
+    });
+
+    test('untagged non-car vehicles use their statutory default', () {
+      expect(effectiveLimit('trunk', vehicle: 'motorbike'), 80);
+      expect(effectiveLimit('trunk', vehicle: 'truck'), 70);
+    });
+  });
 }

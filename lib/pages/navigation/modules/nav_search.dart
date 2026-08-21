@@ -697,7 +697,6 @@ extension _NavSearch on _NavigationPageState {
         forceOffline: s.forceOffline,
         dataSource: s.dataSource,
         vehicleType: v,
-        speedOverride: s.speedOverride,
         geocodingProvider: s.geocodingProvider,
         routingEngine: s.routingEngine,
         smoothCamera: s.smoothCamera,

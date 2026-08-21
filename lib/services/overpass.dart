@@ -10,6 +10,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
@@ -138,6 +139,25 @@ int statutoryLimit(String highway, {String vehicle = 'car'}) {
   return table[highway] ?? 50;
 }
 
+/// Effective speed limit for [vehicle] on [highway], given an optional OSM
+/// `maxspeed` tag ([taggedKmh], 0 = untagged / unusable).
+///
+/// OSM `maxspeed` is a CAR-oriented tag: for a car it IS the posted limit,
+/// with the statutory class default as fallback. For motorbikes / trucks the
+/// car limit only ever TIGHTENS the vehicle's statutory class default — it
+/// never lifts it (a motorbike must not show 80 km/h just because the car
+/// lane is posted 80), so non-car vehicles use the VN statutory per-class
+/// table, capped by a lower posted sign.
+int effectiveLimit(
+  String highway, {
+  required String vehicle,
+  int taggedKmh = 0,
+}) {
+  final statutory = statutoryLimit(highway, vehicle: vehicle);
+  if (taggedKmh <= 0) return statutory;
+  return vehicle == 'car' ? taggedKmh : math.min(statutory, taggedKmh);
+}
+
 /// Parse a raw OSM maxspeed tag into km/h: "50", "50 km/h", "30 mph",
 /// "15 knots", "none", … Unknown/non-numeric values return [fallback].
 ///
@@ -183,13 +203,11 @@ final _Cache _cache = _Cache();
 /// Fetch the road under [pos]. Reuses the cached result while the fix is
 /// within ~25 m of the last query (a road is ~10 m wide, so that means we are
 /// still on the same road). Returns the last known value on failure.
-/// [vehicle] selects the statutory fallback (car/motorbike/truck); a positive
-/// [override] (km/h) wins over both the tagged maxspeed and the fallback.
-Future<RoadInfo?> fetchRoadInfo(
-  LatLng pos, {
-  String vehicle = 'car',
-  int override = 0,
-}) async {
+/// [vehicle] selects the statutory fallback (car/motorbike/truck). OSM
+/// `maxspeed` is a CAR-oriented tag: for a car it IS the posted limit; for
+/// motorbikes / trucks it only tightens the vehicle's statutory class
+/// default (it never lifts it).
+Future<RoadInfo?> fetchRoadInfo(LatLng pos, {String vehicle = 'car'}) async {
   final cached = _cache.last;
   if (cached != null && _cache.at != null) {
     if (distanceMeters(pos, _cache.at!) < 25) return cached;
@@ -249,7 +267,8 @@ Future<RoadInfo?> fetchRoadInfo(
   final tags = (best['tags'] as Map<String, dynamic>? ?? {});
   final highway = (tags['highway'] ?? '') as String;
   final (label, _) = classInfo(highway);
-  final fallback = statutoryLimit(highway, vehicle: vehicle);
+  final tagged = _effectiveMaxspeed(tags);
+  final taggedKmh = tagged == null ? 0 : parseMaxspeed(tagged, 0);
   final info = RoadInfo(
     name: (tags['name'] ?? '') as String,
     highway: highway,
@@ -257,11 +276,9 @@ Future<RoadInfo?> fetchRoadInfo(
     // variants. `maxspeed:forward` is usually a superset of `maxspeed` on
     // dual carriageways (both directions are posted separately), but the
     // plain tag is the more reliable base value, so it wins when present.
-    maxspeed: _effectiveMaxspeed(tags),
+    maxspeed: tagged,
     label: label,
-    speedLimit: override > 0
-        ? override
-        : parseMaxspeed(_effectiveMaxspeed(tags), fallback),
+    speedLimit: effectiveLimit(highway, vehicle: vehicle, taggedKmh: taggedKmh),
   );
   _cache.last = info;
   _cache.at = pos;

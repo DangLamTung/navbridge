@@ -261,11 +261,6 @@ bool forceOffline = false;
 /// Persisted; applied on top of the road's OSM `maxspeed` (when tagged).
 String vehicleType = 'car';
 
-/// Manual speed-limit override in km/h (0 = use road maxspeed / statutory).
-/// Overrides both the tagged maxspeed and the vehicle statutory default, and
-/// is sent to the ESP32 display as the POS frame speed-limit byte.
-int speedOverride = 0;
-
 /// Online geocoding provider: 'photon' (Komoot, default — free, no key,
 /// faster + better Vietnamese results) | 'nominatim' | 'vietmap' (Vietnam-
 /// focused search — needs VIETMAP_API_KEY).

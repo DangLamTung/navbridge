@@ -31,7 +31,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _online = true;
   bool _simpleMode = false;
   String _vehicleType = 'car';
-  int _speedOverride = 0;
   String _geocodingProvider = 'photon';
   String _routingEngine = 'auto';
   bool _smoothCamera = true;
@@ -55,7 +54,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _simpleMode = simpleMode;
       _vehicleType = vehicleType;
-      _speedOverride = speedOverride;
       _geocodingProvider = geocodingProvider;
       _routingEngine = routingEngine;
       _smoothCamera = smoothCamera;
@@ -75,7 +73,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     forceOffline: forceOffline,
     dataSource: dataSource,
     vehicleType: vehicleType,
-    speedOverride: speedOverride,
     geocodingProvider: geocodingProvider,
     routingEngine: routingEngine,
     smoothCamera: smoothCamera,
@@ -107,15 +104,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       vehicleType = v;
       _vehicleType = v;
-    });
-    unawaited(saveSettings(_currentSettings()));
-  }
-
-  void _setSpeedOverride(int v) {
-    if (speedOverride == v) return;
-    setState(() {
-      speedOverride = v;
-      _speedOverride = v;
     });
     unawaited(saveSettings(_currentSettings()));
   }
@@ -510,47 +498,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                   ],
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Giới hạn tốc độ (km/h)',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    ChoiceChip(
-                      label: const Text('Tự động'),
-                      selected: _speedOverride == 0,
-                      onSelected: (_) => _setSpeedOverride(0),
-                      visualDensity: VisualDensity.compact,
-                      selectedColor: kAppBlue,
-                      labelStyle: TextStyle(
-                        color: _speedOverride == 0 ? Colors.white : null,
-                        fontSize: 12,
-                      ),
-                    ),
-                    for (final v in const [40, 50, 60, 70, 80, 90, 100, 120])
-                      ChoiceChip(
-                        label: Text('$v'),
-                        selected: _speedOverride == v,
-                        onSelected: (_) => _setSpeedOverride(v),
-                        visualDensity: VisualDensity.compact,
-                        selectedColor: kAppBlue,
-                        labelStyle: TextStyle(
-                          color: _speedOverride == v ? Colors.white : null,
-                          fontSize: 12,
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Ghi đè giới hạn trên mọi đường (0 = theo biển báo / loại '
-                  'đường). Được gửi tới màn hình ESP32.',
-                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 12),
                 const Text(

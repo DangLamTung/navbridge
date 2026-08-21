@@ -15,9 +15,6 @@ class AppSettings {
   /// Vehicle used for speed-limit defaults: 'car' | 'motorbike' | 'truck'.
   final String vehicleType;
 
-  /// Manual speed-limit override in km/h (0 = use road maxspeed / statutory).
-  final int speedOverride;
-
   /// Online geocoding provider: 'photon' (Komoot, default) | 'nominatim' |
   /// 'vietmap' (Vietnamese-focused search — needs Vietmap API keys).
   final String geocodingProvider;
@@ -58,7 +55,6 @@ class AppSettings {
     this.forceOffline = false,
     this.dataSource = 'osm',
     this.vehicleType = 'car',
-    this.speedOverride = 0,
     this.geocodingProvider = 'photon',
     this.routingEngine = 'auto',
     this.smoothCamera = true,
@@ -74,7 +70,6 @@ class AppSettings {
     'forceOffline': forceOffline,
     'dataSource': dataSource,
     'vehicleType': vehicleType,
-    'speedOverride': speedOverride,
     'geocodingProvider': geocodingProvider,
     'routingEngine': routingEngine,
     'smoothCamera': smoothCamera,
@@ -104,7 +99,6 @@ Future<AppSettings> loadSettings() async {
       forceOffline: (j['forceOffline'] ?? false) as bool,
       dataSource: (j['dataSource'] ?? 'osm') as String,
       vehicleType: (j['vehicleType'] ?? 'car') as String,
-      speedOverride: (j['speedOverride'] ?? 0) as int,
       geocodingProvider: (j['geocodingProvider'] ?? 'photon') as String,
       routingEngine: (j['routingEngine'] ?? 'auto') as String,
       smoothCamera: (j['smoothCamera'] ?? true) as bool,
