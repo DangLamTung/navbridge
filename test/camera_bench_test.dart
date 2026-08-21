@@ -24,7 +24,9 @@ void main() {
     );
     // Generous bound (original code blocked the UI thread for ~34 s on this
     // workload — 1,800 cameras × 19,000 polyline points on the main isolate).
-    // 3 s still catches a regression without flaking on slow CI machines.
-    expect(sw.elapsedMilliseconds, lessThan(3000));
+    // 8 s still catches a regression (~4× below the 34 s failure) without
+    // flaking when the full suite runs test files in parallel and saturates
+    // the CPU (the wall clock ~2.5× slows under concurrent load).
+    expect(sw.elapsedMilliseconds, lessThan(8000));
   });
 }

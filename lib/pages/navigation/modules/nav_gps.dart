@@ -66,11 +66,15 @@ extension _NavGps on _NavigationPageState {
     unawaited(_seedGpsFix());
     _gpsSub =
         Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
+          locationSettings: AndroidSettings(
             accuracy: LocationAccuracy.high,
             // Every fix (no distance filter) → the nav UI, voice and the clock
             // update as fast as the sensor reports, instead of every 3 m.
             distanceFilter: 0,
+            // Fix rate: geolocator_android defaults to a 5000 ms interval when
+            // null — a fix every 5 s makes the car/puck look like it 'runs too
+            // slow'. Request 500 ms (2 Hz) so navigation responds in real time.
+            intervalDuration: const Duration(milliseconds: 500),
           ),
         ).listen(
           _onGpsFix,

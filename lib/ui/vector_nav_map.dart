@@ -303,6 +303,9 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// it never drifts away from the real position.
   ll.LatLng? _lastRealFix;
   double _drSpeedMps = 0; // raw fused speed estimate (m/s)
+  ll.LatLng? _prevRawFix; // previous raw fix (finite-difference speed fallback)
+  double _lastGlideSpeedMps = 0; // EMA'd fallback glide speed (m/s)
+  DateTime _lastFixTime = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _drLastFix = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastCamStep = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastCamMove = DateTime.fromMillisecondsSinceEpoch(0);
@@ -770,9 +773,17 @@ class _VectorNavMapState extends State<VectorNavMap>
     return '#${to2(r)}${to2(g)}${to2(b)}';
   }
 
-  Future<void> _addRoute() async {
+  /// Monotonic generation for the route line. [_updateRoute] bumps it each
+  /// time the route changes; an in-flight [_addRoute] that finishes with a
+  /// stale generation removes its own lines and returns. Without this,
+  /// overlapping async adds (a re-route landing while the previous addLine was
+  /// still in flight on the slow itel GPU) orphaned the old polyline on the
+  /// map — the "old path stays after running / re-routing" bug.
+  int _routeGen = 0;
+
+  Future<void> _addRoute(int gen) async {
     final ctrl = _controller;
-    if (ctrl == null) return;
+    if (ctrl == null || gen != _routeGen) return;
     final pts = _drawnRoute()
         .map((p) => LatLng(p.latitude, p.longitude))
         .toList();
@@ -780,18 +791,30 @@ class _VectorNavMapState extends State<VectorNavMap>
     // Bold Vietmap-style route: thick white casing under a solid blue line
     // (the navigation route is drawn large so it reads clearly at 320dpi).
     try {
-      _casing = await ctrl.addLine(
+      final casing = await ctrl.addLine(
         LineOptions(geometry: pts, lineColor: '#ffffff', lineWidth: 14),
       );
-      _routeLine = await ctrl.addLine(
+      if (!mounted || gen != _routeGen) {
+        // A newer route replaced us mid-flight — drop what we drew.
+        ctrl.removeLine(casing);
+        return;
+      }
+      final routeLine = await ctrl.addLine(
         LineOptions(geometry: pts, lineColor: '#1A73E8', lineWidth: 10),
       );
-      _lastRouteSig = _routeSignature();
+      if (!mounted || gen != _routeGen) {
+        ctrl
+          ..removeLine(casing)
+          ..removeLine(routeLine);
+        return;
+      }
+      _casing = casing;
+      _routeLine = routeLine;
     } catch (e) {
       // Style/annotation manager transiently unavailable (e.g. emulator GPU
       // reset) — the route line is re-added on the next style-loaded event.
       debugPrint('VECTORMAP: add route skipped (map reloading): $e');
-      _lastRouteSig = null;
+      if (gen == _routeGen) _lastRouteSig = null;
     }
   }
 
@@ -1127,6 +1150,9 @@ class _VectorNavMapState extends State<VectorNavMap>
     if (ctrl == null) return;
     if (_lastRouteSig != _routeSignature()) {
       // Drop the old overlays and rebuild (route change = new geometry).
+      // Bump the generation first so any in-flight _addRoute can't orphan a
+      // stale line (see [_addRoute]).
+      _routeGen++;
       for (final l in _trafficLines) {
         ctrl.removeLine(l);
       }
@@ -1143,7 +1169,7 @@ class _VectorNavMapState extends State<VectorNavMap>
         ctrl.removeLine(_routeLine!);
         _routeLine = null;
       }
-      _addRoute();
+      unawaited(_addRoute(_routeGen));
       _lastRouteSig = _routeSignature();
     }
   }
@@ -1528,6 +1554,32 @@ class _VectorNavMapState extends State<VectorNavMap>
     );
   }
 
+  /// Speed used for the between-fix camera/puck glide. Prefers the receiver's
+  /// own speed estimate; falls back to a smoothed finite difference over
+  /// consecutive fixes so the car keeps gliding (not freezing between fixes)
+  /// even when the Android fused provider reports speed = 0 — which is what
+  /// made the GPS look like it "runs too slow" after the Kalman was removed.
+  double _glideSpeedMps(ll.LatLng fix) {
+    final reported = widget.speedMps;
+    if (reported != null && !reported.isNaN && reported > 0.5) {
+      _lastGlideSpeedMps = reported;
+      return reported;
+    }
+    final now = DateTime.now();
+    final dtS = now.difference(_lastFixTime).inMilliseconds / 1000.0;
+    final prev = _prevRawFix;
+    _prevRawFix = fix;
+    _lastFixTime = now;
+    if (prev != null && dtS > 0.05 && dtS < 5) {
+      final v = _distMeters(prev, fix) / dtS;
+      if (v.isFinite && v < 60) {
+        // Light EMA so a single bad fix can't spike the glide.
+        _lastGlideSpeedMps = _lastGlideSpeedMps * 0.6 + v * 0.4;
+      }
+    }
+    return _lastGlideSpeedMps;
+  }
+
   @override
   void didUpdateWidget(VectorNavMap old) {
     super.didUpdateWidget(old);
@@ -1576,7 +1628,7 @@ class _VectorNavMapState extends State<VectorNavMap>
       // (was: _lk.update(newCur, accuracy: widget.gpsAccuracy, ...))
       _lastRealFix = newCur;
       _drPos = _snapToRoute(newCur);
-      _drSpeedMps = widget.speedMps ?? 0;
+      _drSpeedMps = _glideSpeedMps(newCur);
       _drLastFix = now;
     }
     _followPosition();
@@ -1601,6 +1653,9 @@ class _VectorNavMapState extends State<VectorNavMap>
   }
 
   void _resetAnnotations() {
+    // Invalidate any in-flight _addRoute before the style is swapped so it
+    // can't add lines to the new style and orphan them.
+    _routeGen++;
     _lastRouteSig = null;
     _lastPoiSig = null;
     _lastSearchSig = null;
@@ -1745,7 +1800,8 @@ class _VectorNavMapState extends State<VectorNavMap>
           onMapClick: (point, _) => _maybeTapPoi(point),
           onStyleLoadedCallback: () async {
             debugPrint('VECTORMAP: style loaded — adding route');
-            await _addRoute();
+            _routeGen++;
+            await _addRoute(_routeGen);
             _followPosition();
             // The style reload reset the camera — re-apply the 3D tilt so
             // the toggle's effect survives (and works while parked).
