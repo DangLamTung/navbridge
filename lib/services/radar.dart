@@ -18,17 +18,26 @@ class RadarFrame {
   const RadarFrame({required this.time, required this.path});
 }
 
-/// The radar frame index: host + past/nowcast frames.
+/// The radar frame index: host + past/nowcast frames + a DISTINCT weather-
+/// satellite (infrared cloud) frame list.
 class RadarData {
   final String host;
   final List<RadarFrame> past;
   final List<RadarFrame> nowcast;
+
+  /// Weather-satellite (infrared) frames — clouds, not precipitation. This
+  /// is a separate layer from the radar; the feed often has no satellite
+  /// product (e.g. at night), so it may be empty.
+  final List<RadarFrame> satellite;
+
   const RadarData({
     required this.host,
     required this.past,
     required this.nowcast,
+    this.satellite = const [],
   });
   bool get hasFrames => past.isNotEmpty || nowcast.isNotEmpty;
+  bool get hasSatellite => satellite.isNotEmpty;
 }
 
 /// Fetch the radar frame index. Returns null on any failure (offline, 5xx,
@@ -51,10 +60,23 @@ Future<RadarData?> fetchRadarData() async {
             path: f['path'] as String,
           ),
     ];
+    List<RadarFrame> satelliteFrames() {
+      final sat = radar['satellite'] as Map<String, dynamic>?;
+      return [
+        for (final f in ((sat?['infrared']) as List? ?? const []))
+          if (f is Map && f['time'] is num && f['path'] is String)
+            RadarFrame(
+              time: (f['time'] as num).toInt(),
+              path: f['path'] as String,
+            ),
+      ];
+    }
+
     return RadarData(
       host: host,
       past: parse('past'),
       nowcast: parse('nowcast'),
+      satellite: satelliteFrames(),
     );
   } catch (_) {
     return null;
@@ -66,6 +88,12 @@ Future<RadarData?> fetchRadarData() async {
 /// snow colors. Radar tiles are low-zoom (z0–7) and upscale at higher zooms.
 String radarTileUrl(RadarData d, RadarFrame f) =>
     '${d.host}${f.path}/256/{z}/{x}/{y}/4/1_1.png';
+
+/// Map-tile URL template for a weather-SATELLITE [frame] (infrared clouds).
+/// Same `{host}{path}/{size}/{z}/{x}/{y}/{color}/{options}` shape as radar;
+/// color scheme `1` = infrared. Satellite tiles are low-zoom (z0–7) too.
+String satelliteTileUrl(RadarData d, RadarFrame f) =>
+    '${d.host}${f.path}/256/{z}/{x}/{y}/1/1_1.png';
 
 /// Short label for a frame relative to now: "Hiện tại", "-20p", "+10p"…
 String radarFrameLabel(RadarFrame f, {DateTime? now}) {

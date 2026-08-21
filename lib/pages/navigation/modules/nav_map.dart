@@ -127,6 +127,18 @@ extension _NavMap on _NavigationPageState {
                   maxNativeZoom: 7,
                 ),
               ),
+            // Weather satellite (RainViewer infrared clouds) — a DISTINCT
+            // translucent layer from the radar, own time scrubber.
+            if (_satelliteOn && _satelliteLayerUrl != null)
+              Opacity(
+                opacity: 0.55,
+                child: TileLayer(
+                  urlTemplate: _satelliteLayerUrl!,
+                  userAgentPackageName: 'com.navbridge.app',
+                  tileProvider: NetworkTileProvider(),
+                  maxNativeZoom: 7,
+                ),
+              ),
             if (route != null)
               PolylineLayer(
                 polylines: [

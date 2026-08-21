@@ -63,6 +63,8 @@ extension _NavBuild on _NavigationPageState {
               cameras: cameraAlerts ? _routeCameras : const [],
               showRadar: radarOn,
               radarUrl: _radarLayerUrl,
+              showSatellite: _satelliteOn,
+              satelliteUrl: _satelliteLayerUrl,
               onPoiTap: _onNavPoiTap,
               signs: _routeSigns,
               controller: _vmFollow,
@@ -74,6 +76,51 @@ extension _NavBuild on _NavigationPageState {
           _pipManeuverBar(),
         ],
       ),
+    );
+  }
+
+  /// Floating time-scrubber bars for the weather layers — rain radar and the
+  /// distinct weather-satellite layer. Each layer that's toggled on and has
+  /// frames gets its own slider; nothing renders when all are off/empty.
+  Widget _weatherBars() {
+    final children = <Widget>[];
+    if (radarOn && _radarFrames.isNotEmpty) {
+      children.add(
+        WeatherTimeBar(
+          title: 'Radar',
+          icon: Icons.water_drop,
+          color: const Color(0xFF1A73E8),
+          frames: _radarFrames,
+          selected: _radarFrame,
+          onSelect: _setRadarFrame,
+          loading: _radarLoading,
+          onRefresh: _ensureRadar,
+        ),
+      );
+    }
+    if (_satelliteOn && _satelliteFrames.isNotEmpty) {
+      children.add(
+        WeatherTimeBar(
+          title: 'Vệ tinh',
+          icon: Icons.cloud,
+          color: const Color(0xFF7B1FA2),
+          frames: _satelliteFrames,
+          selected: _satelliteFrame,
+          onSelect: _setSatelliteFrame,
+          loading: _radarLoading,
+          onRefresh: _ensureRadar,
+        ),
+      );
+    }
+    if (children.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < children.length; i++) ...[
+          if (i > 0) const SizedBox(height: 6),
+          children[i],
+        ],
+      ],
     );
   }
 
@@ -123,6 +170,8 @@ extension _NavBuild on _NavigationPageState {
                   cameras: cameraAlerts ? _routeCameras : const [],
                   showRadar: radarOn,
                   radarUrl: _radarLayerUrl,
+                  showSatellite: _satelliteOn,
+                  satelliteUrl: _satelliteLayerUrl,
                   onPoiTap: _onNavPoiTap,
                   signs: _routeSigns,
                   controller: _vmFollow,
@@ -267,6 +316,22 @@ extension _NavBuild on _NavigationPageState {
                                                 ? const Color(0xFF1A73E8)
                                                 : const Color(0xFF5F6368),
                                             onTap: _toggleRadar,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        // Weather-satellite overlay toggle
+                                        // (RainViewer infrared clouds) — a
+                                        // distinct layer from the radar.
+                                        Tooltip(
+                                          message: _satelliteOn
+                                              ? 'Vệ tinh thời tiết: bật'
+                                              : 'Vệ tinh thời tiết: tắt',
+                                          child: RoundActionButton(
+                                            icon: Icons.cloud,
+                                            color: _satelliteOn
+                                                ? const Color(0xFF7B1FA2)
+                                                : const Color(0xFF5F6368),
+                                            onTap: _toggleSatellite,
                                           ),
                                         ),
                                         const SizedBox(height: 8),
@@ -547,21 +612,18 @@ extension _NavBuild on _NavigationPageState {
                         ],
                       ),
                     ),
-                  // Rain-radar frame selector (browse): under the quick places
-                  // — watch the storm move over past frames or jump to the
-                  // nowcast forecast when it's live.
-                  if (!_navigating && radarOn && _radarFrames.isNotEmpty)
+                  // Weather-layer time scrubbers (browse): rain radar +
+                  // weather satellite — drag to watch the storm / clouds move.
+                  if (!_navigating)
                     Positioned(
                       left: 12,
                       top: _overlayTop + 116,
-                      child: RadarFrameBar(
-                        frames: _radarFrames,
-                        selected: _radarFrame,
-                        onSelect: _setRadarFrame,
-                        loading: _radarLoading,
-                        onRefresh: _ensureRadar,
-                      ),
+                      child: _weatherBars(),
                     ),
+                  // Nav mode: the same scrubbers sit above the bottom ETA bar
+                  // so the driver can scrub the rain while driving.
+                  if (_navigating)
+                    Positioned(left: 12, bottom: 96, child: _weatherBars()),
                   // Raster-only controls (zoom/locate target the raster map
                   // controller) — hide during vector navigation mode.
                   // Positioned BELOW the floated BLE + voice buttons (which
@@ -628,6 +690,21 @@ extension _NavBuild on _NavigationPageState {
                                   ? const Color(0xFF1A73E8)
                                   : const Color(0xFF5F6368),
                               onTap: _toggleRadar,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          // Weather-satellite overlay toggle (RainViewer
+                          // infrared clouds) — distinct from the radar.
+                          Tooltip(
+                            message: _satelliteOn
+                                ? 'Vệ tinh thời tiết: bật'
+                                : 'Vệ tinh thời tiết: tắt',
+                            child: RoundActionButton(
+                              icon: Icons.cloud,
+                              color: _satelliteOn
+                                  ? const Color(0xFF7B1FA2)
+                                  : const Color(0xFF5F6368),
+                              onTap: _toggleSatellite,
                             ),
                           ),
                         ],

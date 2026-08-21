@@ -92,6 +92,8 @@ class VectorNavMap extends StatefulWidget {
     this.tileSource = 'osm',
     this.showRadar = false,
     this.radarUrl,
+    this.showSatellite = false,
+    this.satelliteUrl,
     this.smoothCamera = true,
     this.controller,
     this.showCompass = true,
@@ -192,6 +194,13 @@ class VectorNavMap extends StatefulWidget {
 
   /// Radar tile URL template (with {z}/{x}/{y}) for the selected frame.
   final String? radarUrl;
+
+  /// Weather-satellite (infrared clouds) overlay — a DISTINCT translucent
+  /// layer from the rain radar, with its own time scrubber.
+  final bool showSatellite;
+
+  /// Satellite tile URL template (with {z}/{x}/{y}) for the selected frame.
+  final String? satelliteUrl;
 
   /// Active basemap layer from the page (`osm` / `carto` / `topo` / `esri` /
   /// `vietmap`…). Used for the ONLINE raster fallback (below the vector
@@ -484,6 +493,22 @@ class _VectorNavMapState extends State<VectorNavMap>
         'layout': <String, dynamic>{'visibility': 'none'},
         'paint': <String, dynamic>{'raster-opacity': 0.55},
       });
+      // Weather-satellite overlay (RainViewer infrared clouds) — a DISTINCT
+      // translucent layer from the radar, with its own time scrubber.
+      src['satellite'] = <String, dynamic>{
+        'type': 'raster',
+        'tiles': <String>[],
+        'tileSize': 256,
+        'maxzoom': 7,
+        'attribution': '© RainViewer',
+      };
+      layers.add(<String, dynamic>{
+        'id': 'satellite',
+        'type': 'raster',
+        'source': 'satellite',
+        'layout': <String, dynamic>{'visibility': 'none'},
+        'paint': <String, dynamic>{'raster-opacity': 0.5},
+      });
       style['glyphs'] = (style['glyphs'] as String).replaceAll(
         '__NAV_FONTS__',
         fontsDir.path,
@@ -566,6 +591,20 @@ class _VectorNavMapState extends State<VectorNavMap>
       radarSrc['tiles'] = show ? [widget.radarUrl!] : <String>[];
       for (final l in (style['layers'] as List<dynamic>? ?? const [])) {
         if (l is Map && l['id'] == 'radar') {
+          l['layout'] = <String, dynamic>{
+            'visibility': show ? 'visible' : 'none',
+          };
+          break;
+        }
+      }
+    }
+    // Weather-satellite overlay (RainViewer): same pattern, own layer.
+    final satSrc = src['satellite'] as Map<String, dynamic>?;
+    if (satSrc != null) {
+      final show = widget.showSatellite && widget.satelliteUrl != null;
+      satSrc['tiles'] = show ? [widget.satelliteUrl!] : <String>[];
+      for (final l in (style['layers'] as List<dynamic>? ?? const [])) {
+        if (l is Map && l['id'] == 'satellite') {
           l['layout'] = <String, dynamic>{
             'visibility': show ? 'visible' : 'none',
           };
@@ -1565,7 +1604,9 @@ class _VectorNavMapState extends State<VectorNavMap>
         old.vietmapBase != widget.vietmapBase ||
         old.tileSource != widget.tileSource ||
         old.showRadar != widget.showRadar ||
-        old.radarUrl != widget.radarUrl) {
+        old.radarUrl != widget.radarUrl ||
+        old.showSatellite != widget.showSatellite ||
+        old.satelliteUrl != widget.satelliteUrl) {
       // Rebuild the style (3D buildings / terrain / night / satellite /
       // basemap layer) and hot-swap it via setStyle — much lighter than
       // re-creating the whole platform view (which reset the camera and

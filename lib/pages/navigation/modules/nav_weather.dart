@@ -9,6 +9,7 @@ extension _NavWeather on _NavigationPageState {
   /// runs on a background (async) call so it never blocks the UI.
   void _startWeather() {
     _stopWeather();
+    _rainAheadSpoken = false; // re-arm the rain-ahead warning each trip
     _refreshWeather();
     _refreshWeatherAhead();
     _weatherTimer = Timer.periodic(const Duration(minutes: 10), (_) {
@@ -74,7 +75,28 @@ extension _NavWeather on _NavigationPageState {
     final merged = mergeWeatherAhead(results.whereType<WeatherInfo>());
     if (mounted && merged != null) {
       setNavState(() => _weatherAhead = merged);
+      _announceRainAhead(merged);
     }
+  }
+
+  /// Speak a ONE-TIME warning when rain is present or likely on the route
+  /// AHEAD (from the Open-Meteo samples a few km down the road). Deduped per
+  /// nav session so it doesn't nag the driver.
+  void _announceRainAhead(WeatherInfo ahead) {
+    if (!_voiceOn || _rainAheadSpoken) return;
+    final code = ahead.weatherCode;
+    final raining =
+        code != null &&
+        ((code >= 51 && code <= 67) ||
+            (code >= 80 && code <= 86) ||
+            code >= 95);
+    final p = ahead.rainProbSoon;
+    if (!raining && (p == null || p < 60)) return;
+    _rainAheadSpoken = true;
+    final phrase = raining
+        ? 'Trời đang mưa trên tuyến đường phía trước.'
+        : 'Trời sắp mưa trên tuyến đường phía trước, xác suất $p phần trăm.';
+    _voice.speak(phrase);
   }
 
   /// Check the nearest speed/red-light camera AHEAD on the route and warn the

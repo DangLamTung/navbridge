@@ -28,6 +28,40 @@ extension _NavRadar on _NavigationPageState {
     return radarTileUrl(d, frames[i]);
   }
 
+  /// Weather-satellite (infrared cloud) frames — a DISTINCT layer from the
+  /// rain radar. The feed often has no satellite product (e.g. at night), so
+  /// this may be empty and the layer renders nothing.
+  List<RadarFrame> get _satelliteFrames {
+    final d = _radar;
+    if (d == null) return const [];
+    final s = d.satellite;
+    if (s.length <= 8) return s;
+    return s.sublist(s.length - 8); // a compact recent window
+  }
+
+  /// URL template for the currently selected weather-satellite frame.
+  String? get _satelliteLayerUrl {
+    final d = _radar;
+    if (d == null) return null;
+    final frames = _satelliteFrames;
+    if (frames.isEmpty) return null;
+    final i = _satelliteFrame.clamp(0, frames.length - 1);
+    return satelliteTileUrl(d, frames[i]);
+  }
+
+  Future<void> _toggleSatellite() async {
+    setNavState(() => _satelliteOn = !_satelliteOn);
+    if (_satelliteOn) {
+      // The radar index also carries the satellite frames — keep it fresh.
+      await _ensureRadar();
+    }
+  }
+
+  void _setSatelliteFrame(int i) {
+    if (i < 0 || i >= _satelliteFrames.length) return;
+    setNavState(() => _satelliteFrame = i);
+  }
+
   Future<void> _toggleRadar() async {
     setNavState(() => radarOn = !radarOn);
     if (radarOn) {
@@ -56,6 +90,7 @@ extension _NavRadar on _NavigationPageState {
         _radar = r;
         _radarFetchedAt = DateTime.now();
         _radarFrame = 0;
+        _satelliteFrame = 0;
       }
     });
     if (r == null || !r.hasFrames) {

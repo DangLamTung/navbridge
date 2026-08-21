@@ -19,6 +19,35 @@ void main() {
     });
   });
 
+  group('satelliteTileUrl', () {
+    test('builds the RainViewer satellite (infrared) tile template', () {
+      const d = RadarData(
+        host: 'https://tilecache.rainviewer.com',
+        past: [],
+        nowcast: [],
+      );
+      const f = RadarFrame(time: 1000, path: '/v2/satellite/abc123');
+      expect(
+        satelliteTileUrl(d, f),
+        'https://tilecache.rainviewer.com/v2/satellite/abc123/256/{z}/{x}/{y}/1/1_1.png',
+      );
+    });
+  });
+
+  group('RadarData satellite', () {
+    test('hasSatellite reflects the infrared frames', () {
+      const empty = RadarData(host: 'h', past: [], nowcast: []);
+      expect(empty.hasSatellite, isFalse);
+      const withSat = RadarData(
+        host: 'h',
+        past: [],
+        nowcast: [],
+        satellite: [RadarFrame(time: 1, path: '/v2/satellite/x')],
+      );
+      expect(withSat.hasSatellite, isTrue);
+    });
+  });
+
   group('radarFrameLabel', () {
     final now = DateTime.fromMillisecondsSinceEpoch(1_000_000_000_000);
     test('labels the latest frame as Hiện tại', () {

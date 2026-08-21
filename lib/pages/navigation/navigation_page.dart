@@ -70,7 +70,7 @@ import 'package:navbridge/ui/nav_status_bar.dart';
 import 'package:navbridge/ui/nav_top_bar.dart';
 import 'package:navbridge/ui/navigation_card.dart';
 import 'package:navbridge/ui/poi_info_card.dart';
-import 'package:navbridge/ui/radar_frame_bar.dart';
+import 'package:navbridge/ui/weather_time_bar.dart';
 import 'package:navbridge/ui/road_info_chip.dart';
 import 'package:navbridge/ui/route_preview_card.dart';
 import 'package:navbridge/ui/search_pill.dart';
@@ -488,11 +488,14 @@ class _NavigationPageState extends State<NavigationPage>
   /// suppress false reroutes without ever blocking a real one.
   bool _netOnRoute = false;
 
-  // --- rain radar overlay (RainViewer) --------------------------------
+  // --- rain radar + weather-satellite overlay (RainViewer) ------------
   RadarData? _radar; // fetched frame index (cached ~5 min)
   DateTime? _radarFetchedAt;
   bool _radarLoading = false;
   int _radarFrame = 0; // selected frame within [_radarFrames]
+  bool _satelliteOn = false; // weather-satellite (infrared clouds) layer
+  int _satelliteFrame = 0; // selected frame within [_satelliteFrames]
+  bool _rainAheadSpoken = false; // rain-ahead voice dedupe per nav session
 
   // --- wrong-way (inverse) detection -------------------------------
   /// Last RAW GPS fix — used to compute the travel heading for wrong-way
