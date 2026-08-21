@@ -61,24 +61,45 @@ extension _NavSigns on _NavigationPageState {
       }
     }
     if (next == null) return;
-    // Dedupe: only speak once per sign, and re-speak only if it's the next
-    // one (bucket by distance so a noisy fix doesn't re-trigger).
-    final bucket = (m ~/ 25) * 25;
+    // Announce at most TWICE per sign: once far (the first time it enters the
+    // 400 m range) and once near (~100 m) as the final reminder. The old
+    // per-25 m bucket re-spoke every ~25 m, which nagged the driver.
+    final near = m <= 100;
+    final zone = near ? 'near' : 'far';
     final sig =
         '${next.kind.key}/${next.lat.toStringAsFixed(5)},'
-        '${next.lng.toStringAsFixed(5)}/$bucket';
+        '${next.lng.toStringAsFixed(5)}/$zone';
     if (sig == _lastSignSig) return;
     _lastSignSig = sig;
     final phrase = switch (next.kind) {
-      RoadSignKind.stop => 'Biển STOP phía trước ${m.round()} mét',
-      RoadSignKind.giveWay => 'Biển nhường đường phía trước ${m.round()} mét',
-      RoadSignKind.noPassing => 'Cấm vượt phía trước ${m.round()} mét',
-      RoadSignKind.noLeftTurn => 'Cấm rẽ trái phía trước ${m.round()} mét',
-      RoadSignKind.noRightTurn => 'Cấm rẽ phải phía trước ${m.round()} mét',
-      RoadSignKind.noUTurn => 'Cấm quay đầu phía trước ${m.round()} mét',
+      RoadSignKind.stop =>
+        near ? 'Biển STOP sắp tới' : 'Biển STOP phía trước ${m.round()} mét',
+      RoadSignKind.giveWay =>
+        near
+            ? 'Biển nhường đường sắp tới'
+            : 'Biển nhường đường phía trước ${m.round()} mét',
+      RoadSignKind.noPassing =>
+        near ? 'Cấm vượt sắp tới' : 'Cấm vượt phía trước ${m.round()} mét',
+      RoadSignKind.noLeftTurn =>
+        near
+            ? 'Cấm rẽ trái sắp tới'
+            : 'Cấm rẽ trái phía trước ${m.round()} mét',
+      RoadSignKind.noRightTurn =>
+        near
+            ? 'Cấm rẽ phải sắp tới'
+            : 'Cấm rẽ phải phía trước ${m.round()} mét',
+      RoadSignKind.noUTurn =>
+        near
+            ? 'Cấm quay đầu sắp tới'
+            : 'Cấm quay đầu phía trước ${m.round()} mét',
       RoadSignKind.noLeftUTurn =>
-        'Cấm rẽ trái và quay đầu phía trước ${m.round()} mét',
-      _ => 'Cấm rẽ phải và quay đầu phía trước ${m.round()} mét',
+        near
+            ? 'Cấm rẽ trái và quay đầu sắp tới'
+            : 'Cấm rẽ trái và quay đầu phía trước ${m.round()} mét',
+      _ =>
+        near
+            ? 'Cấm rẽ phải và quay đầu sắp tới'
+            : 'Cấm rẽ phải và quay đầu phía trước ${m.round()} mét',
     };
     _voice.speak(phrase);
     if (mounted) setNavState(() {});

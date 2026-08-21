@@ -144,19 +144,30 @@ extension _NavWeather on _NavigationPageState {
       _nextCamera = next;
     });
 
-    // Warn once per camera when it's near (<= ~600 m ahead). Deduped so the
-    // driver isn't nagged repeatedly while approaching the same camera.
-    if (next != null && next.routeMeters <= 600 && sig != _lastCameraSig) {
-      _lastCameraSig = sig;
+    // Warn TWICE per camera: once far (~600 m ahead) and once near (~100 m)
+    // as the final reminder — never nagged repeatedly in between. The PiP
+    // chip (_nextCamera) still updates every fix; only the VOICE is zoned.
+    if (next != null && next.routeMeters <= 600) {
       final m = next.routeMeters.round();
-      final phrase = switch (next.camera.focus) {
-        'speed' => 'Camera tốc độ phía trước $m mét',
-        'red_light' => 'Camera đèn đỏ phía trước $m mét',
-        _ => 'Camera phía trước $m mét',
-      };
-      _voice.speak(phrase);
-      unawaited(NavForegroundService.instance.notifyCamera(next.camera, m));
-      debugPrint('CAMERA: $phrase — ${next.camera.name}');
+      final near = next.routeMeters <= 100;
+      final zsig = '$sig/${near ? 'near' : 'far'}';
+      if (zsig != _lastCameraSig) {
+        _lastCameraSig = zsig;
+        final phrase = switch (next.camera.focus) {
+          'speed' =>
+            near
+                ? 'Camera tốc độ ngay phía trước'
+                : 'Camera tốc độ phía trước $m mét',
+          'red_light' =>
+            near
+                ? 'Camera đèn đỏ ngay phía trước'
+                : 'Camera đèn đỏ phía trước $m mét',
+          _ => near ? 'Camera ngay phía trước' : 'Camera phía trước $m mét',
+        };
+        _voice.speak(phrase);
+        unawaited(NavForegroundService.instance.notifyCamera(next.camera, m));
+        debugPrint('CAMERA: $phrase — ${next.camera.name}');
+      }
     }
   }
 }
