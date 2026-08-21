@@ -251,11 +251,10 @@ class _VectorNavMapState extends State<VectorNavMap>
   String? _lastSearchSig;
   final List<Circle> _cameraCircles = [];
   String? _lastCameraSig;
-  final List<Circle> _signCircles = [];
-  String? _signLayerSig;
 
-  /// Real sign icons (stop/give-way/speed/populated) projected to screen
-  /// positions — rendered as Flutter overlays, refreshed with the camera.
+  /// Real sign icons (stop / give-way / speed / prohibitions / traffic
+  /// lights) projected to screen positions — rendered as Flutter overlays,
+  /// refreshed with the camera.
   final List<({RoadSign sign, Offset pos})> _signOverlays = [];
   bool _hasPosition = false;
   // Vietmap-style nav camera: start at max zoom with the car centered. The
@@ -1052,48 +1051,15 @@ class _VectorNavMapState extends State<VectorNavMap>
     }
   }
 
-  /// Road-sign markers on the nav map. TRAFFIC LIGHTS stay as small native
-  /// dots (they're dense in cities — 10k+ across VN, often 100+ near a route
-  /// — so drawing each as an icon would be heavy). STOP / give-way / speed /
-  /// "đông dân cư" signs are rendered as REAL Vietnamese sign icons via
-  /// [_projectSignOverlays] (Flutter overlays, like the car arrow).
+  /// Road-sign markers on the nav map. ALL signs — STOP / give-way / speed /
+  /// prohibitions AND traffic lights — are rendered as REAL Vietnamese sign
+  /// icons via [_projectSignOverlays] (Flutter overlays, like the car arrow).
+  /// Traffic lights used to be small grey native dots, which read as a bare
+  /// "dot" while driving; they are proper traffic-light icons now. The count
+  /// is bounded in `_refreshRouteSigns` so the overlay stays cheap.
   Future<void> _updateSigns() async {
-    final ctrl = _controller;
-    if (ctrl == null) return;
+    if (_controller == null) return;
     unawaited(_projectSignOverlays());
-    final signals = widget.signs
-        .where((s) => s.kind == RoadSignKind.signal)
-        .toList();
-    final sig = signals
-        .map(
-          (s) =>
-              '${s.kind.key}:${s.lat.toStringAsFixed(5)},'
-              '${s.lng.toStringAsFixed(5)}',
-        )
-        .join('|');
-    if (sig == _signLayerSig) return;
-    _signLayerSig = sig;
-    for (final c in _signCircles) {
-      try {
-        ctrl.removeCircle(c);
-      } catch (_) {}
-    }
-    _signCircles.clear();
-    for (final s in signals) {
-      try {
-        final c = await ctrl.addCircle(
-          CircleOptions(
-            geometry: LatLng(s.lat, s.lng),
-            circleColor: '#9AA0A6', // grey — đèn giao thông
-            circleRadius: 4.5,
-            circleStrokeColor: '#202124',
-            circleStrokeWidth: 2.0,
-            circleOpacity: 0.9,
-          ),
-        );
-        _signCircles.add(c);
-      } catch (_) {}
-    }
   }
 
   /// Project the non-traffic-light signs (real icons) to their on-screen
@@ -1102,9 +1068,7 @@ class _VectorNavMapState extends State<VectorNavMap>
   Future<void> _projectSignOverlays() async {
     final ctrl = _controller;
     if (ctrl == null) return;
-    final signs = widget.signs
-        .where((s) => s.kind != RoadSignKind.signal)
-        .toList();
+    final signs = widget.signs;
     if (signs.isEmpty) {
       if (_signOverlays.isNotEmpty && mounted) {
         setState(() => _signOverlays.clear());
@@ -1660,7 +1624,6 @@ class _VectorNavMapState extends State<VectorNavMap>
     _lastPoiSig = null;
     _lastSearchSig = null;
     _lastCameraSig = null;
-    _signLayerSig = null;
     _casing = null;
     _routeLine = null;
     _trafficLines.clear();
@@ -1670,7 +1633,6 @@ class _VectorNavMapState extends State<VectorNavMap>
     _searchCircles.clear();
     _searchSymbols.clear();
     _cameraCircles.clear();
-    _signCircles.clear();
   }
 
   /// Center the camera on the tapped POI and pause auto-follow so the user

@@ -89,7 +89,10 @@ extension _NavSigns on _NavigationPageState {
   ///
   /// The way-derived speed signs can be DENSE (28k across VN), so same-value
   /// speed signs within ~330 m are deduped and the total is capped — the map
-  /// shows one speed sign per segment, not a wall of 40px icons.
+  /// shows one speed sign per segment, not a wall of 40px icons. Traffic
+  /// lights are also deduped (~130 m) and ranked LAST so a dense city
+  /// corridor can't crowd out the STOP / give-way / speed / prohibition
+  /// signs a driver actually needs.
   Future<void> _refreshRouteSigns() async {
     final r = _route;
     if (r == null || r.geometry.length < 2) {
@@ -98,17 +101,31 @@ extension _NavSigns on _NavigationPageState {
       }
       return;
     }
-    final signs = await signsNearRoute(r.geometry, corridorMeters: 250);
+    // Visualize signs within 500 m of the main route (was 250 m).
+    final signs = await signsNearRoute(r.geometry, corridorMeters: 500);
     if (!mounted) return;
-    const maxShown = 60;
+    const maxShown = 80;
     final kept = <RoadSign>[];
     final speedBuckets = <String>{};
-    for (final s in signs) {
+    final signalBuckets = <String>{};
+    // Warning signs first, traffic lights last (stable sort keeps the rest).
+    final ranked = [...signs]
+      ..sort((a, b) {
+        final pa = a.kind == RoadSignKind.signal ? 1 : 0;
+        final pb = b.kind == RoadSignKind.signal ? 1 : 0;
+        return pa.compareTo(pb);
+      });
+    for (final s in ranked) {
       if (s.kind == RoadSignKind.speed) {
         // ~0.003° ≈ 330 m bucket → one speed sign per segment per value.
         final bucket =
             '${s.value}/${(s.lat / 0.003).round()},${(s.lng / 0.003).round()}';
         if (!speedBuckets.add(bucket)) continue;
+      } else if (s.kind == RoadSignKind.signal) {
+        // ~0.0012° ≈ 130 m bucket → one traffic-light icon per junction.
+        final bucket =
+            '${(s.lat / 0.0012).round()},${(s.lng / 0.0012).round()}';
+        if (!signalBuckets.add(bucket)) continue;
       }
       kept.add(s);
       if (kept.length >= maxShown) break;
