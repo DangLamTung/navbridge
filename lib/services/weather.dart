@@ -22,6 +22,7 @@ class WeatherInfo {
     this.windDir,
     this.precipMm,
     this.weatherCode,
+    this.rainProb,
   });
 
   /// Air temperature (°C).
@@ -45,6 +46,18 @@ class WeatherInfo {
   /// Open-Meteo WMO weather code (0 clear .. 95+ thunder) — mapped to an
   /// emoji by [weatherEmoji].
   final int? weatherCode;
+
+  /// Hourly rain probability (%) for the next few hours (Open-Meteo
+  /// `precipitation_probability`, null when unavailable).
+  final List<int>? rainProb;
+
+  /// Best-guess rain probability (%) within the next ~2 h — the max of the
+  /// current + next hour entries (null when the feed has no probability).
+  int? get rainProbSoon {
+    final p = rainProb;
+    if (p == null || p.isEmpty) return null;
+    return p.take(2).reduce((a, b) => a > b ? a : b);
+  }
 }
 
 /// A compact weather emoji for an Open-Meteo WMO [code] (0 = clear, 1-3 =
@@ -127,6 +140,7 @@ WeatherInfo? mergeWeatherAhead(Iterable<WeatherInfo> samples) {
     windDir: worst.windDir,
     precipMm: worst.precipMm,
     weatherCode: worst.weatherCode,
+    rainProb: worst.rainProb,
   );
 }
 
@@ -139,7 +153,10 @@ Future<WeatherInfo?> fetchWeather(double lat, double lng) async {
       '?latitude=$lat&longitude=$lng'
       '&current=temperature_2m,apparent_temperature,'
       'relative_humidity_2m,wind_speed_10m,wind_direction_10m,'
-      'precipitation,weather_code',
+      'precipitation,weather_code'
+      // Hourly rain probability — the "sắp mưa không?" prediction.
+      '&hourly=precipitation_probability,precipitation'
+      '&forecast_hours=4',
     );
     final res = await http
         .get(url, headers: const {'User-Agent': 'navbridge/1.0 (weather)'})
@@ -149,6 +166,15 @@ Future<WeatherInfo?> fetchWeather(double lat, double lng) async {
     final cur = data['current'] as Map?;
     if (cur == null) return null;
     double? d(Object? v) => v is num ? v.toDouble() : null;
+    // Hourly precipitation probability (%), oldest first.
+    final hourly = data['hourly'] as Map?;
+    List<int>? probs;
+    if (hourly != null && hourly['precipitation_probability'] is List) {
+      probs = (hourly['precipitation_probability'] as List)
+          .whereType<num>()
+          .map((e) => e.toInt())
+          .toList(growable: false);
+    }
     return WeatherInfo(
       tempC: d(cur['temperature_2m']),
       feelsLikeC: d(cur['apparent_temperature']),
@@ -159,6 +185,7 @@ Future<WeatherInfo?> fetchWeather(double lat, double lng) async {
       weatherCode: cur['weather_code'] is num
           ? (cur['weather_code'] as num).toInt()
           : null,
+      rainProb: probs,
     );
   } catch (_) {
     return null;

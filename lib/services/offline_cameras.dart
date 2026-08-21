@@ -20,8 +20,15 @@ class OfflineCamera {
   final double lat;
   final double lng;
 
-  /// `speed` | `red_light` | `violations` — the alert focus.
+  /// `speed` | `red_light` | `violations` | `sign` — the alert focus.
   final String focus;
+
+  /// Optional road-sign label (Waze tiles): no_passing, no_left_turn,
+  /// residential_start, end_of_prohibitions, …
+  final String? sign;
+
+  /// Posted speed limit at this point, km/h (Waze speed cameras/signs).
+  final int? speedLimit;
 
   /// Optional count of devices at the point (police lists).
   final int? devices;
@@ -34,6 +41,8 @@ class OfflineCamera {
     required this.lat,
     required this.lng,
     required this.focus,
+    this.sign,
+    this.speedLimit,
     this.devices,
     this.district,
   });
@@ -48,6 +57,8 @@ class OfflineCamera {
     lat: ((j['lat'] ?? 0) as num).toDouble(),
     lng: ((j['lng'] ?? 0) as num).toDouble(),
     focus: (j['focus'] ?? 'violations') as String,
+    sign: j['sign'] as String?,
+    speedLimit: (j['speed_limit'] as num?)?.toInt(),
     devices: (j['devices'] as num?)?.toInt(),
     district: j['district'] as String?,
   );

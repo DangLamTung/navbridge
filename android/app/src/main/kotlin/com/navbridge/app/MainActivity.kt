@@ -77,6 +77,13 @@ class MainActivity : FlutterActivity() {
                             result,
                         )
                     }
+                    "snapToRoad" -> {
+                        routing.snapToRoad(
+                            call.argument<Double>("lat") ?: 0.0,
+                            call.argument<Double>("lng") ?: 0.0,
+                            result,
+                        )
+                    }
                     else -> result.notImplemented()
                 }
             }

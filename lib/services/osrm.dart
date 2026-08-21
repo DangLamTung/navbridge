@@ -13,6 +13,12 @@ import 'package:latlong2/latlong.dart';
 
 const String osrmPublic = 'https://router.project-osrm.org';
 
+/// Real-world ETA buffer: OSRM/Vietmap durations assume ideal free-flow
+/// speeds, so on real city streets (traffic, red lights, stops) the trip
+/// takes noticeably longer than the static estimate. Applied to every
+/// displayed ETA for a less optimistic arrival time.
+const double kEtaRealismFactor = 1.3;
+
 /// One turn-by-turn step: the maneuver at its start + the road after it.
 class OsrmStep {
   final String name; // road name (after the maneuver)

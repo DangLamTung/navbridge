@@ -306,7 +306,6 @@ extension _NavSearch on _NavigationPageState {
       _progress = null;
       _suggestions = [];
       _planPoints = [];
-      _dragHandles = [];
       _alternativeRoutes = [];
       _selectedRoute = 0;
       _elevation = null;
@@ -563,6 +562,7 @@ extension _NavSearch on _NavigationPageState {
         profile: _routeProfile,
         avoidHighway: _avoidHighway,
         avoidFerry: _avoidFerry,
+        preference: _routePreference,
       );
       route = routes.first;
       alternatives = routes.length > 1 ? routes : [];
@@ -616,7 +616,6 @@ extension _NavSearch on _NavigationPageState {
       _navigating = false;
       _progress = null;
       _routeStartIndex = 0; // brand-new route → draw the whole thing
-      _updateDragHandles(route);
     });
     unawaited(_loadElevation(route));
     unawaited(_refreshRouteCameras());
@@ -641,7 +640,6 @@ extension _NavSearch on _NavigationPageState {
       _route = route;
       _routeBearing = 0;
       _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
-      _updateDragHandles(route);
     });
     unawaited(_loadElevation(route));
     unawaited(_refreshRouteCameras());
@@ -681,6 +679,16 @@ extension _NavSearch on _NavigationPageState {
     }
   }
 
+  /// Switch the route preference (nhanh nhất / ngắn nhất / đường chính /
+  /// đẹp cảnh) and re-plan — re-ranks the alternatives by the chosen style.
+  void _setRoutePreference(RoutePreference p) {
+    if (p == _routePreference) return;
+    setNavState(() => _routePreference = p);
+    if (_stops.isNotEmpty) {
+      _buildPlanRoute(); // re-rank the alternatives with the new style
+    }
+  }
+
   /// Persist a new speed-limit vehicle (keeps ALL settings fields).
   Future<void> _persistVehicleType(String v) async {
     final s = await loadSettings();
@@ -694,9 +702,11 @@ extension _NavSearch on _NavigationPageState {
         routingEngine: s.routingEngine,
         smoothCamera: s.smoothCamera,
         cameraAlerts: s.cameraAlerts,
+        radar: s.radar,
         pipAspect: s.pipAspect,
         ridingMode: s.ridingMode,
         simpleMode: s.simpleMode,
+        wakeWord: s.wakeWord,
       ),
     );
   }
@@ -723,7 +733,6 @@ extension _NavSearch on _NavigationPageState {
         _selectedRoute = 0;
         _planPoints = [];
         _showSteps = false;
-        _dragHandles = [];
         _elevation = null;
         _pois = [];
         _poiType = null;
@@ -749,6 +758,32 @@ extension _NavSearch on _NavigationPageState {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Đã lưu kế hoạch chuyến đi.')),
       );
+    }
+  }
+
+  /// One-tap "Lưu tuyến ưa thích": save the CURRENT route (stops + vehicle +
+  /// preference + avoid flags) as a saved plan so it can be re-routed the same
+  /// way from "Chuyến của tôi → Kế hoạch".
+  Future<void> _saveFavoriteRoute() async {
+    if (_stops.isEmpty) return;
+    final plans = await loadPlans();
+    final plan = TripPlan(
+      name: _stops.length == 1
+          ? _stops.first.name
+          : 'Chuyến ${_stops.length} điểm',
+      createdAt: DateTime.now(),
+      stops: List.of(_stops),
+      profile: _routeProfile.name,
+      preference: _routePreference.name,
+      avoidHighway: _avoidHighway,
+      avoidFerry: _avoidFerry,
+    );
+    plans.insert(0, plan);
+    await savePlans(plans);
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Đã lưu tuyến ưa thích.')));
     }
   }
 

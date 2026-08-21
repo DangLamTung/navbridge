@@ -51,11 +51,9 @@ const Duration _blockBackoff = Duration(minutes: 5);
 /// global fallback mixed styles → "the map type keeps changing"). `{s}` is
 /// substituted with a/b/c for providers that use subdomains.
 const Map<String, List<String>> _fallbackTileTemplatesBySource = {
-  // OSM-standard style mirrors (same look as tile.openstreetmap.org).
-  'osm': [
-    'https://tile.openstreetmap.de/{z}/{x}/{y}.png',
-    'https://tile.openstreetmap.fr/{z}/{x}/{y}.png',
-  ],
+  // OSM: no regional mirrors (German/French mirrors render different styles
+  // and foreign language labels which caused the map style to change when zooming).
+  'osm': <String>[],
   // CARTO Voyager: same style, balanced across subdomains.
   'carto': [
     'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
@@ -309,6 +307,11 @@ bool simpleMode = false;
 /// it back to the default `true`.
 bool cameraAlerts = true;
 
+/// Rain-radar overlay on the map (RainViewer, free/no key). Shared global
+/// (same pattern as [cameraAlerts]) so the nav-page toggles AND settings
+/// pages read/write the same source of truth.
+bool radarOn = false;
+
 /// Picture-in-Picture window shape while navigating (persisted):
 ///   'portrait' (9:16, default) | 'landscape' (4:3)
 String pipAspect = '34';
@@ -438,7 +441,7 @@ Future<Directory> tileStoreDir({String? source}) async {
 
 /// Bump when the tile-cache validation changes (e.g. a batch of poisoned
 /// "access blocked" tiles was cached) — forces a one-time full cache clear.
-const int tileCacheVersion = 2;
+const int tileCacheVersion = 3;
 bool _tileVersionChecked = false;
 
 Future<void> _ensureTileCacheVersion() async {
@@ -585,6 +588,12 @@ Future<void> saveRegions(List<OfflineRegion> rs) async {
 /// any public host happy.
 class RegionDownloader {
   final OfflineRegion region;
+
+  /// Basemap source folder to download into (see [tileStoreDir]). Default
+  /// (null / 'osm') is the legacy shared path; pass the active map layer so
+  /// downloaded tiles are actually read by that layer's provider.
+  final String? source;
+
   int done = 0;
   int get total => region.tileCount;
   bool _cancel = false;
@@ -593,7 +602,7 @@ class RegionDownloader {
   bool get blocked => _blocked;
   bool get disabled => tileDownloadBaseUrl.isEmpty;
 
-  RegionDownloader(this.region);
+  RegionDownloader(this.region, {this.source});
 
   void cancel() => _cancel = true;
 
@@ -615,7 +624,7 @@ class RegionDownloader {
       for (var x = x0; x <= x1; x++) {
         for (var y = y0; y <= y1; y++) {
           if (_cancel) return;
-          final f = await tileFile(z, x, y);
+          final f = await tileFile(z, x, y, source: source);
           if (f.existsSync()) {
             done++;
             continue;

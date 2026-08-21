@@ -20,10 +20,10 @@ class TripStop {
   Map<String, dynamic> toJson() => {'name': name, 'lat': lat, 'lng': lng};
 
   factory TripStop.fromJson(Map<String, dynamic> j) => TripStop(
-        name: (j['name'] ?? '') as String,
-        lat: ((j['lat'] ?? 0) as num).toDouble(),
-        lng: ((j['lng'] ?? 0) as num).toDouble(),
-      );
+    name: (j['name'] ?? '') as String,
+    lat: ((j['lat'] ?? 0) as num).toDouble(),
+    lng: ((j['lng'] ?? 0) as num).toDouble(),
+  );
 }
 
 class TripPlan {
@@ -31,24 +31,47 @@ class TripPlan {
   final DateTime createdAt;
   final List<TripStop> stops;
 
-  TripPlan({required this.name, required this.createdAt, required this.stops});
+  /// Optional routing metadata saved with the plan (favourite route):
+  /// `RouteProfile.name` / `RoutePreference.name` + the avoid flags, so a
+  /// saved plan can be re-routed the same way. Null = legacy plan.
+  final String? profile;
+  final String? preference;
+  final bool avoidHighway;
+  final bool avoidFerry;
+
+  TripPlan({
+    required this.name,
+    required this.createdAt,
+    required this.stops,
+    this.profile,
+    this.preference,
+    this.avoidHighway = false,
+    this.avoidFerry = false,
+  });
 
   Map<String, dynamic> toJson() => {
-        'name': name,
-        'createdAt': createdAt.toIso8601String(),
-        'stops': [for (final s in stops) s.toJson()],
-      };
+    'name': name,
+    'createdAt': createdAt.toIso8601String(),
+    'stops': [for (final s in stops) s.toJson()],
+    if (profile != null) 'profile': profile,
+    if (preference != null) 'preference': preference,
+    if (avoidHighway) 'avoidHighway': true,
+    if (avoidFerry) 'avoidFerry': true,
+  };
 
   factory TripPlan.fromJson(Map<String, dynamic> j) => TripPlan(
-        name: (j['name'] ?? 'Kế hoạch') as String,
-        createdAt:
-            DateTime.tryParse((j['createdAt'] ?? '') as String) ?? DateTime.now(),
-        stops: [
-          for (final s
-              in (j['stops'] as List? ?? []).cast<Map<String, dynamic>>())
-            TripStop.fromJson(s)
-        ],
-      );
+    name: (j['name'] ?? 'Kế hoạch') as String,
+    createdAt:
+        DateTime.tryParse((j['createdAt'] ?? '') as String) ?? DateTime.now(),
+    stops: [
+      for (final s in (j['stops'] as List? ?? []).cast<Map<String, dynamic>>())
+        TripStop.fromJson(s),
+    ],
+    profile: j['profile'] as String?,
+    preference: j['preference'] as String?,
+    avoidHighway: j['avoidHighway'] == true,
+    avoidFerry: j['avoidFerry'] == true,
+  );
 }
 
 Future<File> _plansFile() async {
@@ -71,6 +94,8 @@ Future<List<TripPlan>> loadPlans() async {
 
 Future<void> savePlans(List<TripPlan> plans) async {
   final f = await _plansFile();
-  await f.writeAsString(jsonEncode([for (final p in plans) p.toJson()]),
-      flush: true);
+  await f.writeAsString(
+    jsonEncode([for (final p in plans) p.toJson()]),
+    flush: true,
+  );
 }

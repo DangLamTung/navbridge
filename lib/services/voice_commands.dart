@@ -435,6 +435,8 @@ class VoiceCommands {
       return;
     }
     // No wake word — if we're primed, this whole phrase is the command.
+    // (The wake word "dậy đi" gates commands: random speech is ignored until
+    // the assistant has been woken.)
     if (isPartial) return;
     if (_primed) {
       _primed = false;

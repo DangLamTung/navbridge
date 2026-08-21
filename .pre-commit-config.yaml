@@ -12,7 +12,10 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+      # Offline data bundles (vietnam_signs.json ≈ 5.7 MB, vietnam_cameras.json
+      # ≈ 2 MB) exceed the 500 KB default — allow up to 8 MB for data assets.
       - id: check-added-large-files
+        args: [--maxkb=8000]
       - id: check-merge-conflict
 
   - repo: local

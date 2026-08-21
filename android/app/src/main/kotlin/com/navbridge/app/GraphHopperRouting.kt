@@ -183,6 +183,37 @@ class GraphHopperRouting {
         }
     }
 
+    /** Nearest road edge + snapped point to [lat],[lng] (network matching, like
+     *  Google Maps): returns {lat, lng, distance (m to the road), edge (id)}
+     *  or null when no road is nearby. Used to (a) stick the puck to the road
+     *  and (b) detect when the car is on a road that is NOT part of the route. */
+    fun snapToRoad(lat: Double, lng: Double, result: MethodChannel.Result) {
+        executor.execute {
+            try {
+                val gh = hopper
+                    ?: throw IllegalStateException("Chưa tải bộ dữ liệu")
+                val snap = gh.locationIndex.findClosest(lat, lng, EdgeFilter.ALL_EDGES)
+                if (snap == null || !snap.isValid) {
+                    result.success(null)
+                    return@execute
+                }
+                val sp = snap.snappedPoint
+                val out = HashMap<String, Any?>()
+                out["lat"] = sp.lat
+                out["lng"] = sp.lon
+                out["distance"] = snap.queryDistance
+                out["edge"] = snap.closestEdge.edge
+                android.util.Log.i(
+                    "NavBridgeRouter",
+                    "snap: d=${snap.queryDistance} edge=${snap.closestEdge.edge}"
+                )
+                result.success(out)
+            } catch (e: Throwable) {
+                result.error("snap_error", e.message ?: "snap failed", null)
+            }
+        }
+    }
+
     /** If [graphPath] is a `.ghz` zip, extract it next to itself and return
      *  the extracted folder; otherwise return the path unchanged. */
     private fun prepareLocation(graphPath: String): String {
@@ -228,6 +259,9 @@ class GraphHopperRouting {
                 "lng" to (if (ins.points.size() > 0) ins.points.getLon(0) else 0.0)
             ))
         }
+        // GraphHopper 7.0 ResponsePath exposes no edge ids; on/off-route is
+        // decided on the Dart side by snapping the fix and measuring the
+        // snapped point's distance to this polyline.
         return mapOf(
             "distance" to path.distance,
             "duration" to (path.time / 1000.0),

@@ -28,8 +28,8 @@ extension _NavSimple on _NavigationPageState {
     final kmh = (nav?.speedMps.isFinite ?? false)
         ? (nav!.speedMps * 3.6).round()
         : null;
-    final limit = _roadInfo?.speedLimit;
-    final speeding = kmh != null && limit != null && kmh > limit;
+    final limit = _effectiveSpeedLimit;
+    final speeding = kmh != null && limit > 0 && kmh > limit;
     final cam = _nextCamera;
     final ahead = _weatherAhead;
     final nextVerb = nav == null ? '' : maneuverVerb(nav.iconCode);

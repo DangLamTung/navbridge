@@ -13,6 +13,7 @@ class RoadInfoChip extends StatelessWidget {
     this.info,
     this.loading = false,
     this.speedMps,
+    this.limitOverride,
   });
 
   final RoadInfo? info;
@@ -22,10 +23,15 @@ class RoadInfoChip extends StatelessWidget {
   /// that turns red when exceeding the speed limit.
   final double? speedMps;
 
+  /// Sign-aware effective limit (the last speed-limit sign passed, incl.
+  /// Waze per-segment data). When set (>0) it wins over [info]'s tagged
+  /// limit so the chip mirrors what the driver actually sees on the road.
+  final int? limitOverride;
+
   @override
   Widget build(BuildContext context) {
     final i = info;
-    final limit = i?.speedLimit;
+    final limit = limitOverride ?? i?.speedLimit;
     final kmh = speedMps == null ? null : (speedMps! * 3.6).round();
     final speeding = limit != null && kmh != null && kmh > limit;
     return Material(
@@ -78,16 +84,18 @@ class RoadInfoChip extends StatelessWidget {
                   Text(
                     i == null ? '--' : '${i.speedLimit}',
                     style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        height: 1.0),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      height: 1.0,
+                    ),
                   ),
                   const Text(
                     'km/h',
                     style: TextStyle(
-                        fontSize: 6,
-                        fontWeight: FontWeight.w600,
-                        height: 1.0),
+                      fontSize: 6,
+                      fontWeight: FontWeight.w600,
+                      height: 1.0,
+                    ),
                   ),
                 ],
               ),
@@ -100,12 +108,15 @@ class RoadInfoChip extends StatelessWidget {
                 Text(
                   i?.label ?? (loading ? 'Đang tải…' : 'Ngoài đường'),
                   style: const TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w700,
-                      color: kAppBlue),
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    color: kAppBlue,
+                  ),
                 ),
                 Text(
-                  (i != null && i.name.isNotEmpty) ? i.name : (i?.highway ?? ''),
+                  (i != null && i.name.isNotEmpty)
+                      ? i.name
+                      : (i?.highway ?? ''),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 10.5, color: Colors.grey[700]),

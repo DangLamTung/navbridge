@@ -223,6 +223,25 @@ extension _NavPoi on _NavigationPageState {
   /// AHEAD on the route (10–20 km window) on the SAME side of the road (so
   /// the driver doesn't have to cross / U-turn); otherwise the nearest
   /// around the car.
+  /// Bundled offline POI category key for a [PoiType] (null = no offline
+  /// data for that category). NOTE: the offline index uses `restaurant` (not
+  /// `food`) for eating places.
+  String? _offlineKeyForPoiType(PoiType t) => switch (t) {
+    PoiType.fuel => 'fuel',
+    PoiType.food => 'restaurant',
+    PoiType.cafeVong => 'cafe',
+    PoiType.hotel => 'hotel',
+    PoiType.atm => 'atm',
+    PoiType.hospital => 'hospital',
+    PoiType.parking => 'parking',
+  };
+
+  /// Search the [type] quick-POI category and show the best candidates.
+  /// OFFLINE-FIRST: the bundled Vietnam POI index is merged with the live
+  /// Overpass search, so the chips (Xăng / Ăn uống / …) work with no data
+  /// signal — previously they only did an online query and failed with
+  /// "Không tìm thấy …" whenever the phone was offline. The online pass
+  /// just adds more/fresher results on top.
   Future<void> _searchPoi(PoiType type) async {
     final c = _current ?? _origin;
     if (c == null) return;
@@ -230,19 +249,53 @@ extension _NavPoi on _NavigationPageState {
       _poiBusy = true;
       _poiType = type;
       _selectedPoi = null;
+      _pois = [];
     });
     try {
-      // Search a wider radius (up to ~15 km) so there are route-ahead
-      // candidates to rank; the ranking below prefers the ones up the road.
-      var r = await searchPois(type, c, radius: 15000, limit: 30);
-      // During navigation rank by route position (ahead + same side).
+      final results = <PoiResult>[];
+      // Offline pass first (bundled Vietnam POIs).
+      final key = _offlineKeyForPoiType(type);
+      if (key != null) {
+        for (final p in await poisInCategory(key, near: c, limit: 12)) {
+          results.add(
+            PoiResult(name: p.name, lat: p.lat, lng: p.lng, type: type),
+          );
+        }
+      }
+      // Online Overpass pass is best-effort — offline results still show if
+      // it fails (or the phone is offline).
+      try {
+        for (final r in await searchPois(type, c, radius: 15000, limit: 30)) {
+          final dup = results.any(
+            (x) => (x.lat - r.lat).abs() < 1e-5 && (x.lng - r.lng).abs() < 1e-5,
+          );
+          if (!dup) results.add(r);
+        }
+      } catch (_) {}
+      if (results.isEmpty) {
+        throw Exception('Không tìm thấy ${type.label.toLowerCase()} gần đây');
+      }
+      // During navigation rank by route position (ahead + same side of the
+      // road); otherwise nearest-first.
       final route = _route?.geometry ?? const <LatLng>[];
-      final startIdx =
-          (_engine?.snappedSegmentIndex ?? 0).clamp(0, max(0, route.length - 1))
-              as int;
-      r = rankPoisForRoute(r, route, startIndex: startIdx);
+      List<PoiResult> ranked;
+      if (route.length > 2) {
+        final startIdx =
+            (_engine?.snappedSegmentIndex ?? 0).clamp(
+                  0,
+                  max(0, route.length - 1),
+                )
+                as int;
+        ranked = rankPoisForRoute(results, route, startIndex: startIdx);
+      } else {
+        results.sort(
+          (a, b) =>
+              distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos)),
+        );
+        ranked = results;
+      }
       if (!mounted) return;
-      setNavState(() => _pois = r.take(8).toList());
+      setNavState(() => _pois = ranked.take(8).toList());
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -384,6 +437,16 @@ extension _NavPoi on _NavigationPageState {
     setNavState(() => _selectedPoi = p);
   }
 
+  /// A POI was tapped DIRECTLY on the navigation map: select it (the camera
+  /// centers on it via the vector map's follow-pause) and ensure the bottom
+  /// card shows the "Đi đến" action so the driver can navigate there.
+  void _onNavPoiTap(PoiResult p) {
+    setNavState(() {
+      if (!_pois.any((x) => identical(x, p))) _pois = [p, ..._pois];
+      _selectedPoi = p;
+    });
+  }
+
   /// Navigate to a picked POI, keeping the current navigation running.
   ///
   /// When a destination is already planned (the user is driving somewhere),
@@ -417,6 +480,7 @@ extension _NavPoi on _NavigationPageState {
         profile: _routeProfile,
         avoidHighway: _avoidHighway,
         avoidFerry: _avoidFerry,
+        preference: _routePreference,
       );
       final route = routes.first;
       if (!mounted) return;
@@ -434,7 +498,6 @@ extension _NavPoi on _NavigationPageState {
         _pois = [];
         _poiType = null;
         _selectedPoi = null;
-        _updateDragHandles(route);
       });
       unawaited(_loadElevation(route));
       unawaited(_refreshRouteCameras());

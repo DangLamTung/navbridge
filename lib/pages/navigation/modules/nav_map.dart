@@ -28,36 +28,6 @@ extension _NavMap on _NavigationPageState {
     setNavState(() => _carIcon = kCarIcons[(i + 1) % kCarIcons.length]);
   }
 
-  /// Switch the basemap layer (OSM → CARTO → Topo → Satellite → …).
-  void _selectTileLayer(String next) {
-    setNavState(() {
-      _tileSource = next;
-      _tileProvider = OfflineTileProvider(source: next);
-    });
-  }
-
-  /// Icon for a basemap layer option in the layer picker.
-  IconData _tileLayerIcon(String name) => switch (name) {
-    'osm' => Icons.map,
-    'carto' => Icons.layers,
-    'topo' => Icons.terrain,
-    'esri' => Icons.satellite_alt,
-    'vietmap' => Icons.map_outlined,
-    'vietmapsat' => Icons.satellite,
-    _ => Icons.map,
-  };
-
-  /// Display label for a basemap layer option in the layer picker.
-  String _tileLayerLabel(String name) => switch (name) {
-    'osm' => 'OpenStreetMap',
-    'carto' => 'Carto',
-    'topo' => 'Địa hình',
-    'esri' => 'Vệ tinh (ESRI)',
-    'vietmap' => 'Vietmap',
-    'vietmapsat' => 'Vietmap vệ tinh',
-    _ => name,
-  };
-
   /// Marker color for a camera's focus: speed = red, red-light = amber,
   /// general enforcement = blue (matches the nav-map layer in
   /// `ui/vector_nav_map.dart`).
@@ -92,10 +62,8 @@ extension _NavMap on _NavigationPageState {
             initialCenter: current ?? const LatLng(10.8231, 106.6297),
             initialZoom: 13,
             interactionOptions: const InteractionOptions(
-              flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+              flags: InteractiveFlag.all,
             ),
-            // Keep the route drag handle glued to its point while panning.
-            onPositionChanged: (cam, _) => _camNotifier.value = cam,
             // Google-style interactive route editing on the preview map:
             // tap an alternative route line to select it, long-press to add
             // a via point and re-plan.
@@ -147,6 +115,18 @@ extension _NavMap on _NavigationPageState {
               userAgentPackageName: 'com.navbridge.app',
               tileProvider: _tileProvider,
             ),
+            // Rain radar (RainViewer) — a translucent live rain map above the
+            // basemap, below the route. Online-only (fresh data every frame).
+            if (radarOn && _radarLayerUrl != null)
+              Opacity(
+                opacity: 0.55,
+                child: TileLayer(
+                  urlTemplate: _radarLayerUrl!,
+                  userAgentPackageName: 'com.navbridge.app',
+                  tileProvider: NetworkTileProvider(),
+                  maxNativeZoom: 7,
+                ),
+              ),
             if (route != null)
               PolylineLayer(
                 polylines: [
@@ -280,24 +260,6 @@ extension _NavMap on _NavigationPageState {
             ),
           ],
         ),
-        // Google-style draggable route handles (preview mode only): one per
-        // segment — a simple route has exactly one.
-        if (!_navigating && route != null && _dragHandles.isNotEmpty)
-          for (var i = 0; i < _dragHandles.length; i++)
-            _RouteDragHandle(
-              key: ValueKey('drag$i'),
-              via: _dragHandles[i],
-              cameraListenable: _camNotifier,
-              onDrag: (delta) {
-                final cam = _map.camera;
-                final cur = cam.latLngToScreenPoint(_dragHandles[i]);
-                final next = cam.pointToLatLng(
-                  Point(cur.x + delta.dx, cur.y + delta.dy),
-                );
-                setNavState(() => _dragHandles[i] = next);
-              },
-              onDragEnd: () => _commitDragHandle(i),
-            ),
       ],
     );
   }

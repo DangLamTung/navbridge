@@ -1,8 +1,8 @@
 part of '../navigation_page.dart';
 
-/// Google-style interactive route editing on the preview map: draggable via
-/// handles, long-press to insert a via point, elevation loading, and the
-/// route criteria toggles (avoid highway / ferry).
+/// Interactive route editing on the preview map: long-press to insert a via
+/// point, elevation loading, and the route criteria toggles (avoid highway /
+/// ferry).
 extension _NavRouteEdit on _NavigationPageState {
   /// Long-press the map to insert a via point and re-plan (interactive
   /// route editing on the OSM/offline map).
@@ -32,43 +32,6 @@ extension _NavRouteEdit on _NavigationPageState {
       if (d < best) best = d;
     }
     return best;
-  }
-
-  /// One drag handle per route segment (origin→stop1, stop1→stop2, …).
-  /// A simple A→B route gets exactly one handle; adding stops or a long
-  /// trip yields one per segment.
-  void _updateDragHandles(OsrmRoute? route) {
-    _dragHandles = [];
-    final g = route?.geometry ?? const <LatLng>[];
-    if (route == null || g.length < 2 || _stops.isEmpty) return;
-    final cum = route.stopCumulative;
-    for (var j = 0; j < _stops.length; j++) {
-      final cStart = j == 0 ? 0.0 : (j - 1 < cum.length ? cum[j - 1] : 0);
-      final cEnd = j < cum.length ? cum[j] : route.distance;
-      final dist = route.distance <= 0 ? 1.0 : route.distance;
-      final frac = ((cStart + cEnd) / 2) / dist;
-      final idx = (frac * (g.length - 1)).round().clamp(0, g.length - 1);
-      _dragHandles.add(g[idx]);
-    }
-  }
-
-  /// The user finished dragging handle [segIndex] → insert the point as a
-  /// via stop in that segment and re-plan (the route now goes through it).
-  void _commitDragHandle(int segIndex) {
-    if (segIndex < 0 || segIndex >= _dragHandles.length) return;
-    final via = _dragHandles[segIndex];
-    final stops = List<TripStop>.of(_stops);
-    final idx = segIndex.clamp(0, stops.length);
-    stops.insert(
-      idx,
-      TripStop(name: 'Điểm giữa', lat: via.latitude, lng: via.longitude),
-    );
-    setNavState(() {
-      _stops
-        ..clear()
-        ..addAll(stops);
-    });
-    _buildPlanRoute();
   }
 
   /// Best-effort elevation (ascent/descent) for the route card, cached per

@@ -23,10 +23,13 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/offline_cameras.dart';
+import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/poi_search.dart';
+import 'package:navbridge/ui/sign_icons.dart';
 import 'package:navbridge/services/terrain.dart';
-import 'package:navbridge/services/vietmap_config.dart' show VietmapConfig;
-import 'package:navbridge/core/car_filter.dart';
+// KALMAN (disabled 2026-08-20, user request — using raw fused fix now):
+// import 'package:navbridge/core/location_kalman.dart';
+import 'package:navbridge/core/route_snap.dart';
 import 'package:navbridge/core/trip_plan.dart';
 
 /// Built-in car marker icons (see assets/offline_map/icons/).
@@ -70,6 +73,8 @@ class VectorNavMap extends StatefulWidget {
     this.routeSteps = const [],
     this.routeStartIndex = 0,
     this.current,
+    this.speedMps,
+    this.gpsAccuracy,
     this.bearing,
     this.heading,
     this.headingUp = true,
@@ -85,9 +90,13 @@ class VectorNavMap extends StatefulWidget {
     this.satellite = false,
     this.vietmapBase = false,
     this.tileSource = 'osm',
+    this.showRadar = false,
+    this.radarUrl,
     this.smoothCamera = true,
     this.controller,
     this.showCompass = true,
+    this.onPoiTap,
+    this.signs = const [],
   });
 
   /// Route polyline to draw (latlong2 points).
@@ -104,6 +113,16 @@ class VectorNavMap extends StatefulWidget {
 
   /// Live position to follow.
   final ll.LatLng? current;
+
+  /// Live GPS speed (m/s) from the receiver. The Kalman fuses it as a second
+  /// measurement channel (with its own noise) so the velocity estimate is
+  /// sharp and stop-detection is reliable — GPS speed is far steadier than
+  /// position at a standstill.
+  final double? speedMps;
+
+  /// Live GPS fix accuracy (m) — the per-fix measurement noise σ the Kalman
+  /// uses for R (trust): a clean fix is trusted more, a degraded fix less.
+  final double? gpsAccuracy;
 
   /// Smoothed route-ahead bearing (0=N) from the nav engine
   /// (`TurnByTurnEngine.routeBearing`) — the direction of the road ahead of
@@ -166,6 +185,14 @@ class VectorNavMap extends StatefulWidget {
   /// keyed URL is never used without a real key.
   final bool vietmapBase;
 
+  /// Rain-radar overlay: when true and [radarUrl] is set, a translucent
+  /// RainViewer raster layer is added above the basemap (below the vector
+  /// layers' own geometry).
+  final bool showRadar;
+
+  /// Radar tile URL template (with {z}/{x}/{y}) for the selected frame.
+  final String? radarUrl;
+
   /// Active basemap layer from the page (`osm` / `carto` / `topo` / `esri` /
   /// `vietmap`…). Used for the ONLINE raster fallback (below the vector
   /// tiles) so the nav map keeps the SAME look the user picked while
@@ -186,6 +213,14 @@ class VectorNavMap extends StatefulWidget {
   /// window where it just eats space — heading-up follow already keeps the
   /// map oriented.
   final bool showCompass;
+
+  /// Called when the driver taps one of the POIs shown on the map
+  /// (gas/food/hotel/…) — lets the page select it and offer navigation there.
+  final void Function(PoiResult poi)? onPoiTap;
+
+  /// Road signs near the route (stop / give-way / traffic lights) drawn as
+  /// small colored dots on the nav map.
+  final List<RoadSign> signs;
 
   @override
   State<VectorNavMap> createState() => _VectorNavMapState();
@@ -216,6 +251,12 @@ class _VectorNavMapState extends State<VectorNavMap>
   String? _lastSearchSig;
   final List<Circle> _cameraCircles = [];
   String? _lastCameraSig;
+  final List<Circle> _signCircles = [];
+  String? _signLayerSig;
+
+  /// Real sign icons (stop/give-way/speed/populated) projected to screen
+  /// positions — rendered as Flutter overlays, refreshed with the camera.
+  final List<({RoadSign sign, Offset pos})> _signOverlays = [];
   bool _hasPosition = false;
   // Vietmap-style nav camera: start at max zoom with the car centered. The
   // user can pinch to a different zoom — it's adopted (see [_onCamIdle]) so
@@ -257,7 +298,11 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// filtered speed along the filter heading, so the map keeps gliding
   /// instead of freezing between fixes.
   ll.LatLng? _drPos;
-  double _drSpeedMps = 0; // CarFilter-smoothed speed estimate (m/s)
+
+  /// Last RAW GPS fix ([widget.current]) — the camera is anchored to this so
+  /// it never drifts away from the real position.
+  ll.LatLng? _lastRealFix;
+  double _drSpeedMps = 0; // raw fused speed estimate (m/s)
   DateTime _drLastFix = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastCamStep = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastCamMove = DateTime.fromMillisecondsSinceEpoch(0);
@@ -268,7 +313,9 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// jumpy — the car used to lurch / the arrow used to shake). It assumes the
   /// car is always on the route, so it follows the engine's route bearing and
   /// keeps the puck glued to the snapped fix.
-  final CarFilter _kf = CarFilter();
+  // KALMAN (disabled by user request 2026-08-20 — trust the raw fused fix).
+  // Restore: uncomment the line below + the location_kalman import above.
+  // final LocationKalman _lk = LocationKalman();
 
   /// 10 s idle → auto-center back on the car after the user pans away.
   Timer? _recenterTimer;
@@ -412,32 +459,28 @@ class _VectorNavMapState extends State<VectorNavMap>
       final src = style['sources'] as Map<String, dynamic>;
       src['openmaptiles']['url'] = 'pmtiles://file://${pmtilesFile.path}';
       debugPrint('VECTORMAP: vector source -> ${src['openmaptiles']['url']}');
-      // Online raster fallback so the nav map shows ANYWHERE while online —
-      // the bundled pmtiles only covers HCMC, so outside it the vector source
-      // has no tiles (flat gray "no map"). A light CARTO basemap (no labels;
-      // the vector layers draw labels) sits above the background and below
-      // the vector layers: where vector tiles exist they draw over it,
-      // elsewhere the raster shows through. Free, no key.
-      src['raster-fallback'] = <String, dynamic>{
-        'type': 'raster',
-        'tiles': [
-          'https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
-        ],
-        'tileSize': 256,
-        'maxzoom': 20,
-        'attribution': '© CARTO © OpenStreetMap',
-      };
+      // NOTE: NO online raster fallback on the nav map. It used to render an
+      // OSM/CARTO raster below the vector tiles, which LEAKED through outside
+      // the pmtiles coverage and made the map "change type" while zooming.
+      // The nav map is now ONE consistent style (the gray vector tiles over
+      // the opaque background) — it can never swap to another map type.
       final layers = style['layers'] as List<dynamic>;
-      final insertAt =
-          (layers.isNotEmpty &&
-              layers.first is Map &&
-              (layers.first as Map)['id'] == 'background')
-          ? 1
-          : 0;
-      layers.insert(insertAt, <String, dynamic>{
-        'id': 'raster-fallback',
+      // Rain-radar overlay (RainViewer, free/no key): a translucent raster
+      // layer above the basemap. The tile URL is set per-frame in
+      // [_buildStyleString]; an empty tiles list renders nothing when off.
+      src['radar'] = <String, dynamic>{
         'type': 'raster',
-        'source': 'raster-fallback',
+        'tiles': <String>[],
+        'tileSize': 256,
+        'maxzoom': 7,
+        'attribution': '© RainViewer',
+      };
+      layers.add(<String, dynamic>{
+        'id': 'radar',
+        'type': 'raster',
+        'source': 'radar',
+        'layout': <String, dynamic>{'visibility': 'none'},
+        'paint': <String, dynamic>{'raster-opacity': 0.55},
       });
       style['glyphs'] = (style['glyphs'] as String).replaceAll(
         '__NAV_FONTS__',
@@ -510,54 +553,23 @@ class _VectorNavMapState extends State<VectorNavMap>
         layers.removeWhere((l) => l is Map && l['id'] == 'building-3d');
       }
     }
-    // Satellite basemap: swap the online raster-fallback to ESRI World
-    // Imagery (free, no key — real terrain photos, great for mountains).
-    // Offline it stays transparent and the vector map shows through.
+    // No raster fallback — the nav map is ONE consistent vector style (see
+    // _prepare). Satellite / night / Vietmap basemaps are not applied here.
     final src = style['sources'] as Map<String, dynamic>;
-    final fallback = src['raster-fallback'] as Map<String, dynamic>?;
-    if (fallback != null) {
-      // Raster fallback URL + attribution, chosen to MATCH the active
-      // basemap layer ([tileSource]) so the nav map doesn't suddenly look
-      // like a different map type. Explicit overrides (satellite / night /
-      // Vietmap source) take priority; otherwise follow the user's layer.
-      String url;
-      String attribution;
-      if (widget.satellite) {
-        url =
-            'https://server.arcgisonline.com/ArcGIS/rest/services/'
-            'World_Imagery/MapServer/tile/{z}/{y}/{x}';
-        attribution = '© ESRI';
-      } else if (widget.nightMode) {
-        // No dark styles for OSM/topo — use CARTO dark (looks dark like the
-        // rest of the night theme).
-        url = 'https://basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png';
-        attribution = '© CARTO © OpenStreetMap';
-      } else if (widget.vietmapBase) {
-        // Vietmap light raster when the Vietmap source is active (online).
-        // The caller gates this on hasKeys, so apikey is always present.
-        url = VietmapConfig.mapTiles;
-        attribution = '© Vietmap';
-      } else {
-        // Match the user's chosen basemap layer.
-        switch (widget.tileSource) {
-          case 'topo':
-            url = 'https://tile.opentopomap.org/{z}/{x}/{y}.png';
-            attribution = '© OpenTopoMap © OpenStreetMap';
-          case 'esri':
-            url =
-                'https://server.arcgisonline.com/ArcGIS/rest/services/'
-                'World_Imagery/MapServer/tile/{z}/{y}/{x}';
-            attribution = '© ESRI';
-          case 'vietmap':
-            url = VietmapConfig.mapTiles;
-            attribution = '© Vietmap';
-          default: // 'osm' (and any unknown → OSM style)
-            url = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-            attribution = '© OpenStreetMap';
+    // Rain-radar overlay (RainViewer): wire the selected frame's tile URL and
+    // toggle the layer visibility. Empty tiles render nothing when off.
+    final radarSrc = src['radar'] as Map<String, dynamic>?;
+    if (radarSrc != null) {
+      final show = widget.showRadar && widget.radarUrl != null;
+      radarSrc['tiles'] = show ? [widget.radarUrl!] : <String>[];
+      for (final l in (style['layers'] as List<dynamic>? ?? const [])) {
+        if (l is Map && l['id'] == 'radar') {
+          l['layout'] = <String, dynamic>{
+            'visibility': show ? 'visible' : 'none',
+          };
+          break;
         }
       }
-      fallback['tiles'] = [url];
-      fallback['attribution'] = attribution;
     }
     // Night mode: remap the whole vector style to a REAL dark palette (light
     // fills → dark, roads → medium gray, labels → light text on a dark halo)
@@ -1017,6 +1029,99 @@ class _VectorNavMapState extends State<VectorNavMap>
     }
   }
 
+  /// Road-sign markers on the nav map. TRAFFIC LIGHTS stay as small native
+  /// dots (they're dense in cities — 10k+ across VN, often 100+ near a route
+  /// — so drawing each as an icon would be heavy). STOP / give-way / speed /
+  /// "đông dân cư" signs are rendered as REAL Vietnamese sign icons via
+  /// [_projectSignOverlays] (Flutter overlays, like the car arrow).
+  Future<void> _updateSigns() async {
+    final ctrl = _controller;
+    if (ctrl == null) return;
+    unawaited(_projectSignOverlays());
+    final signals = widget.signs
+        .where((s) => s.kind == RoadSignKind.signal)
+        .toList();
+    final sig = signals
+        .map(
+          (s) =>
+              '${s.kind.key}:${s.lat.toStringAsFixed(5)},'
+              '${s.lng.toStringAsFixed(5)}',
+        )
+        .join('|');
+    if (sig == _signLayerSig) return;
+    _signLayerSig = sig;
+    for (final c in _signCircles) {
+      try {
+        ctrl.removeCircle(c);
+      } catch (_) {}
+    }
+    _signCircles.clear();
+    for (final s in signals) {
+      try {
+        final c = await ctrl.addCircle(
+          CircleOptions(
+            geometry: LatLng(s.lat, s.lng),
+            circleColor: '#9AA0A6', // grey — đèn giao thông
+            circleRadius: 4.5,
+            circleStrokeColor: '#202124',
+            circleStrokeWidth: 2.0,
+            circleOpacity: 0.9,
+          ),
+        );
+        _signCircles.add(c);
+      } catch (_) {}
+    }
+  }
+
+  /// Project the non-traffic-light signs (real icons) to their on-screen
+  /// spots so the SVG-like overlays stay glued to the map while following or
+  /// panning. Same physical→logical fix as the car arrow (device px / dpr).
+  Future<void> _projectSignOverlays() async {
+    final ctrl = _controller;
+    if (ctrl == null) return;
+    final signs = widget.signs
+        .where((s) => s.kind != RoadSignKind.signal)
+        .toList();
+    if (signs.isEmpty) {
+      if (_signOverlays.isNotEmpty && mounted) {
+        setState(() => _signOverlays.clear());
+      }
+      return;
+    }
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    try {
+      final pts = await ctrl.toScreenLocationBatch([
+        for (final s in signs) LatLng(s.lat, s.lng),
+      ]);
+      if (!mounted) return;
+      final list = <({RoadSign sign, Offset pos})>[];
+      for (var i = 0; i < signs.length; i++) {
+        list.add((
+          sign: signs[i],
+          pos: Offset(pts[i].x.toDouble() / dpr, pts[i].y.toDouble() / dpr),
+        ));
+      }
+      // Diff to avoid rebuild spam (positions are recreated each call).
+      var changed = list.length != _signOverlays.length;
+      if (!changed) {
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].sign != _signOverlays[i].sign ||
+              list[i].pos != _signOverlays[i].pos) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (changed) {
+        setState(() {
+          _signOverlays
+            ..clear()
+            ..addAll(list);
+        });
+      }
+    } catch (_) {}
+  }
+
   void _updateRoute() {
     final ctrl = _controller;
     if (ctrl == null) return;
@@ -1208,10 +1313,16 @@ class _VectorNavMapState extends State<VectorNavMap>
     }
     final dtS = now.difference(_lastCamStep).inMilliseconds / 1000.0;
     _lastCamStep = now;
-    // Dead-reckon: glide the car between 1 Hz GPS fixes using the Kalman
-    // filter's predicted position (position + velocity fused from the fixes).
+    // KALMAN (disabled): used to dead-reckon `_lk.predict(dtS)` here. Now the
+    // car follows the RAW Android Fused Location fix directly — a simple
+    // linear glide toward the last fix at the reported speed so the camera
+    // doesn't teleport between fixes (no filtering of any kind).
     if (dtS > 0 && dtS < 1.0 && _drSpeedMps > 0.5) {
-      _drPos = _kf.predict(dtS);
+      final real = _lastRealFix;
+      final dr = _drPos;
+      if (real != null && dr != null) {
+        _drPos = _advanceToward(dr, real, _drSpeedMps * dtS);
+      }
     }
     // Parked + settled → stop ticking until the next GPS fix (saves battery).
     if (_drSpeedMps < 1.0 &&
@@ -1278,8 +1389,9 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// or free). Clamped to the screen so nothing vanishes.
   Future<void> _updateCarScreen() async {
     final ctrl = _controller;
-    final c = widget.current;
+    final c = _drPos ?? widget.current; // arrow follows the Kalman position
     if (ctrl == null || c == null) return;
+    unawaited(_projectSignOverlays()); // keep real sign icons glued to map
     try {
       final size = MediaQuery.of(context).size;
       final dpr = MediaQuery.of(context).devicePixelRatio;
@@ -1392,6 +1504,30 @@ class _VectorNavMapState extends State<VectorNavMap>
     return math.sqrt(dLat * dLat + dLng * dLng);
   }
 
+  /// Project [p] onto the route polyline so the car arrow + camera always
+  /// RIDE the road (the Kalman glide can cut across a corner between fixes;
+  /// this glues the drawn position back onto the route, Google-Maps style).
+  /// Project [p] onto the route polyline so the car arrow + camera always
+  /// RIDE the road (Google-Maps style). Only snaps when the point is near
+  /// the route (≤40 m) — a genuine off-route deviation stays free so the
+  /// puck shows the real position.
+  ll.LatLng _snapToRoute(ll.LatLng p) =>
+      snapToRoutePolyline(p, widget.routeGeometry);
+
+  /// Move [from] toward [to] by at most [maxM] metres (linear, clamped to not
+  /// overshoot). Used to glide the car toward the raw fused fix between GPS
+  /// updates without any filtering (Kalman disabled).
+  ll.LatLng _advanceToward(ll.LatLng from, ll.LatLng to, double maxM) {
+    if (maxM <= 0) return from;
+    final d = _distMeters(from, to);
+    if (d <= maxM) return to;
+    final t = maxM / d;
+    return ll.LatLng(
+      from.latitude + (to.latitude - from.latitude) * t,
+      from.longitude + (to.longitude - from.longitude) * t,
+    );
+  }
+
   @override
   void didUpdateWidget(VectorNavMap old) {
     super.didUpdateWidget(old);
@@ -1411,7 +1547,9 @@ class _VectorNavMapState extends State<VectorNavMap>
         old.nightMode != widget.nightMode ||
         old.satellite != widget.satellite ||
         old.vietmapBase != widget.vietmapBase ||
-        old.tileSource != widget.tileSource) {
+        old.tileSource != widget.tileSource ||
+        old.showRadar != widget.showRadar ||
+        old.radarUrl != widget.radarUrl) {
       // Rebuild the style (3D buildings / terrain / night / satellite /
       // basemap layer) and hot-swap it via setStyle — much lighter than
       // re-creating the whole platform view (which reset the camera and
@@ -1428,17 +1566,17 @@ class _VectorNavMapState extends State<VectorNavMap>
     if (old.selectedPoi != widget.selectedPoi && widget.selectedPoi != null) {
       _focusPoi(widget.selectedPoi!);
     }
-    // Feed every NEW GPS fix into the Kalman filter (the map glides toward
-    // its predicted position between fixes). latlong2's LatLng implements ==,
-    // so `!=` detects a real position change — not a cosmetic rebuild.
+    // KALMAN (disabled by user request 2026-08-20): the car now follows the
+    // RAW Android Fused Location fix (`widget.current`, already road-snapped
+    // by `_handleNav`), with the drawn position projected onto the route so it
+    // rides the road. No filtering layer between the fix and the puck.
     final newCur = widget.current;
     if (newCur != null && newCur != old.current) {
       final now = DateTime.now();
-      // The engine's smoothed route-ahead bearing drives the dead-reckon
-      // direction (the car is assumed to be on the route).
-      _kf.update(newCur, routeBearing: _routeBearing());
-      _drPos = _kf.position;
-      _drSpeedMps = _kf.speedMps;
+      // (was: _lk.update(newCur, accuracy: widget.gpsAccuracy, ...))
+      _lastRealFix = newCur;
+      _drPos = _snapToRoute(newCur);
+      _drSpeedMps = widget.speedMps ?? 0;
       _drLastFix = now;
     }
     _followPosition();
@@ -1446,6 +1584,7 @@ class _VectorNavMapState extends State<VectorNavMap>
     _updatePois();
     _updateSearchPois();
     _updateCameras();
+    _updateSigns();
   }
 
   /// Hot-swap the style at runtime (terrain / night toggles). Old annotation
@@ -1466,6 +1605,7 @@ class _VectorNavMapState extends State<VectorNavMap>
     _lastPoiSig = null;
     _lastSearchSig = null;
     _lastCameraSig = null;
+    _signLayerSig = null;
     _casing = null;
     _routeLine = null;
     _trafficLines.clear();
@@ -1475,6 +1615,7 @@ class _VectorNavMapState extends State<VectorNavMap>
     _searchCircles.clear();
     _searchSymbols.clear();
     _cameraCircles.clear();
+    _signCircles.clear();
   }
 
   /// Center the camera on the tapped POI and pause auto-follow so the user
@@ -1497,6 +1638,37 @@ class _VectorNavMapState extends State<VectorNavMap>
       ),
     );
     if (mounted) setState(() {});
+  }
+
+  /// A map tap at [point]: if it lands on one of the shown POIs (within a
+  /// finger-sized radius of its on-screen position) call [onPoiTap] so the
+  /// page can select it and offer navigation. No POI near the tap → nothing.
+  Future<void> _maybeTapPoi(math.Point<double> point) async {
+    final ctrl = _controller;
+    final pois = widget.pois;
+    if (ctrl == null || pois.isEmpty) return;
+    try {
+      // Convert to maplibre LatLng (the controller's screen-projection API
+      // expects maplibre's LatLng, not latlong2's).
+      final pts = await ctrl.toScreenLocationBatch([
+        for (final p in pois) LatLng(p.pos.latitude, p.pos.longitude),
+      ]);
+      var best = 42.0 * 42.0; // ~42 px tap radius
+      var bestIdx = -1;
+      for (var i = 0; i < pts.length; i++) {
+        final s = pts[i];
+        final dx = s.x - point.x;
+        final dy = s.y - point.y;
+        final d = dx * dx + dy * dy;
+        if (d < best) {
+          best = d;
+          bestIdx = i;
+        }
+      }
+      if (bestIdx >= 0) widget.onPoiTap?.call(pois[bestIdx]);
+    } catch (_) {
+      // Hit-test is best-effort — a failure just means the tap did nothing.
+    }
   }
 
   @override
@@ -1568,6 +1740,9 @@ class _VectorNavMapState extends State<VectorNavMap>
           },
           onCameraMove: _onCamMove,
           onCameraIdle: _onCamIdle,
+          // Tap a POI (gas/food/hotel) shown on the map → notify the page so
+          // it can select it and offer "Đi đến" (choose where to navigate).
+          onMapClick: (point, _) => _maybeTapPoi(point),
           onStyleLoadedCallback: () async {
             debugPrint('VECTORMAP: style loaded — adding route');
             await _addRoute();
@@ -1578,6 +1753,7 @@ class _VectorNavMapState extends State<VectorNavMap>
             await _updatePois();
             await _updateSearchPois();
             await _updateCameras();
+            await _updateSigns();
           },
         ),
         // The car arrow: a Flutter overlay that needs NO per-frame MapLibre
@@ -1611,6 +1787,16 @@ class _VectorNavMapState extends State<VectorNavMap>
                 ),
               ),
             ),
+        // Real Vietnamese road-sign icons (stop / give-way / speed / đông dân
+        // cư) — projected onto the map like the car arrow.
+        for (final o in _signOverlays)
+          Positioned(
+            left: o.pos.dx - 20,
+            top: o.pos.dy - 20,
+            child: IgnorePointer(
+              child: SignIcon(kind: o.sign.kind, value: o.sign.value, size: 40),
+            ),
+          ),
       ],
     );
   }

@@ -21,6 +21,20 @@ extension _NavVoice on _NavigationPageState {
       builder: (_) => AiChatPanel(
         context: _aiContext(),
         initialQuestion: question?.trim(),
+        // Opened by a voice command → speak the answer aloud while it streams
+        // so the driver never has to look at the screen.
+        speakAloud: question != null && question.trim().isNotEmpty,
+        onSpeak: (sentence) {
+          if (sentence.isEmpty) {
+            _voice.stop(); // flush any queued spoken answer
+          } else {
+            _voice.speakQueued(sentence);
+          }
+        },
+        // "Đi đến" chip on an AI-grounded place → plan the route.
+        onNavigate: (name, lat, lng) {
+          unawaited(_planToPoint(name, lat, lng));
+        },
         onMicPressed: () async {
           final mic = await Permission.microphone.request();
           if (!mic.isGranted) return '';
@@ -83,6 +97,7 @@ extension _NavVoice on _NavigationPageState {
           : 'Camera ${cam.camera.name} phía trước '
                 '${cam.routeMeters.round()} m',
       weather: _weatherText(w),
+      radar: _rainPredictionText(w),
       tripNotes: _stops.isEmpty
           ? null
           : 'Hành trình ${_stops.length} điểm dừng',
@@ -95,6 +110,17 @@ extension _NavVoice on _NavigationPageState {
     if (w == null || w.tempC == null) return null;
     final cond = weatherTextForCode(w.weatherCode);
     return cond.isEmpty ? '${w.tempC}°C' : '${w.tempC}°C, $cond';
+  }
+
+  /// "mưa 80% trong giờ tới" for the AI context — the radar-based rain
+  /// prediction (Open-Meteo hourly probability), so the assistant can answer
+  /// "sắp mưa không?". Null when the feed has no probability.
+  String? _rainPredictionText(WeatherInfo? w) {
+    final p = w?.rainProbSoon;
+    if (p == null) return null;
+    if (p >= 50) return 'mưa khả năng cao $p% trong giờ tới';
+    if (p >= 30) return 'khả năng mưa $p% trong giờ tới';
+    return 'khả năng mưa thấp $p% trong giờ tới';
   }
 
   /// Speak the upcoming maneuver AHEAD of the turn at speed-aware distances
@@ -182,14 +208,69 @@ extension _NavVoice on _NavigationPageState {
     final onRoad = cur.isNotEmpty ? ' trên $cur' : '';
     final into = target.isNotEmpty ? ' vào $target' : '';
     // Announce the effective speed limit of the current road (item 2) — the
-    // value shown in the road-info chip. Omitted when unknown (0), so the
-    // announcement never invents a limit.
-    final limit = _roadInfo?.speedLimit ?? 0;
+    // value shown in the road-info chip (sign-aware: the last speed-limit sign
+    // passed wins over the road's default). Omitted when unknown (0).
+    final limit = _effectiveSpeedLimit;
     final limitTxt = limit > 0 ? ' Tốc độ tối đa $limit km/h.' : '';
     if (now) {
       return '$verb$into.$limitTxt';
     }
     return 'Đi$onRoad, sau $m mét, $verb$into.$limitTxt';
+  }
+
+  /// Warn by voice when the driver EXCEEDS the road's speed limit. Announces
+  /// once when the speeding episode starts, then at most every 60 s while
+  /// still speeding (never a per-fix beep); resets when back within the limit
+  /// (hysteresis). The ~5 km/h threshold ignores normal speedometer error.
+  void _maybeSpeakOverspeed(double speedMps) {
+    if (!_voiceOn || !_voice.ready) return;
+    if (!_navigating && !_simulating) return;
+    // Sign-aware limit: the last speed-limit sign (incl. Waze per-segment)
+    // passed wins over the road's default.
+    final limit = _effectiveSpeedLimit;
+    if (limit <= 0 || !speedMps.isFinite) return;
+    final kmh = speedMps * 3.6;
+    final over = kmh - limit;
+    if (over >= 5) {
+      final now = DateTime.now();
+      final last = _lastOverspeedAt;
+      if (!_speedingSpoken ||
+          (last != null &&
+              now.difference(last) >= const Duration(seconds: 60))) {
+        _speedingSpoken = true;
+        _lastOverspeedAt = now;
+        _voice.speak(
+          over >= 20
+              ? 'Giảm tốc độ! Bạn đang vượt quá $over km/h so với giới hạn $limit km/h.'
+              : 'Bạn đang vượt quá tốc độ, $kmh km/h. Giới hạn $limit km/h.',
+        );
+      }
+    } else {
+      _speedingSpoken = false;
+    }
+  }
+
+  /// Warn by voice when GPS quality is poor (reported accuracy ≥ 30 m) so the
+  /// driver knows the fix may wander off the road. Announces once per degraded
+  /// episode, then at most every 60 s while still bad; resets when the fix
+  /// recovers under ~15 m (hysteresis). Only during navigation.
+  void _maybeSpeakGpsWeak(double accuracyM) {
+    if (!_voiceOn || !_voice.ready) return;
+    if (!_navigating && !_simulating) return;
+    if (!accuracyM.isFinite || accuracyM <= 0) return;
+    if (accuracyM >= 30) {
+      final now = DateTime.now();
+      final last = _lastGpsWeakAt;
+      if (!_gpsWeakSpoken ||
+          (last != null &&
+              now.difference(last) >= const Duration(seconds: 60))) {
+        _gpsWeakSpoken = true;
+        _lastGpsWeakAt = now;
+        _voice.speak('Tín hiệu GPS yếu, vị trí có thể không chính xác.');
+      }
+    } else if (accuracyM < 15) {
+      _gpsWeakSpoken = false;
+    }
   }
 
   Future<void> _toggleListening() async {
@@ -319,13 +400,13 @@ extension _NavVoice on _NavigationPageState {
     if (!mounted) return;
     _listening = false;
     setNavState(() => _alwaysOnVoice = true);
-    _voice.speak('Đã bật nghe liên tục. Nói NavBridge để ra lệnh.');
+    _voice.speak('Chế độ nghe liên tục đã bật.');
     // Background always-on: a foreground service keeps the process + mic
     // alive so the wake word still works with the screen off / app minimized
     // (the STT loop runs in the main isolate, the service just keeps it up).
     unawaited(NavForegroundService.instance.startVoiceService());
     await _commands.listenAlwaysOn(
-      onWake: () => _voice.speak('NavBridge, nghe rồi.'),
+      onWake: () => _voice.speak('Nghe rồi, nói lệnh đi.'),
       onCommand: _handleCommandText,
       onPartial: _onVoicePartial,
     );

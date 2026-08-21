@@ -119,6 +119,15 @@ extension _NavGps on _NavigationPageState {
     // Simulated drive drives the route itself — ignore real (stationary) GPS
     // so it can't yank the car back to the phone's location (T9).
     if (_simulating) return;
+    final now = DateTime.now();
+    final dt = _lastGpsFixTime == null
+        ? 0.0
+        : now.difference(_lastGpsFixTime!).inMilliseconds / 1000.0;
+    _lastGpsFixTime = now;
+    debugPrint(
+      'GPS: fix dt=${dt.toStringAsFixed(2)}s acc=${p.accuracy}m '
+      'spd=${p.speed.isNaN ? 0 : p.speed.toStringAsFixed(0)}',
+    );
     final pos = LatLng(p.latitude, p.longitude);
     _current = pos;
     _heading = p.heading.isNaN ? null : p.heading;
@@ -143,6 +152,9 @@ extension _NavGps on _NavigationPageState {
     _gpsWindow.add(pos);
     if (_gpsWindow.length > 15) _gpsWindow.removeAt(0);
     _lastSpeedMps = p.speed;
+    _lastGpsAccuracy = p.accuracy;
+    // Voice-alert when GPS accuracy degrades (fixes may wander off-road).
+    _maybeSpeakGpsWeak(p.accuracy);
     unawaited(_maybeSnapToRoad());
     // Wrong-way (inverse) re-route: driving OPPOSITE to the route direction
     // while staying near the road never trips the >50 m off-route timer (the
@@ -156,20 +168,11 @@ extension _NavGps on _NavigationPageState {
       _reRoute(pos, speedMps: p.speed);
       return;
     }
-    // Off the route? Re-route once the car stays off-path (>50 m)
-    // for 10 s (or immediately when it's clearly far gone, >250 m).
-    final off = _engine!.offRouteDistance(pos);
-    if (off > 50) {
-      final now = DateTime.now();
-      final since = _offRouteSince ??= now;
-      if (off > 250 || now.difference(since) >= const Duration(seconds: 5)) {
-        _offRouteSince = null;
-        _reRoute(pos, speedMps: p.speed);
-        return;
-      }
-    } else {
-      _offRouteSince = null;
-    }
+    // Off-route detection lives in [_handleNav] (authoritative). Here we add
+    // Google-style NETWORK matching (offline graph): fast road-based reroute
+    // that fires when the nearest ROAD isn't part of the route — works even
+    // on parallel roads where the raw >50 m distance check can't tell.
+    unawaited(_networkMatch(pos));
     _handleNav(pos, speedMps: p.speed);
   }
 
@@ -190,6 +193,46 @@ extension _NavGps on _NavigationPageState {
     final diff = (travel - route + 540) % 360 - 180;
     if (diff.abs() > 120) return since ?? DateTime.now();
     return null;
+  }
+
+  /// Google-style NETWORK matching (offline graph): snap the fix to the
+  /// nearest ROAD, then check whether that road is part of the route.
+  /// - Snapped point IS on the route (<20 m) → clear both latches (a fix
+  ///   that reads 40 m off line but snaps to a route road is FINE — this
+  ///   kills the false reroutes that raw-distance checks cause near parallel
+  ///   streets and lane offsets).
+  /// - Snapped point is on a DIFFERENT road → genuine deviation → latch and
+  ///   reroute after ~3 s (road-based, so it works even on parallel roads).
+  /// - Fix is >25 m from ANY road (parking lot / GPS loss) → ignore.
+  /// Throttled ~1/s (the native snap is cheap); only active when the offline
+  /// graph is loaded, so OSRM-only routes fall back to the raw check.
+  Future<void> _networkMatch(LatLng pos) async {
+    if (!_navigating) return;
+    final engine = _engine;
+    if (engine == null || !OfflineRouter.instance.isLoaded) return;
+    final now = DateTime.now();
+    if (_lastNetMatch != null &&
+        now.difference(_lastNetMatch!) < const Duration(seconds: 1)) {
+      return;
+    }
+    _lastNetMatch = now;
+    final snap = await OfflineRouter.instance.snapToRoad(pos);
+    if (!mounted || !_navigating || snap == null) return;
+    if (snap.distance > 25) return; // too far from any road — GPS loss, skip
+    final snapped = LatLng(snap.lat, snap.lng);
+    final onRoute = engine.offRouteDistance(snapped) < 20;
+    _netOnRoute = onRoute; // authoritative while fresh (see _handleNav)
+    if (onRoute) {
+      _netOffSince = null;
+      _offRouteSince = null; // network says we're on a route road — trust it
+      return;
+    }
+    // On a road that is NOT part of the route → real deviation.
+    _netOffSince ??= now;
+    if (now.difference(_netOffSince!) >= const Duration(seconds: 3)) {
+      _netOffSince = null;
+      _reRoute(pos, speedMps: _lastSpeedMps);
+    }
   }
 
   /// Online GPS road-snapping: send the rolling trace to OSRM /match
@@ -250,6 +293,13 @@ extension _NavGps on _NavigationPageState {
         final r = await _roadInfoFromGraph(pos);
         if (r != null && mounted) {
           setNavState(() => _roadInfo = r);
+          // VN rarely tags maxspeed, so the graph limit is usually only the
+          // statutory default. When ONLINE, correct it in the background from
+          // OSM's REAL `maxspeed` tag — the graph value shows instantly and
+          // the correction overwrites it ~1 s later (never blocks the UI).
+          if (r.maxspeed == null && !_offline && !forceOffline) {
+            unawaited(_correctSpeedFromOsm(pos));
+          }
           return;
         }
       } catch (_) {
@@ -268,6 +318,27 @@ extension _NavGps on _NavigationPageState {
       setNavState(() => _roadInfo = r);
     } catch (_) {
       // keep the last known road on failure
+    } finally {
+      if (mounted) setNavState(() => _roadLoading = false);
+    }
+  }
+
+  /// Background speed-limit correction: re-fetch road info from OSM (which
+  /// reads the real `maxspeed` tag when tagged) and overwrite the limit the
+  /// offline graph only estimated via the statutory class default. Best-effort
+  /// — on failure the graph/statutory value is kept.
+  Future<void> _correctSpeedFromOsm(LatLng pos) async {
+    if (_roadLoading) return; // don't stack with the main fetch
+    setNavState(() => _roadLoading = true);
+    try {
+      final r = await fetchRoadInfo(
+        pos,
+        vehicle: vehicleType,
+        override: speedOverride,
+      );
+      if (mounted && r != null) setNavState(() => _roadInfo = r);
+    } catch (_) {
+      // keep the current (graph/statutory) value
     } finally {
       if (mounted) setNavState(() => _roadLoading = false);
     }

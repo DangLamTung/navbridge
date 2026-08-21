@@ -34,19 +34,32 @@ extension _NavBars on _NavigationPageState {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
       child: _directionsMode
-          ? DirectionsBar(
-              startController: _startCtrl,
-              startFocus: _startFocus,
-              endController: _searchCtrl,
-              endFocus: _searchFocus,
-              onStartChanged: _onStartChanged,
-              onEndChanged: _onSearchChanged,
-              onSwap: _swapStartEnd,
-              onAddStop: _addDirectionsStop,
-              onBackToSearch: _enterSearchMode,
-              busy: _searching || _building,
-              startLabel: _originName.isEmpty ? 'Vị trí hiện tại' : _originName,
-            )
+          ? (_topBarCollapsed
+                ? CollapsedDirectionsBar(
+                    destination: _destinationName,
+                    startLabel: _originName.isEmpty
+                        ? 'Vị trí hiện tại'
+                        : _originName,
+                    onExpand: () => setNavState(() => _topBarCollapsed = false),
+                    onBackToSearch: _enterSearchMode,
+                  )
+                : DirectionsBar(
+                    startController: _startCtrl,
+                    startFocus: _startFocus,
+                    endController: _searchCtrl,
+                    endFocus: _searchFocus,
+                    onStartChanged: _onStartChanged,
+                    onEndChanged: _onSearchChanged,
+                    onSwap: _swapStartEnd,
+                    onAddStop: _addDirectionsStop,
+                    onBackToSearch: _enterSearchMode,
+                    onCollapse: () =>
+                        setNavState(() => _topBarCollapsed = true),
+                    busy: _searching || _building,
+                    startLabel: _originName.isEmpty
+                        ? 'Vị trí hiện tại'
+                        : _originName,
+                  ))
           : SearchPill(
               controller: _searchCtrl,
               focusNode: _searchFocus,
@@ -283,11 +296,11 @@ extension _NavBars on _NavigationPageState {
   /// 46 px circles which ate the height and made the map tiny.
   Widget _pipTopBar() {
     final nav = _progress;
-    final limit = _roadInfo?.speedLimit;
+    final limit = _effectiveSpeedLimit;
     final kmh = (nav?.speedMps.isFinite ?? false)
         ? (nav!.speedMps * 3.6).round()
         : null;
-    final speeding = kmh != null && limit != null && kmh > limit;
+    final speeding = kmh != null && limit > 0 && kmh > limit;
     return Material(
       color: Colors.white,
       elevation: 4,
@@ -320,7 +333,7 @@ extension _NavBars on _NavigationPageState {
               ),
               const Spacer(),
               // Speed limit — only when known.
-              if (limit != null)
+              if (limit > 0)
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 6,
@@ -374,29 +387,44 @@ extension _NavBars on _NavigationPageState {
         );
       }
     } else if (route != null) {
-      card = RoutePreviewCard(
-        etaText: '${(route.duration / 60).round()} ph',
-        distanceText: formatDistance(route.distance),
-        destination: _destinationName,
-        stopCount: _stops.length,
-        profile: _routeProfile,
-        onProfile: _setRouteProfile,
-        onStart: _startNavigation,
-        onClear: _exitNavigation,
-        onSimulate: _startSimulation,
-        tollCost: route.tollCost,
-        alternativeLabels: [
-          for (final r in _alternativeRoutes)
-            '${(r.duration / 60).round()} ph • ${formatDistance(r.distance)}',
-        ],
-        selectedAlternative: _selectedRoute,
-        onAlternative: _selectAlternative,
-        avoidHighway: _avoidHighway,
-        onToggleAvoidHighway: _toggleAvoidHighway,
-        avoidFerry: _avoidFerry,
-        onToggleAvoidFerry: _toggleAvoidFerry,
-        elevation: _elevation,
-      );
+      card = _routeCardCollapsed
+          ? _collapsedRouteCard(route)
+          : RoutePreviewCard(
+              etaText:
+                  '${((route.duration * kEtaRealismFactor) / 60).round()} ph',
+              distanceText: formatDistance(route.distance),
+              destination: _destinationName,
+              stopCount: _stops.length,
+              profile: _routeProfile,
+              onProfile: _setRouteProfile,
+              onStart: _startNavigation,
+              onClear: _exitNavigation,
+              onSimulate: _startSimulation,
+              onExportGpx: _exportRouteGpx,
+              onExportKml: _exportRouteKmlKmz,
+              onDownloadMap: _downloadRouteMap,
+              tollCost: route.tollCost,
+              alternativeLabels: [
+                for (final r in _alternativeRoutes)
+                  '${((r.duration * kEtaRealismFactor) / 60).round()} ph • ${formatDistance(r.distance)}',
+              ],
+              selectedAlternative: _selectedRoute,
+              onAlternative: _selectAlternative,
+              avoidHighway: _avoidHighway,
+              onToggleAvoidHighway: _toggleAvoidHighway,
+              avoidFerry: _avoidFerry,
+              onToggleAvoidFerry: _toggleAvoidFerry,
+              preference: _routePreference,
+              onPreference: _setRoutePreference,
+              onSaveRoute: _saveFavoriteRoute,
+              optionsExpanded: !_routeOptionsCollapsed,
+              onToggleOptions: () => setNavState(
+                () => _routeOptionsCollapsed = !_routeOptionsCollapsed,
+              ),
+              onCollapseAll: () =>
+                  setNavState(() => _routeCardCollapsed = true),
+              elevation: _elevation,
+            );
     } else if (_pickedPlace != null) {
       // Browse-mode place card: shows the picked place with a "Chỉ đường"
       // button (Google-Maps style search — no route until requested).
@@ -443,6 +471,76 @@ extension _NavBars on _NavigationPageState {
     );
   }
 
+  /// Compact collapsed route card (the "Bắt đầu chỉ đường" card minimised to
+  /// one row): destination + ETA • distance + a quick "Đi" (start) button +
+  /// an expand chevron. Default state — keeps the bottom-right clear.
+  Widget _collapsedRouteCard(OsrmRoute route) {
+    return Material(
+      elevation: 10,
+      shadowColor: Colors.black26,
+      borderRadius: BorderRadius.circular(20),
+      color: Colors.white,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () => setNavState(() => _routeCardCollapsed = false),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+          child: Row(
+            children: [
+              Icon(Icons.flag, color: kAppBlue, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _destinationName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      '${((route.duration * kEtaRealismFactor) / 60).round()} '
+                      'ph • ${formatDistance(route.distance)}',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(
+                height: 38,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: kAppBlue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  onPressed: _startNavigation,
+                  icon: const Icon(Icons.navigation, size: 16),
+                  label: const Text(
+                    'Đi',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Mở rộng lộ trình',
+                icon: Icon(Icons.expand_more, color: Colors.grey[700]),
+                onPressed: () => setNavState(() => _routeCardCollapsed = false),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Toggle speed/red-light camera alerts on/off (persisted).
   void _toggleCameraAlerts() {
     setNavState(() => cameraAlerts = !cameraAlerts);
@@ -464,9 +562,11 @@ extension _NavBars on _NavigationPageState {
           routingEngine: s.routingEngine,
           smoothCamera: s.smoothCamera,
           cameraAlerts: cameraAlerts,
+          radar: radarOn,
           pipAspect: s.pipAspect,
           ridingMode: s.ridingMode,
           simpleMode: s.simpleMode,
+          wakeWord: s.wakeWord,
         ),
       ),
     );
@@ -476,7 +576,8 @@ extension _NavBars on _NavigationPageState {
     final route = _route;
     final nav = _progress;
     if (route == null || route.duration <= 0) return 0;
-    final remain = route.duration * (1 - (nav?.progress ?? 0));
+    final remain =
+        route.duration * (1 - (nav?.progress ?? 0)) * kEtaRealismFactor;
     return (remain / 60).round().clamp(0, 9999);
   }
 

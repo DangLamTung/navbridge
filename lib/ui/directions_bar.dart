@@ -22,6 +22,7 @@ class DirectionsBar extends StatelessWidget {
     required this.onSwap,
     required this.onAddStop,
     required this.onBackToSearch,
+    this.onCollapse,
     this.busy = false,
     this.startLabel = 'Vị trí hiện tại',
   });
@@ -35,6 +36,10 @@ class DirectionsBar extends StatelessWidget {
   final VoidCallback onSwap;
   final VoidCallback onAddStop;
   final VoidCallback onBackToSearch;
+
+  /// When provided, shows a collapse (chevron) button that shrinks the bar
+  /// into [CollapsedDirectionsBar] to free the map.
+  final VoidCallback? onCollapse;
 
   /// True while searching or building a route (spinner in the end field).
   final bool busy;
@@ -90,6 +95,16 @@ class DirectionsBar extends StatelessWidget {
                 color: kAppBlue,
                 onPressed: onSwap,
               ),
+              if (onCollapse != null)
+                IconButton(
+                  tooltip: 'Thu gọn thanh chỉ đường',
+                  icon: Icon(
+                    Icons.expand_more,
+                    size: 20,
+                    color: Colors.grey[600],
+                  ),
+                  onPressed: onCollapse,
+                ),
               const SizedBox(width: 4),
             ],
           ),
@@ -181,6 +196,86 @@ class DirectionsBar extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Compact single-row version of the directions bar (shown when the user
+/// collapses it to free the map): green start → red destination + a chevron
+/// to expand back into the full start/end form.
+class CollapsedDirectionsBar extends StatelessWidget {
+  const CollapsedDirectionsBar({
+    super.key,
+    required this.destination,
+    required this.startLabel,
+    required this.onExpand,
+    this.onBackToSearch,
+  });
+
+  final String destination;
+  final String startLabel;
+  final VoidCallback onExpand;
+  final VoidCallback? onBackToSearch;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 6,
+      shadowColor: Colors.black26,
+      borderRadius: BorderRadius.circular(20),
+      color: Colors.white,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onExpand,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Row(
+            children: [
+              const _FieldDot(color: Color(0xFF34A853)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  startLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13, color: Colors.black87),
+                ),
+              ),
+              const Icon(Icons.arrow_forward, size: 14, color: Colors.black38),
+              const SizedBox(width: 8),
+              const _FieldDot(color: Color(0xFFEA4335)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  destination,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (onBackToSearch != null)
+                IconButton(
+                  tooltip: 'Tìm kiếm',
+                  icon: const Icon(Icons.search, size: 20),
+                  color: kAppBlue,
+                  onPressed: onBackToSearch,
+                ),
+              IconButton(
+                tooltip: 'Mở rộng thanh chỉ đường',
+                icon: Icon(
+                  Icons.expand_less,
+                  size: 22,
+                  color: Colors.grey[700],
+                ),
+                onPressed: onExpand,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

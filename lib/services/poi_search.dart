@@ -153,6 +153,80 @@ Future<List<PoiResult>> searchPois(
   throw Exception('Không tìm thấy ${type.label} gần đây');
 }
 
+/// A scenic spot / viewpoint / mountain pass (đèo) found near the drive —
+/// used by the AI to suggest beautiful stops along the route.
+class ScenicSpot {
+  final String name;
+  final double lat;
+  final double lng;
+  final String kind; // 'điểm ngắm cảnh' | 'đèo' | 'đỉnh núi' | 'điểm đẹp'
+  const ScenicSpot(this.name, this.lat, this.lng, this.kind);
+}
+
+/// Scenic spots + mountain passes near [center] via Overpass: viewpoints,
+/// attractions, natural peaks and `highway=mountain_pass` (đèo). Best-effort
+/// (empty on failure) — the AI uses these to suggest beautiful stops.
+Future<List<ScenicSpot>> searchScenicSpots(
+  LatLng center, {
+  double radius = 20000,
+  int limit = 8,
+}) async {
+  final q =
+      '[out:json][timeout:20];'
+      '(nwr[tourism in viewpoint,attraction,artwork,museum,castle]'
+      '(around:${radius.round()},${center.latitude},${center.longitude});'
+      'nwr[highway=mountain_pass]'
+      '(around:${radius.round()},${center.latitude},${center.longitude});'
+      'nwr[natural in peak,volcano]'
+      '(around:${radius.round()},${center.latitude},${center.longitude}););'
+      'out $limit center;';
+  Object? last;
+  for (final mirror in _mirrors) {
+    try {
+      final res = await http
+          .post(
+            Uri.parse(mirror),
+            body: {'data': q},
+            headers: const {'User-Agent': 'navbridge/1.0 (scenic search)'},
+          )
+          .timeout(const Duration(seconds: 18));
+      if (res.statusCode != 200) continue;
+      final data = jsonDecode(utf8.decode(res.bodyBytes));
+      final elements = (data['elements'] as List?) ?? const [];
+      final out = <ScenicSpot>[];
+      for (final e in elements) {
+        if (e is! Map) continue;
+        final tags = (e['tags'] as Map?) ?? const {};
+        final lat = (e['lat'] ?? e['center']?['lat']) as num?;
+        final lon = (e['lon'] ?? e['center']?['lon']) as num?;
+        if (lat == null || lon == null) continue;
+        final kind =
+            tags['tourism'] == 'viewpoint' || tags['tourism'] == 'attraction'
+            ? 'điểm ngắm cảnh'
+            : tags['highway'] == 'mountain_pass'
+            ? 'đèo'
+            : (tags['natural'] == 'peak' || tags['natural'] == 'volcano')
+            ? 'đỉnh núi'
+            : 'điểm đẹp';
+        out.add(
+          ScenicSpot(
+            (tags['name'] as String?)?.trim() ?? kind,
+            lat.toDouble(),
+            lon.toDouble(),
+            kind,
+          ),
+        );
+        if (out.length >= limit) break;
+      }
+      if (out.isNotEmpty) return out;
+    } catch (e) {
+      last = e;
+    }
+  }
+  if (last is Exception) throw last;
+  return const [];
+}
+
 /// Result of projecting a point onto the route: distance AHEAD along the
 /// route (meters from the car, ≥ 0 = ahead, < 0 = behind) and the LATERAL
 /// side of the road relative to travel direction (> 0 = LEFT, < 0 = RIGHT).

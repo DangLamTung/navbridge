@@ -18,6 +18,9 @@ class AiChatPanel extends StatefulWidget {
     this.context,
     this.initialQuestion,
     this.onMicPressed,
+    this.speakAloud = false,
+    this.onSpeak,
+    this.onNavigate,
   });
 
   /// Live drive context appended to each question.
@@ -29,16 +32,41 @@ class AiChatPanel extends StatefulWidget {
   /// Optional: lets the page run its own mic (shared with the nav screen).
   final Future<String> Function()? onMicPressed;
 
+  /// Speak the assistant answer aloud while it streams (hands-free driving).
+  /// [onSpeak] receives complete sentences; pass an empty string to flush.
+  final bool speakAloud;
+  final void Function(String sentence)? onSpeak;
+
+  /// Plan a route to a place the AI found (panel closes itself first).
+  final void Function(String name, double lat, double lng)? onNavigate;
+
   @override
   State<AiChatPanel> createState() => _AiChatPanelState();
 }
 
+/// A chat message shown in the panel.
+class _Msg {
+  final bool isUser;
+  final String text;
+  final String? provider;
+  final List<AiPlace> places;
+  final AiPlace? navigateTarget;
+  const _Msg(
+    this.isUser,
+    this.text, {
+    this.provider,
+    this.places = const [],
+    this.navigateTarget,
+  });
+}
+
 class _AiChatPanelState extends State<AiChatPanel> {
-  final List<({bool isUser, String text})> _messages = [];
+  final List<_Msg> _messages = [];
   final _ctrl = TextEditingController();
   final _scroll = ScrollController();
   bool _busy = false;
   String _streaming = '';
+  String _speechBuf = ''; // streamed sentences not yet spoken
 
   @override
   void initState() {
@@ -74,12 +102,17 @@ class _AiChatPanelState extends State<AiChatPanel> {
     if (q.isEmpty || _busy) return;
     // Session memory = previous turns only (the current question is added
     // below and sent separately as [userText]).
-    final history = _messages.where((m) => !m.text.startsWith('⚠️')).toList();
+    final history = _messages
+        .where((m) => !m.text.startsWith('⚠️'))
+        .map((m) => (isUser: m.isUser, text: m.text))
+        .toList();
     _ctrl.clear();
+    widget.onSpeak?.call(''); // flush any previous spoken answer
     setState(() {
-      _messages.add((isUser: true, text: q));
+      _messages.add(_Msg(true, q));
       _busy = true;
       _streaming = '';
+      _speechBuf = '';
     });
     _scrollToBottom();
 
@@ -89,40 +122,109 @@ class _AiChatPanelState extends State<AiChatPanel> {
     if (memReply != null) {
       if (!mounted) return;
       setState(() {
-        _messages.add((isUser: false, text: memReply));
+        _messages.add(_Msg(false, memReply));
         _busy = false;
         _streaming = '';
       });
+      if (widget.speakAloud) widget.onSpeak?.call(memReply);
       _scrollToBottom();
       return;
     }
 
     try {
-      await AiAssistant.instance.ask(
+      final reply = await AiAssistant.instance.ask(
         q,
         context: widget.context,
         history: history,
         onToken: (t) {
           if (!mounted) return;
           setState(() => _streaming += t);
+          _maybeSpeak(t);
           _scrollToBottom();
         },
       );
       if (!mounted) return;
+      _flushSpeech();
       setState(() {
-        _messages.add((isUser: false, text: _streaming));
+        _messages.add(
+          _Msg(
+            false,
+            _streaming,
+            provider: reply.provider,
+            places: reply.places,
+            navigateTarget: reply.navigateTarget,
+          ),
+        );
         _busy = false;
         _streaming = '';
       });
     } catch (e) {
       if (!mounted) return;
+      _flushSpeech();
       setState(() {
-        _messages.add((isUser: false, text: '⚠️ $e'));
+        _messages.add(_Msg(false, '⚠️ $e'));
         _busy = false;
         _streaming = '';
       });
     }
     _scrollToBottom();
+  }
+
+  /// Speak complete sentences aloud as they stream (hands-free driving).
+  void _maybeSpeak(String token) {
+    if (!widget.speakAloud || widget.onSpeak == null) return;
+    _speechBuf += token;
+    var lastEnd = -1;
+    for (var i = 0; i < _speechBuf.length; i++) {
+      final ch = _speechBuf[i];
+      if (ch == '.' || ch == '!' || ch == '?' || ch == '\n' || ch == '。') {
+        lastEnd = i + 1;
+      }
+    }
+    if (lastEnd > 0) {
+      final sentence = _speechBuf.substring(0, lastEnd).trim();
+      _speechBuf = _speechBuf.substring(lastEnd);
+      if (sentence.isNotEmpty) widget.onSpeak!(sentence);
+    }
+  }
+
+  void _flushSpeech() {
+    if (!widget.speakAloud || widget.onSpeak == null) return;
+    final rest = _speechBuf.trim();
+    _speechBuf = '';
+    if (rest.isNotEmpty) widget.onSpeak!(rest);
+  }
+
+  String _providerLabel(String p) => switch (p) {
+    'deepseek' => 'DeepSeek',
+    'gemini' => 'Gemini',
+    _ => 'Ngoại tuyến',
+  };
+
+  /// Live drive context shown as chips (what the AI already knows).
+  List<Widget> _contextChips() {
+    final c = widget.context;
+    if (c == null) return const [];
+    return [
+      if (c.weather != null) _chip('🌦 ${c.weather}'),
+      if (c.radar != null) _chip('🌧 ${c.radar}'),
+      if (c.cameraAhead != null) _chip('📷 ${c.cameraAhead}'),
+      if (c.road != null) _chip('🛣 ${c.road}'),
+      if (c.speedKmh != null) _chip('⚡ ${c.speedKmh}'),
+      if (c.destination != null) _chip('📍 ${c.destination}'),
+      if (c.eta != null) _chip('🕒 ${c.eta}'),
+    ];
+  }
+
+  Widget _chip(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE8F0FE),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(label, style: const TextStyle(fontSize: 11, color: kAppBlue)),
+    );
   }
 
   Future<void> _mic() async {
@@ -170,6 +272,17 @@ class _AiChatPanelState extends State<AiChatPanel> {
               ),
             ),
             const Divider(height: 1),
+            // Live context chips (weather / camera / road / speed / ETA) so
+            // the driver sees what the AI already knows.
+            if (_contextChips().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: _contextChips(),
+                ),
+              ),
             // Messages.
             Expanded(
               child: ListView.builder(
@@ -184,8 +297,33 @@ class _AiChatPanelState extends State<AiChatPanel> {
                     );
                   }
                   final m = _messages[i];
-                  return _bubble(isUser: m.isUser, text: m.text);
+                  return _bubble(
+                    isUser: m.isUser,
+                    text: m.text,
+                    provider: m.provider,
+                    places: m.places,
+                    navigateTarget: m.navigateTarget,
+                  );
                 },
+              ),
+            ),
+            // One-tap quick suggestions (scenic stops along the drive).
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 2, 12, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _suggestionChip(
+                        'Gợi ý dọc đường',
+                        'Gợi ý 3-5 điểm dừng đẹp (ngắm cảnh, đèo, cà phê) '
+                            'gần tuyến đường của tôi',
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
             // Input row.
@@ -234,7 +372,26 @@ class _AiChatPanelState extends State<AiChatPanel> {
     );
   }
 
-  Widget _bubble({required bool isUser, required String text}) {
+  Widget _suggestionChip(String label, String prompt) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: ActionChip(
+        avatar: const Icon(Icons.landscape, size: 16, color: Color(0xFF1E8E3E)),
+        label: Text(label, style: const TextStyle(fontSize: 12)),
+        backgroundColor: const Color(0xFFE8F0FE),
+        side: BorderSide(color: kAppBlue.withValues(alpha: 0.3)),
+        onPressed: _busy ? null : () => _send(prompt),
+      ),
+    );
+  }
+
+  Widget _bubble({
+    required bool isUser,
+    required String text,
+    String? provider,
+    List<AiPlace> places = const [],
+    AiPlace? navigateTarget,
+  }) {
     final color = isUser ? kAppBlue : const Color(0xFFF1F3F4);
     final fg = isUser ? Colors.white : Colors.black87;
     return Align(
@@ -242,7 +399,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.8,
+          maxWidth: MediaQuery.of(context).size.width * 0.85,
         ),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
@@ -254,7 +411,43 @@ class _AiChatPanelState extends State<AiChatPanel> {
             bottomRight: Radius.circular(isUser ? 4 : 14),
           ),
         ),
-        child: Text(text, style: TextStyle(fontSize: 14, color: fg)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(text, style: TextStyle(fontSize: 14, color: fg)),
+            if (!isUser && provider != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                _providerLabel(provider),
+                style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+              ),
+            ],
+            if (!isUser && places.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final p in places)
+                    ActionChip(
+                      avatar: const Icon(Icons.navigation, size: 14),
+                      label: Text(
+                        p.name,
+                        style: const TextStyle(fontSize: 11),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () {
+                        Navigator.of(context).maybePop();
+                        widget.onNavigate?.call(p.name, p.lat, p.lng);
+                      },
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

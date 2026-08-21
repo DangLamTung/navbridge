@@ -80,6 +80,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     routingEngine: routingEngine,
     smoothCamera: smoothCamera,
     cameraAlerts: cameraAlerts,
+    radar: radarOn,
     pipAspect: pipAspect,
     ridingMode: ridingMode,
     simpleMode: simpleMode,

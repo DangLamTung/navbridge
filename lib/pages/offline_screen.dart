@@ -97,6 +97,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
     routingEngine: routingEngine,
     smoothCamera: smoothCamera,
     cameraAlerts: cameraAlerts,
+    radar: radarOn,
     pipAspect: pipAspect,
     ridingMode: ridingMode,
     simpleMode: simpleMode,
@@ -392,7 +393,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
     );
     setState(() {
       _downloading = true;
-      _dl = RegionDownloader(region);
+      // Save into the SAME source folder the browse map reads ('carto', the
+      // locked basemap) so these tiles are actually served offline.
+      _dl = RegionDownloader(region, source: 'carto');
       _done = 0;
       _total = region.tileCount;
     });
@@ -1092,7 +1095,7 @@ class _RegionPickerState extends State<_RegionPicker> {
             ),
             children: [
               TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                urlTemplate: tileDownloadBaseUrl,
                 userAgentPackageName: 'com.navbridge.app',
               ),
             ],

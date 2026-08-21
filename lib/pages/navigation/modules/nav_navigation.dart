@@ -5,19 +5,34 @@ extension _NavNavigation on _NavigationPageState {
   /// push to the clock and keep the camera on the car.
   void _handleNav(LatLng pos, {required double speedMps}) {
     // Off-route re-route uses the RAW fix — a snapped point is always on the
-    // route, so it could never trigger. Stays >50 m off-path for 10 s, or
-    // re-routes immediately when clearly far gone.
+    // route, so it could never trigger. The latch only clears once the car is
+    // clearly back on the road (<30 m): GPS noise near the 50 m edge can no
+    // longer reset the 5 s timer, so a real deviation still reroutes.
+    // Stationary (<~5 km/h) never reroutes — a bad fix at a red light
+    // shouldn't yank the route.
     final off = _engine!.offRouteDistance(pos);
-    if (off > 50) {
-      final now = DateTime.now();
-      final since = _offRouteSince ??= now;
-      if (off > 250 || now.difference(since) >= const Duration(seconds: 5)) {
+    final spd = speedMps.isNaN ? 0.0 : speedMps;
+    // NETWORK matching override: while a fresh network snap says the nearest
+    // road IS on the route (the fix just reads off line — parallel street,
+    // lane offset, GPS wander), trust it over the raw distance and skip the
+    // reroute. The verdict expires in 2 s so a real deviation (snap will flip
+    // it off within ~1 s) always reroutes.
+    final netOnRoute =
+        _netOnRoute &&
+        _lastNetMatch != null &&
+        DateTime.now().difference(_lastNetMatch!) < const Duration(seconds: 2);
+    if (!netOnRoute) {
+      if (off > 50 && spd > 1.4) {
+        final now = DateTime.now();
+        final since = _offRouteSince ??= now;
+        if (off > 250 || now.difference(since) >= const Duration(seconds: 5)) {
+          _offRouteSince = null;
+          unawaited(_reRoute(pos, speedMps: speedMps));
+          return;
+        }
+      } else if (off < 30) {
         _offRouteSince = null;
-        unawaited(_reRoute(pos, speedMps: speedMps));
-        return;
       }
-    } else {
-      _offRouteSince = null;
     }
     // Project the raw fix onto the route polyline so the car RIDES the road:
     // the puck, the camera bearing and the turn meter all stay stable even
@@ -33,7 +48,11 @@ extension _NavNavigation on _NavigationPageState {
     _routeBearing = _engine!.routeBearing();
     _sendToClock(nav);
     _maybeSpeakManeuver(nav);
+    _maybeSpeakOverspeed(spd);
     _checkCameraAhead(snapped, _route?.geometry ?? const []);
+    // Road signs: announce the next STOP / give-way sign ahead (traffic
+    // lights are map-only). Offline index, ~1 Hz throttle inside.
+    _checkSignAhead(snapped, _route?.geometry ?? const []);
     _refreshRoad(snapped);
     _logFix(pos, speedMps);
     // Background nav: live notification + heads-up at each new maneuver.
@@ -73,6 +92,8 @@ extension _NavNavigation on _NavigationPageState {
       return;
     }
     _lastReRoute = now;
+    _offRouteSince = null;
+    _netOffSince = null;
     debugPrint('SIM: REROUTE from=$from');
     final dest = _destination;
     if (dest == null) return;
@@ -83,6 +104,7 @@ extension _NavNavigation on _NavigationPageState {
         profile: _routeProfile,
         avoidHighway: _avoidHighway,
         avoidFerry: _avoidFerry,
+        preference: _routePreference,
       );
       sw.stop();
       debugPrint(
@@ -177,7 +199,7 @@ extension _NavNavigation on _NavigationPageState {
           lon: cur.longitude,
           spd: (_lastSpeedMps * 3.6).round().clamp(0, 255),
           hdg: _routeBearing.round() % 360,
-          speedLimit: _roadInfo?.speedLimit ?? 0,
+          speedLimit: _effectiveSpeedLimit,
         ),
       );
     }
@@ -297,11 +319,23 @@ extension _NavNavigation on _NavigationPageState {
   }
 
   Future<void> _startNavigation() async {
+    // Re-entry latch: tapping "Bắt đầu chỉ đường" twice (slow phone, double
+    // tap, or a voice command racing the button) used to start navigation
+    // twice and double the side effects (trip log, BLE frames, PiP).
+    // _navigating only flips AFTER the async start sequence, so guard here.
+    if (_navStarting || _navigating) return;
+    _navStarting = true;
     debugPrint('SIM: START navigation pressed');
     final engine = _engine;
-    if (engine == null) return;
+    if (engine == null) {
+      _navStarting = false;
+      return;
+    }
     final origin = await _resolveOrigin();
-    if (origin == null) return;
+    if (origin == null) {
+      _navStarting = false;
+      return;
+    }
     // The engine snaps the car to the NEAREST route point — so if the user
     // starts navigation while NOT at the route's start (e.g. GPS at home but
     // the route was planned from elsewhere), it can snap near the DESTINATION
@@ -333,13 +367,23 @@ extension _NavNavigation on _NavigationPageState {
           ],
         ),
       );
-      if (proceed != true || !mounted) return;
+      if (proceed != true || !mounted) {
+        _navStarting = false;
+        return;
+      }
       // Re-route from the car's real position so the polyline/engine start
       // where the user actually is (no more "arrived" at the wrong spot).
       final rerouted = await _rerouteFromCurrent(fallback: origin);
-      if (rerouted == null) return;
+      if (rerouted == null) {
+        _navStarting = false;
+        return;
+      }
       final e2 = _engine;
-      if (e2 == null) return;
+      if (e2 == null) {
+        _navStarting = false;
+        return;
+      }
+      _navStarting = false; // nav actually started — reopen the latch
       setNavState(() => _navigating = true);
       _beginTrip();
       final nav = e2.update(origin, speedMps: 0);
@@ -352,10 +396,16 @@ extension _NavNavigation on _NavigationPageState {
       _spokenFinal = false;
       _arrivedSpoken = false;
       _lastManeuverSig = null;
+      _speedingSpoken = false;
+      _lastOverspeedAt = null;
+      _signSpeedLimit = null; // speed-limit signs reset each nav session
+      _gpsWeakSpoken = false;
+      _lastGpsWeakAt = null;
       _offRouteSince = null;
       _routeStartIndex = 0;
       _gpsWindow.clear();
       _startWeather();
+      if (radarOn) unawaited(_ensureRadar());
       unawaited(WakelockPlus.enable());
       unawaited(NavForegroundService.instance.start());
       unawaited(PipService.instance.setAspect(pipAspect));
@@ -363,6 +413,7 @@ extension _NavNavigation on _NavigationPageState {
       if (mounted) setNavState(() {});
       return;
     }
+    _navStarting = false; // nav actually started — reopen the latch
     setNavState(() => _navigating = true);
     _beginTrip(); // auto-record the real drive
     final nav = engine.update(origin, speedMps: 0);
@@ -375,10 +426,16 @@ extension _NavNavigation on _NavigationPageState {
     _spokenFinal = false;
     _arrivedSpoken = false;
     _lastManeuverSig = null;
+    _speedingSpoken = false;
+    _lastOverspeedAt = null;
+    _signSpeedLimit = null; // speed-limit signs reset each nav session
+    _gpsWeakSpoken = false;
+    _lastGpsWeakAt = null;
     _offRouteSince = null;
     _routeStartIndex = 0; // full route at the start of navigation
     _gpsWindow.clear();
     _startWeather();
+    if (radarOn) unawaited(_ensureRadar());
     unawaited(_refreshRouteCameras()); // nav-map camera layer for the route
     unawaited(WakelockPlus.enable()); // keep the screen on while navigating
     unawaited(
@@ -396,6 +453,7 @@ extension _NavNavigation on _NavigationPageState {
   /// `_handleNav` pipeline as real GPS so maneuvers / voice / camera checks
   /// all fire. Real fixes are ignored while [_simulating].
   Future<void> _startSimulation() async {
+    if (_navigating || _simulating) return; // never start the sim twice
     final engine = _engine;
     if (engine == null || _route == null) return;
     _simTimer?.cancel();
@@ -410,6 +468,11 @@ extension _NavNavigation on _NavigationPageState {
     _spokenFinal = false;
     _arrivedSpoken = false;
     _lastManeuverSig = null;
+    _speedingSpoken = false;
+    _lastOverspeedAt = null;
+    _signSpeedLimit = null; // speed-limit signs reset each nav session
+    _gpsWeakSpoken = false;
+    _lastGpsWeakAt = null;
     _lastCameraSig = null;
     _lastCameraCheck = null; // camera checks run fresh during the sim
     _offRouteSince = null;
@@ -422,6 +485,21 @@ extension _NavNavigation on _NavigationPageState {
     debugPrint(
       'SIM: simulation START (route ${engine.route.distance.round()}m)',
     );
+    // Kalman noise demo: run a synthetic noisy GPS trace (movement + position
+    // noise + speed noise) through a dedicated LocationKalman and log how much
+    // the filter cuts the jitter. Proves the smoothing on-device — logcat
+    // shows "KALMAN: ..." every few seconds while the sim runs.
+    final noiseSim = GpsNoiseSimulator(
+      speedMps: 16,
+      positionSigma: 5,
+      speedSigma: 1.5,
+      fixIntervalMs: 500, // matches the 500 ms sim ticker (~58 km/h)
+      seed: 7,
+    );
+    final noiseKf = LocationKalman();
+    var noiseN = 0;
+    var noiseRaw = 0.0, noiseFilt = 0.0;
+    var lastNoiseLog = DateTime.now().millisecondsSinceEpoch;
     _simTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (!mounted) return;
       final e = _engine;
@@ -433,6 +511,30 @@ extension _NavNavigation on _NavigationPageState {
       }
       final pos = e.positionAtDistance(_simDist);
       _handleNav(pos, speedMps: 16);
+      // Kalman noise demo (logged to logcat every ~4 s).
+      final sf = noiseSim.next();
+      noiseKf.update(
+        sf.measured,
+        accuracy: sf.accuracy,
+        speedMps: sf.speedMps,
+        speedNoise: sf.speedNoise,
+        nowMs: DateTime.now().millisecondsSinceEpoch,
+      );
+      noiseRaw += GpsNoiseSimulator.metersBetween(sf.truth, sf.measured);
+      noiseFilt += GpsNoiseSimulator.metersBetween(sf.truth, noiseKf.position!);
+      noiseN++;
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      if (nowMs - lastNoiseLog >= 4000) {
+        lastNoiseLog = nowMs;
+        final cut = 100 * (1 - noiseFilt / noiseRaw);
+        debugPrint(
+          'KALMAN: sim noise raw=${(noiseRaw / noiseN).toStringAsFixed(1)}m '
+          'filt=${(noiseFilt / noiseN).toStringAsFixed(1)}m '
+          'smooth=${cut.toStringAsFixed(0)}% '
+          'speed=${noiseKf.speedMps.toStringAsFixed(1)}m/s '
+          '(true=${sf.trueSpeed.toStringAsFixed(1)})',
+        );
+      }
       setNavState(() {});
     });
     if (mounted) setNavState(() {});
@@ -462,6 +564,7 @@ extension _NavNavigation on _NavigationPageState {
         profile: _routeProfile,
         avoidHighway: _avoidHighway,
         avoidFerry: _avoidFerry,
+        preference: _routePreference,
       );
       if (!mounted || _destination == null) return null;
       final bridged = _bridgeRouteFrom(route, cur);
@@ -516,12 +619,13 @@ extension _NavNavigation on _NavigationPageState {
       _alternativeRoutes = [];
       _selectedRoute = 0;
       _planPoints = [];
-      _dragHandles = [];
       _elevation = null;
       _pois = [];
       _poiType = null;
       _selectedPoi = null;
       _searchResults = [];
+      _routeSigns = [];
+      _lastSignSig = null;
     });
     unawaited(_refreshRouteCameras()); // route cleared → layer empties
     _offRouteSince = null;

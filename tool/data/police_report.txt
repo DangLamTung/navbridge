@@ -1,0 +1,49 @@
+Province                raw place distinct  inDB pending dedup  skip
+----------------------------------------------------------------------
+TP Hồ Chí Minh          302   241      235     2     233     6    61
+Da Nang                 292   199      175    14     161    24    93
+Bắc Ninh                304   200      139    60      79    61   104
+Dong Nai                302   168      137    22     115    31   134
+Hà Nội                  275   230      137     8     129    93    45
+Gia Lai                 303   158      132     8     124    26   145
+Phú Thọ                 312   188      121     4     117    67   124
+Vĩnh Phúc               312   188      121     4     117    67   124
+Dong Thap               171   151       99     9      90    52    20
+Quảng Ngãi              257   164       97    10      87    67    93
+Lào Cai                 165   119       76     4      72    43    46
+Dak Lak                 229   122       74    19      55    48   107
+Hưng Yên                172   139       72     1      71    67    33
+Lam Dong                266    87       69     7      62    18   179
+Hải Phòng               108    74       63     2      61    11    34
+Thanh Hóa               186    73       55     1      54    18   113
+Quảng Trị               106    73       49     2      47    24    33
+Tuyên Quang              92    71       46    12      34    25    21
+Quảng Ninh              190    88       42     5      37    46   102
+Ninh Bình                99    71       37     2      35    34    28
+Thái Nguyên             162    80       37     2      35    43    82
+Hue                      82    45       35     1      34    10    37
+Khánh Hòa               267    56       33     1      32    23   211
+Nghệ An                  85    55       32     5      27    23    30
+Vĩnh Long                76    61       27     8      19    34    15
+Cà Mau                   85    50       26     0      26    24    35
+An Giang                 57    47       16    13       3    31    10
+Hà Tĩnh                  31    23       15     2      13     8     8
+Tây Ninh                 26    16       13     7       6     3    10
+Lạng Sơn                135    11        9     1       8     2   124
+Cao Bằng                 29     9        7     0       7     2    20
+Dien Bien                10     7        4     0       4     3     3
+Sơn La                    5     5        4     0       4     1     0
+Cần Thơ                   6     2        2     1       1     0     4
+----------------------------------------------------------------------
+TOTAL                  5499  3271     2236   237    1999  1035  2228
+
+=== DEDUP FROM START ===
+raw locations on site            : 5499
+  - skipped (bare km / city-only): 2228  (can't be placed distinctly)
+place-named (mergeable)          : 3271
+  - format-variant duplicates    : 1035  (norm_key collapse)
+distinct cameras                 : 2236
+  - already in DB (police)       : 237
+  - pending to geocode           : 1999
+
+deduped from start = 3263 (skipped + format-variants)

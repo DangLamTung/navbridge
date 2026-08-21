@@ -10,7 +10,9 @@ extension _NavBuild on _NavigationPageState {
   /// directions mode the overlay starts lower. Values are LOGICAL pixels:
   /// search pill ends ~y95, directions bar ends ~y195.
   double get _overlayTop {
-    return _directionsMode ? 200 : 100;
+    // Collapsed directions bar is ~50px tall (one row); expanded ~195.
+    if (_directionsMode) return _topBarCollapsed ? 62 : 200;
+    return 100;
   }
 
   /// Picture-in-Picture layout: ONLY the map + a slim maneuver bar — no
@@ -37,6 +39,8 @@ extension _NavBuild on _NavigationPageState {
               routeSteps: route?.steps ?? const [],
               routeStartIndex: _routeStartIndex,
               current: current,
+              speedMps: _progress?.speedMps,
+              gpsAccuracy: _lastGpsAccuracy,
               bearing: _routeBearing,
               heading: _heading,
               headingUp: _headingUp,
@@ -57,6 +61,10 @@ extension _NavBuild on _NavigationPageState {
               // During nav only cameras near the route are loaded (not all
               // ~1,800 nationwide) — the driver sees what's on their road.
               cameras: cameraAlerts ? _routeCameras : const [],
+              showRadar: radarOn,
+              radarUrl: _radarLayerUrl,
+              onPoiTap: _onNavPoiTap,
+              signs: _routeSigns,
               controller: _vmFollow,
               smoothCamera: smoothCamera,
               // No compass in the tiny PiP window — it just eats space.
@@ -86,6 +94,8 @@ extension _NavBuild on _NavigationPageState {
                   routeSteps: route?.steps ?? const [],
                   routeStartIndex: _routeStartIndex,
                   current: current,
+                  speedMps: _progress?.speedMps,
+                  gpsAccuracy: _lastGpsAccuracy,
                   bearing: _routeBearing,
                   heading: _heading,
                   headingUp: _headingUp,
@@ -111,6 +121,10 @@ extension _NavBuild on _NavigationPageState {
                   // During nav only cameras near the route are loaded (not all
                   // ~1,800 nationwide) — the driver sees what's on their road.
                   cameras: cameraAlerts ? _routeCameras : const [],
+                  showRadar: radarOn,
+                  radarUrl: _radarLayerUrl,
+                  onPoiTap: _onNavPoiTap,
+                  signs: _routeSigns,
                   controller: _vmFollow,
                   smoothCamera: smoothCamera,
                 )
@@ -131,7 +145,42 @@ extension _NavBuild on _NavigationPageState {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        _navigating ? _navTopBar() : _topBar(),
+                        // While a route is shown the top search bar is hidden
+                        // (all info is on the route card below) — the map is
+                        // for driving/viewing; search returns after
+                        // "Xoá lộ trình".
+                        _navigating
+                            ? _navTopBar()
+                            : (_route != null
+                                  ? const SizedBox.shrink()
+                                  : _topBar()),
+                        // Suggestions / stops flow BELOW the bar (same
+                        // Column) so they can never overlap it — no hardcoded
+                        // offsets that break with font scaling or a collapsed
+                        // bar.
+                        if (!_navigating)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 6, 66, 0),
+                            child: _suggestions.isNotEmpty
+                                ? SuggestionList(
+                                    suggestions: _suggestions,
+                                    onSelected: _selectSuggestion,
+                                  )
+                                : (_stops.isNotEmpty
+                                      ? StopsPanel(
+                                          stops: _stops,
+                                          onMoveUp: (i) => _moveStop(i, -1),
+                                          onMoveDown: (i) => _moveStop(i, 1),
+                                          onRemove: _removeStop,
+                                          onSave: _savePlan,
+                                          collapsed: _stopsCollapsed,
+                                          onToggleCollapse: () => setNavState(
+                                            () => _stopsCollapsed =
+                                                !_stopsCollapsed,
+                                          ),
+                                        )
+                                      : const SizedBox.shrink()),
+                          ),
                         if (_navigating)
                           Padding(
                             padding: const EdgeInsets.fromLTRB(12, 6, 10, 0),
@@ -142,6 +191,9 @@ extension _NavBuild on _NavigationPageState {
                                   info: _roadInfo,
                                   loading: _roadLoading,
                                   speedMps: _progress?.speedMps,
+                                  limitOverride: _effectiveSpeedLimit > 0
+                                      ? _effectiveSpeedLimit
+                                      : null,
                                 ),
                                 const Spacer(),
                                 // Nav controls: a scrollable column capped to
@@ -179,6 +231,45 @@ extension _NavBuild on _NavigationPageState {
                                           ),
                                         ),
                                         const SizedBox(height: 8),
+                                        // Camera alerts toggle (phạt nguội
+                                        // DB) — kept near the TOP so it's
+                                        // always visible on the small screen
+                                        // (was buried below the scroll fold).
+                                        Tooltip(
+                                          message: cameraAlerts
+                                              ? 'Camera: bật'
+                                              : 'Camera: tắt',
+                                          child: RoundActionButton(
+                                            icon: Icons.videocam,
+                                            color: cameraAlerts
+                                                ? const Color(0xFFD93025)
+                                                : const Color(0xFF5F6368),
+                                            onTap: _toggleCameraAlerts,
+                                            child: CctvIcon(
+                                              size: 22,
+                                              color: cameraAlerts
+                                                  ? const Color(0xFFD93025)
+                                                  : const Color(0xFF5F6368),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        // Rain-radar overlay toggle
+                                        // (RainViewer, free) — live rain map
+                                        // over the basemap while driving.
+                                        Tooltip(
+                                          message: radarOn
+                                              ? 'Radar: bật'
+                                              : 'Radar: tắt',
+                                          child: RoundActionButton(
+                                            icon: Icons.water_drop,
+                                            color: radarOn
+                                                ? const Color(0xFF1A73E8)
+                                                : const Color(0xFF5F6368),
+                                            onTap: _toggleRadar,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
                                         // Map layers: 3D / terrain / satellite
                                         // grouped into ONE picker button.
                                         PopupMenuButton<String>(
@@ -202,10 +293,6 @@ extension _NavBuild on _NavigationPageState {
                                               setNavState(
                                                 () => _terrain3d = !_terrain3d,
                                               );
-                                            } else if (v == 'satellite') {
-                                              setNavState(
-                                                () => _satellite = !_satellite,
-                                              );
                                             }
                                           },
                                           itemBuilder: (context) => [
@@ -220,12 +307,6 @@ extension _NavBuild on _NavigationPageState {
                                               Icons.terrain,
                                               'Địa hình',
                                               _terrain3d,
-                                            ),
-                                            _layerItem(
-                                              'satellite',
-                                              Icons.satellite_alt,
-                                              'Vệ tinh',
-                                              _satellite,
                                             ),
                                           ],
                                           child: Material(
@@ -294,21 +375,6 @@ extension _NavBuild on _NavigationPageState {
                                               : const Color(0xFF5F6368),
                                           onTap: () => setNavState(
                                             () => _voiceOn = !_voiceOn,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        // Camera alerts toggle (phạt nguội DB).
-                                        RoundActionButton(
-                                          icon: Icons.videocam,
-                                          color: cameraAlerts
-                                              ? const Color(0xFFD93025)
-                                              : const Color(0xFF5F6368),
-                                          onTap: _toggleCameraAlerts,
-                                          child: CctvIcon(
-                                            size: 22,
-                                            color: cameraAlerts
-                                                ? const Color(0xFFD93025)
-                                                : const Color(0xFF5F6368),
                                           ),
                                         ),
                                         const SizedBox(height: 8),
@@ -481,25 +547,20 @@ extension _NavBuild on _NavigationPageState {
                         ],
                       ),
                     ),
-                  if (!_navigating)
+                  // Rain-radar frame selector (browse): under the quick places
+                  // — watch the storm move over past frames or jump to the
+                  // nowcast forecast when it's live.
+                  if (!_navigating && radarOn && _radarFrames.isNotEmpty)
                     Positioned(
                       left: 12,
-                      right: 66,
-                      top: _overlayTop,
-                      child: _suggestions.isNotEmpty
-                          ? SuggestionList(
-                              suggestions: _suggestions,
-                              onSelected: _selectSuggestion,
-                            )
-                          : (_stops.isNotEmpty
-                                ? StopsPanel(
-                                    stops: _stops,
-                                    onMoveUp: (i) => _moveStop(i, -1),
-                                    onMoveDown: (i) => _moveStop(i, 1),
-                                    onRemove: _removeStop,
-                                    onSave: _savePlan,
-                                  )
-                                : const SizedBox.shrink()),
+                      top: _overlayTop + 116,
+                      child: RadarFrameBar(
+                        frames: _radarFrames,
+                        selected: _radarFrame,
+                        onSelect: _setRadarFrame,
+                        loading: _radarLoading,
+                        onRefresh: _ensureRadar,
+                      ),
                     ),
                   // Raster-only controls (zoom/locate target the raster map
                   // controller) — hide during vector navigation mode.
@@ -508,7 +569,9 @@ extension _NavBuild on _NavigationPageState {
                   if (!_navigating)
                     Positioned(
                       right: 10,
-                      top: _directionsMode ? 252 : 150,
+                      top: _directionsMode
+                          ? (_topBarCollapsed ? 110 : 252)
+                          : 150,
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -517,6 +580,15 @@ extension _NavBuild on _NavigationPageState {
                             onZoomOut: () => _zoomBy(-1),
                             onLocate: _locateMe,
                             hasPosition: current != null,
+                          ),
+                          const SizedBox(height: 8),
+                          // PLANNING MODE entry: directions UI to build a
+                          // multi-stop route, export it (GPX/KML/KMZ) and
+                          // download the offline map for the area.
+                          RoundActionButton(
+                            icon: Icons.route,
+                            color: const Color(0xFF7B1FA2),
+                            onTap: _enterPlanningMode,
                           ),
                           const SizedBox(height: 8),
                           RoundActionButton(
@@ -528,54 +600,34 @@ extension _NavBuild on _NavigationPageState {
                           // Speed/red-light camera layer + alerts toggle —
                           // also available while browsing (matches the nav
                           // controls button).
-                          RoundActionButton(
-                            icon: Icons.videocam,
-                            color: cameraAlerts
-                                ? const Color(0xFFD93025)
-                                : const Color(0xFF5F6368),
-                            onTap: _toggleCameraAlerts,
-                            child: CctvIcon(
-                              size: 22,
+                          Tooltip(
+                            message: cameraAlerts
+                                ? 'Camera: bật'
+                                : 'Camera: tắt',
+                            child: RoundActionButton(
+                              icon: Icons.videocam,
                               color: cameraAlerts
                                   ? const Color(0xFFD93025)
                                   : const Color(0xFF5F6368),
+                              onTap: _toggleCameraAlerts,
+                              child: CctvIcon(
+                                size: 22,
+                                color: cameraAlerts
+                                    ? const Color(0xFFD93025)
+                                    : const Color(0xFF5F6368),
+                              ),
                             ),
                           ),
                           const SizedBox(height: 8),
-                          PopupMenuButton<String>(
-                            tooltip: 'Lớp bản đồ',
-                            position: PopupMenuPosition.under,
-                            offset: const Offset(-150, 8),
-                            color: Colors.white,
-                            elevation: 8,
-                            shadowColor: Colors.black38,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            onSelected: _selectTileLayer,
-                            itemBuilder: (context) => [
-                              for (final name in _tileLayerNames)
-                                _layerItem(
-                                  name,
-                                  _tileLayerIcon(name),
-                                  _tileLayerLabel(name),
-                                  name == _tileSource,
-                                ),
-                            ],
-                            child: Material(
-                              color: Colors.white,
-                              elevation: 4,
-                              shadowColor: Colors.black26,
-                              shape: const CircleBorder(),
-                              child: SizedBox(
-                                width: 46,
-                                height: 46,
-                                child: Icon(
-                                  Icons.layers_outlined,
-                                  color: const Color(0xFF7B1FA2),
-                                  size: 22,
-                                ),
-                              ),
+                          // Rain-radar overlay toggle (RainViewer, free).
+                          Tooltip(
+                            message: radarOn ? 'Radar: bật' : 'Radar: tắt',
+                            child: RoundActionButton(
+                              icon: Icons.water_drop,
+                              color: radarOn
+                                  ? const Color(0xFF1A73E8)
+                                  : const Color(0xFF5F6368),
+                              onTap: _toggleRadar,
                             ),
                           ),
                         ],
@@ -703,7 +755,8 @@ extension _NavBuild on _NavigationPageState {
     final route = _route;
     final nav = _progress;
     if (route == null || route.duration <= 0) return DateTime.now();
-    final remain = route.duration * (1 - (nav?.progress ?? 0));
+    final remain =
+        route.duration * (1 - (nav?.progress ?? 0)) * kEtaRealismFactor;
     return DateTime.now().add(Duration(seconds: remain.round()));
   }
 

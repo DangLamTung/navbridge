@@ -7,6 +7,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -21,6 +22,21 @@ import 'vietmap_config.dart' show dataSource, graphDownloadBaseUrl;
 import 'package:navbridge/services/vietmap_router.dart';
 
 const MethodChannel _channel = MethodChannel('navbridge/routing');
+
+/// Result of snapping a GPS fix to the nearest road in the offline graph
+/// (network matching — like Google Maps' blue dot snapping to the road).
+class SnapResult {
+  final double lat;
+  final double lng;
+  final double distance; // meters from the fix to the road
+  final int edge; // graph edge id of the snapped road
+  const SnapResult({
+    required this.lat,
+    required this.lng,
+    required this.distance,
+    required this.edge,
+  });
+}
 
 class OfflineRouter {
   OfflineRouter._();
@@ -79,6 +95,35 @@ class OfflineRouter {
       return Map<String, dynamic>.from(raw as Map);
     } catch (e) {
       debugPrint('ROUTER: roadInfo error: $e');
+      return null;
+    }
+  }
+
+  /// Google-style network match: snap [pos] to the nearest ROAD in the
+  /// offline graph. Returns the snapped point + the graph edge id (so the
+  /// caller can tell whether that road is part of the current route), or
+  /// null when no road is nearby. Instant + offline.
+  Future<SnapResult?> snapToRoad(LatLng pos) async {
+    if (!_loaded) return null;
+    try {
+      final raw = await _channel.invokeMethod<Object?>('snapToRoad', {
+        'lat': pos.latitude,
+        'lng': pos.longitude,
+      });
+      if (raw is! Map) return null;
+      final m = Map<String, dynamic>.from(raw);
+      final lat = (m['lat'] as num?)?.toDouble();
+      final lng = (m['lng'] as num?)?.toDouble();
+      final edge = (m['edge'] as num?)?.toInt();
+      if (lat == null || lng == null || edge == null) return null;
+      return SnapResult(
+        lat: lat,
+        lng: lng,
+        distance: (m['distance'] as num?)?.toDouble() ?? 0,
+        edge: edge,
+      );
+    } catch (e) {
+      debugPrint('ROUTER: snapToRoad error: $e');
       return null;
     }
   }
@@ -284,6 +329,57 @@ Future<LatLng?> fetchAnyMatch(List<LatLng> trace) async {
   return matchGpsTrace(trace);
 }
 
+/// Bearing (deg, 0=N) from [a] to [b] — used by the scenic curvature score.
+double _bearing(LatLng a, LatLng b) {
+  final dLon = (b.longitude - a.longitude) * 0.017453292519943295;
+  final lat1 = a.latitude * 0.017453292519943295;
+  final lat2 = b.latitude * 0.017453292519943295;
+  final y = math.sin(dLon) * math.cos(lat2);
+  final x =
+      math.cos(lat1) * math.sin(lat2) -
+      math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+  return (math.atan2(y, x) * 57.29577951308232 + 360) % 360;
+}
+
+/// Scenic score of a route = total absolute heading change (degrees) along
+/// the polyline. Winding routes (hills / coast / old town) score higher — the
+/// "đẹp cảnh" preference picks the curviest of the alternatives.
+double _routeCurvature(OsrmRoute r) {
+  final g = r.geometry;
+  if (g.length < 3) return 0;
+  var sum = 0.0;
+  for (var i = 1; i < g.length - 1; i++) {
+    var d = (_bearing(g[i - 1], g[i]) - _bearing(g[i], g[i + 1])).abs() % 360;
+    if (d > 180) d = 360 - d;
+    sum += d;
+  }
+  return sum;
+}
+
+/// Re-order [routes] so the one matching [pref] is first. "Nhanh nhất" keeps
+/// the backend's duration-optimised order. Best-effort: only meaningful when
+/// the source returned >1 alternatives (the on-device car graph returns one
+/// fastest route → unchanged).
+List<OsrmRoute> rankByPreference(List<OsrmRoute> routes, RoutePreference pref) {
+  if (routes.length < 2 || pref == RoutePreference.fastest) return routes;
+  final ranked = [...routes];
+  switch (pref) {
+    case RoutePreference.shortest:
+      ranked.sort((a, b) => a.distance.compareTo(b.distance));
+    case RoutePreference.mainRoads:
+      // Main roads → fewer, longer legs (motorway/trunk/primary): highest
+      // average step length wins. Heuristic over the alternatives we have.
+      double avg(OsrmRoute r) =>
+          r.distance / (r.steps.length > 1 ? r.steps.length : 1);
+      ranked.sort((a, b) => avg(b).compareTo(avg(a)));
+    case RoutePreference.scenic:
+      ranked.sort((a, b) => _routeCurvature(b).compareTo(_routeCurvature(a)));
+    case RoutePreference.fastest:
+      break;
+  }
+  return ranked;
+}
+
 /// Throws when no source is available (fully offline without a graph).
 ///
 /// [profile] selects the road type (car / motorbike / bicycle / walking).
@@ -296,12 +392,14 @@ Future<OsrmRoute> fetchAnyRoute(
   RouteProfile profile = RouteProfile.car,
   bool avoidHighway = false,
   bool avoidFerry = false,
+  RoutePreference preference = RoutePreference.fastest,
 }) async {
   final routes = await fetchAnyRoutes(
     points,
     profile: profile,
     avoidHighway: avoidHighway,
     avoidFerry: avoidFerry,
+    preference: preference,
   );
   return routes.first;
 }
@@ -319,15 +417,19 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
   int maxAlternatives = 3,
   bool avoidHighway = false,
   bool avoidFerry = false,
+  RoutePreference preference = RoutePreference.fastest,
 }) async {
   if (dataSource == 'vietmap' &&
       !forceOffline &&
       (profile == RouteProfile.car || profile == RouteProfile.motorbike)) {
     try {
-      return await fetchVietmapRoutes(
-        points,
-        vehicle: profile == RouteProfile.motorbike ? 'motorcycle' : 'car',
-        maxAlternatives: maxAlternatives,
+      return rankByPreference(
+        await fetchVietmapRoutes(
+          points,
+          vehicle: profile == RouteProfile.motorbike ? 'motorcycle' : 'car',
+          maxAlternatives: maxAlternatives,
+        ),
+        preference,
       );
     } catch (e) {
       debugPrint('VIETMAP: route failed: $e — falling back to OSRM');
@@ -344,7 +446,7 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
         avoidMotorway: avoidHighway,
         avoidFerry: avoidFerry,
       );
-      if (local.isNotEmpty) return local;
+      if (local.isNotEmpty) return rankByPreference(local, preference);
     }
   }
   if (forceOffline || routingEngine == 'graphhopper') {
@@ -355,10 +457,13 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
     );
   }
   // Online OSRM returns up to [maxAlternatives] tap-to-choose routes.
-  return fetchOsrmRoutes(
-    points,
-    profile: profile.osrm,
-    exclude: osrmExclude(avoidHighway: avoidHighway, avoidFerry: avoidFerry),
-    maxAlternatives: maxAlternatives,
+  return rankByPreference(
+    await fetchOsrmRoutes(
+      points,
+      profile: profile.osrm,
+      exclude: osrmExclude(avoidHighway: avoidHighway, avoidFerry: avoidFerry),
+      maxAlternatives: maxAlternatives,
+    ),
+    preference,
   );
 }

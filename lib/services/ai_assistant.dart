@@ -10,11 +10,14 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 
 import 'package:navbridge/core/ai_config.dart';
 import 'package:navbridge/core/ai_key_store.dart';
 import 'package:navbridge/core/ai_memory.dart';
+import 'package:navbridge/services/offline_poi.dart';
+import 'package:navbridge/services/offline_tiles.dart' show isOnline;
 import 'package:navbridge/services/osm_api.dart';
 import 'package:navbridge/services/poi_search.dart';
 import 'package:latlong2/latlong.dart';
@@ -30,6 +33,7 @@ class AiContext {
   final String? nextManeuver; // "rẽ trái vào Lê Lợi trong 300 m"
   final String? cameraAhead; // "Camera tốc độ phía trước 500 m"
   final String? weather; // "30°C, mưa nhẹ"
+  final String? radar; // rain prediction: "mưa 80% trong giờ tới"
   final String? tripNotes; // trip name / stop count
 
   /// The car's position as coordinates (used for REAL POI lookups like
@@ -45,6 +49,7 @@ class AiContext {
     this.nextManeuver,
     this.cameraAhead,
     this.weather,
+    this.radar,
     this.tripNotes,
     this.center,
   });
@@ -62,6 +67,7 @@ class AiContext {
       if (nextManeuver != null) 'Lượt tiếp: $nextManeuver',
       ?cam,
       if (weather != null) 'Thời tiết: $weather',
+      if (radar != null) 'Mưa dự báo: $radar',
       ?notes,
     ];
     return parts.isEmpty ? '' : '\n\nNgữ cảnh hiện tại: ${parts.join('; ')}.';
@@ -71,8 +77,23 @@ class AiContext {
 /// One assistant reply (streamed tokens appended by [onToken]).
 class AiReply {
   final String text;
-  final String provider; // 'deepseek' | 'gemini'
-  const AiReply(this.text, this.provider);
+  final String provider; // 'deepseek' | 'gemini' | 'offline'
+  final List<AiPlace> places; // real places the answer is grounded on
+  final AiPlace? navigateTarget; // tool-call: driver wants to go here
+  const AiReply(
+    this.text,
+    this.provider, {
+    this.places = const [],
+    this.navigateTarget,
+  });
+}
+
+/// A real place the AI answer is grounded on (rendered as a "Đi đến" chip).
+class AiPlace {
+  final String name;
+  final double lat;
+  final double lng;
+  const AiPlace(this.name, this.lat, this.lng);
 }
 
 /// A chat turn (user question or assistant reply) used for session memory.
@@ -110,41 +131,63 @@ class AiAssistant {
       '(store deepseek=${sd?.isNotEmpty ?? false} gemini=${sg?.isNotEmpty ?? false})',
     );
     final ctx = context?.toPrompt() ?? '';
-    var userText = ctx.isEmpty ? question : '$question$ctx';
-    // REAL gas-station grounding: when the driver asks about fuel, run the
-    // app's Overpass POI search and hand the actual stations (name + distance)
-    // to the model so it NEVER invents coordinates (LLMs can't see a map).
     final center = context?.center;
-    if (_isGasQuery(question) && center != null) {
-      final gas = await _nearbyGasBlock(center);
-      if (gas.isNotEmpty) userText = '$userText$gas';
-    }
+    var userText = ctx.isEmpty ? question : '$question$ctx';
+
+    // REAL grounding: run the app's POI search for fuel/food/cafe/hotel/ATM
+    // and hand the actual places (name + distance) to the model so it NEVER
+    // invents coordinates. The same places are returned as [AiReply.places]
+    // so the chat can offer "Đi đến" buttons.
+    final grounding = await _groundPlaces(question, center);
+    if (grounding.$1.isNotEmpty) userText = '$userText${grounding.$1}';
+    final places = grounding.$2;
+
     final sys = await _systemPrompt();
     final trimmed = _trimHistory(history);
+
+    // Offline → answer from on-device data + live drive context (no network).
+    if (!await isOnline()) {
+      final off = await _offlineAnswer(question, context, center);
+      if (off != null) return off;
+    }
+    if (deepSeekKey.isEmpty && geminiKey.isEmpty) {
+      throw Exception(
+        'Chưa cấu hình khoá AI. Vào ⚙ Cài đặt → Trợ lý AI để nhập khoá.',
+      );
+    }
 
     // DeepSeek first (cheap + strong Vietnamese).
     if (deepSeekKey.isNotEmpty) {
       try {
-        return await _askDeepSeek(deepSeekKey, userText, trimmed, sys, onToken);
+        final r = await _askDeepSeek(
+          deepSeekKey,
+          userText,
+          trimmed,
+          sys,
+          onToken,
+        );
+        final (txt, target) = _extractNavigate(r.text, places);
+        return AiReply(txt, r.provider, places: places, navigateTarget: target);
       } catch (e) {
         debugPrint('AI: deepseek failed: $e — trying Gemini');
         if (geminiKey.isEmpty) rethrow;
       }
     }
-    if (geminiKey.isNotEmpty) {
-      return _askGemini(geminiKey, userText, trimmed, sys, onToken);
-    }
-    throw Exception(
-      'Chưa cấu hình khoá AI. Vào ⚙ Cài đặt → Trợ lý AI để nhập khoá.',
-    );
+    final g = await _askGemini(geminiKey, userText, trimmed, sys, onToken);
+    final (txt, target) = _extractNavigate(g.text, places);
+    return AiReply(txt, g.provider, places: places, navigateTarget: target);
   }
 
-  /// System prompt = base prompt + persistent driver facts (if any).
+  /// System prompt = base prompt (from the repo asset, so it's easy to edit)
+  /// + persistent driver facts (if any). Falls back to [AiConfig.systemPrompt]
+  /// if the asset can't be loaded.
   Future<String> _systemPrompt() async {
+    var base = AiConfig.systemPrompt;
+    try {
+      base = await rootBundle.loadString('assets/ai/system_prompt.txt');
+    } catch (_) {}
     final mem = await AiMemory.instance.factsPrompt();
-    return mem.isEmpty
-        ? AiConfig.systemPrompt
-        : '${AiConfig.systemPrompt}\n\n$mem';
+    return mem.isEmpty ? base : '$base\n\n$mem';
   }
 
   /// Keeps session memory light: at most the last [_maxHistoryMessages] turns
@@ -172,14 +215,18 @@ class AiAssistant {
     caseSensitive: false,
   );
 
+  /// Questions asking about beautiful places / mountain passes (đèo) / scenic
+  /// stops along the drive → ground in real OSM viewpoints + đèo.
+  static final RegExp _scenicRx = RegExp(
+    r'(đẹp|dep|cảnh|canh|đèo|deo|ngắm|ngam|gợi ý|goi y|dọc đường|doc duong|điểm dừng|diem dung|phong cảnh|phong canh|thắng cảnh|thang canh)',
+    caseSensitive: false,
+  );
+
   bool _isGasQuery(String q) => _gasRx.hasMatch(q);
 
-  /// Query REAL nearby gas stations and format them as a Vietnamese block
-  /// for the model. Prefers Google Places (better Vietnam coverage) via
-  /// [googlePlaceTextSearch], falls back to Overpass [searchPois]. Empty
-  /// string when none found.
-  Future<String> _nearbyGasBlock(LatLng center) async {
-    // 1) Google Places Text Search (best VN data when a key is configured).
+  /// Real nearby gas stations → prompt block + places. Google Places first
+  /// (best VN data), Overpass fallback.
+  Future<(String, List<AiPlace>)> _groundGas(LatLng center) async {
     try {
       final g = await googlePlaceTextSearch(
         'trạm xăng',
@@ -189,12 +236,14 @@ class AiAssistant {
       );
       if (g.isNotEmpty) {
         debugPrint('AI: gas search → Google Places ${g.length} stations');
-        return _formatStations(g, center, 'Google Maps');
+        return (
+          _formatStations(g, center, 'Google Maps'),
+          [for (final (n, la, ln) in g) AiPlace(n, la, ln)],
+        );
       }
     } catch (e) {
       debugPrint('AI: Google gas search failed: $e');
     }
-    // 2) Overpass amenity=fuel fallback.
     try {
       final pois = await searchPois(
         PoiType.fuel,
@@ -202,7 +251,7 @@ class AiAssistant {
         radius: 5000,
         limit: 6,
       );
-      if (pois.isEmpty) return '';
+      if (pois.isEmpty) return ('', const <AiPlace>[]);
       debugPrint('AI: gas search → Overpass ${pois.length} stations');
       const Distance d = Distance();
       final lines = <String>[];
@@ -210,12 +259,230 @@ class AiAssistant {
         final m = d.as(LengthUnit.Meter, center, p.pos).round();
         lines.add('${p.name.isNotEmpty ? p.name : 'Trạm xăng'} (cách ~$m m)');
       }
-      return '\n\nTrạm xăng gần đây (OSM thật — chỉ dùng danh sách này):\n- '
-          '${lines.join('\n- ')}';
+      return (
+        '\n\nTrạm xăng gần đây (OSM thật — chỉ dùng danh sách này):\n- '
+            '${lines.join('\n- ')}',
+        [for (final p in pois) AiPlace(p.name, p.lat, p.lng)],
+      );
     } catch (e) {
       debugPrint('AI: gas search failed: $e');
-      return '';
+      return ('', const <AiPlace>[]);
     }
+  }
+
+  /// Run the app's REAL POI search for the intent of [q] (fuel / food / café /
+  /// hotel / ATM), returning a Vietnamese block for the model AND the places
+  /// for "Đi đến" chips. Empty when no matching intent or no location.
+  Future<(String, List<AiPlace>)> _groundPlaces(
+    String q,
+    LatLng? center,
+  ) async {
+    if (center == null) return ('', const <AiPlace>[]);
+    final lower = q.toLowerCase();
+    if (_isGasQuery(lower)) return _groundGas(center);
+    final type = _poiTypeForQuery(lower);
+    // "Đẹp / đèo / ngắm cảnh / gợi ý dọc đường" → real scenic spots + mountain
+    // passes (đèo) via Overpass, so the AI suggests REAL beautiful places
+    // (with coordinates for the "Đi đến" chips) — not invented ones.
+    if (type == null && _scenicRx.hasMatch(q)) {
+      try {
+        final spots = await searchScenicSpots(center, radius: 20000, limit: 8);
+        if (spots.isNotEmpty) {
+          const Distance d = Distance();
+          final lines = <String>[];
+          for (final s in spots) {
+            final m = d
+                .as(LengthUnit.Meter, center, LatLng(s.lat, s.lng))
+                .round();
+            lines.add('${s.name} (${s.kind}, cách ~$m m)');
+          }
+          return (
+            '\n\nĐiểm đẹp/đèo thật gần đây (OSM — chỉ dùng danh sách này, '
+                'kèm khoảng cách):\n- ${lines.join('\n- ')}',
+            [for (final s in spots) AiPlace(s.name, s.lat, s.lng)],
+          );
+        }
+      } catch (e) {
+        debugPrint('AI: scenic search failed: $e');
+      }
+    }
+    if (type == null) return ('', const <AiPlace>[]);
+    try {
+      final pois = await searchPois(type, center, radius: 8000, limit: 5);
+      if (pois.isEmpty) return ('', const <AiPlace>[]);
+      const Distance d = Distance();
+      final lines = <String>[];
+      for (final p in pois) {
+        final m = d.as(LengthUnit.Meter, center, p.pos).round();
+        lines.add('${p.name.isNotEmpty ? p.name : type.label} (cách ~$m m)');
+      }
+      final block =
+          '\n\n$type.label gần đây (OSM thật — chỉ dùng danh sách này, kèm '
+          'khoảng cách):\n- ${lines.join('\n- ')}';
+      return (block, [for (final p in pois) AiPlace(p.name, p.lat, p.lng)]);
+    } catch (e) {
+      debugPrint('AI: $type search failed: $e');
+      return ('', const <AiPlace>[]);
+    }
+  }
+
+  /// Map a question to a POI category (fuel handled separately in [_isGasQuery]).
+  PoiType? _poiTypeForQuery(String lower) {
+    if (lower.contains('võng') || lower.contains('vong')) {
+      return PoiType.cafeVong;
+    }
+    if (lower.contains('cà phê') ||
+        lower.contains('ca phe') ||
+        lower.contains('coffee')) {
+      return PoiType.food;
+    }
+    if (lower.contains('nhà hàng') ||
+        lower.contains('nha hang') ||
+        lower.contains('quán ăn') ||
+        lower.contains('quan an') ||
+        lower.contains('ăn uống') ||
+        lower.contains('an uong') ||
+        lower.contains('restaurant') ||
+        lower.contains('food')) {
+      return PoiType.food;
+    }
+    if (lower.contains('khách sạn') ||
+        lower.contains('khach san') ||
+        lower.contains('hotel') ||
+        lower.contains('motel') ||
+        lower.contains('nhà nghỉ') ||
+        lower.contains('nha nghi')) {
+      return PoiType.hotel;
+    }
+    if (lower.contains('atm') ||
+        lower.contains('ngân hàng') ||
+        lower.contains('ngan hang') ||
+        lower.contains('bank') ||
+        lower.contains('rút tiền') ||
+        lower.contains('rut tien')) {
+      return PoiType.atm;
+    }
+    if (lower.contains('bệnh viện') ||
+        lower.contains('benh vien') ||
+        lower.contains('nhà thuốc') ||
+        lower.contains('nha thuoc') ||
+        lower.contains('hiệu thuốc') ||
+        lower.contains('pharmacy') ||
+        lower.contains('hospital') ||
+        lower.contains('y tế') ||
+        lower.contains('y te')) {
+      return PoiType.hospital;
+    }
+    return null;
+  }
+
+  /// Parse the AI's tool-call marker `[ĐI ĐẾN: Tên]` off the reply: returns
+  /// the cleaned text and the resolved place (matched against the REAL
+  /// grounded [places] — never trusts AI coordinates). Null target when the
+  /// name can't be matched to a real place (the marker is just removed).
+  (String, AiPlace?) _extractNavigate(String text, List<AiPlace> places) {
+    final m = RegExp(
+      r'\[ĐI ĐẾN:\s*([^\]]+)\]',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (m == null) return (text, null);
+    final name = m.group(1)!.trim();
+    final clean = text.replaceRange(m.start, m.end, '').trim();
+    final want = _stripDiacritics(name).toLowerCase();
+    if (want.isEmpty) return (clean, null);
+    for (final p in places) {
+      final pn = _stripDiacritics(p.name).toLowerCase();
+      if (pn.contains(want) || want.contains(pn)) return (clean, p);
+    }
+    return (clean, null);
+  }
+
+  static String _stripDiacritics(String s) {
+    const vi =
+        'àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ';
+    const en =
+        'aaaaaaaaaaaaaaaaaeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuuyyyyyd';
+    final b = StringBuffer();
+    for (final ch in s.toLowerCase().split('')) {
+      final i = vi.indexOf(ch);
+      b.write(i >= 0 ? en[i] : ch);
+    }
+    return b.toString();
+  }
+
+  /// Rule-based OFFLINE answers (no network): uses the on-device POI DB and
+  /// the live drive context. Always returns a message (never hangs).
+  Future<AiReply?> _offlineAnswer(
+    String q,
+    AiContext? context,
+    LatLng? center,
+  ) async {
+    final lower = q.toLowerCase();
+    if (_isGasQuery(lower) && center != null) {
+      try {
+        final pois = await poisInCategory('fuel', near: center, limit: 5);
+        if (pois.isNotEmpty) {
+          const Distance d = Distance();
+          final lines = <String>[];
+          for (final p in pois) {
+            final m = d.as(LengthUnit.Meter, p.pos, center).round();
+            lines.add('${p.name} (cách ~$m m)');
+          }
+          final ps = [for (final p in pois) AiPlace(p.name, p.lat, p.lng)];
+          return AiReply(
+            'Đang ngoại tuyến — trạm xăng gần đây (dữ liệu lưu trên máy):\n'
+                '${lines.join('\n')}',
+            'offline',
+            places: ps,
+            navigateTarget: ps.isEmpty ? null : ps.first,
+          );
+        }
+      } catch (e) {
+        debugPrint('AI: offline gas failed: $e');
+      }
+    }
+    if (lower.contains('bao lâu') ||
+        lower.contains('mấy phút') ||
+        lower.contains('eta')) {
+      final eta = context?.eta;
+      final dest = context?.destination;
+      if (eta != null) {
+        return AiReply(
+          'Đến ${dest ?? 'điểm đến'} khoảng $eta (ngoại tuyến).',
+          'offline',
+        );
+      }
+    }
+    if (lower.contains('thời tiết') ||
+        lower.contains('mưa') ||
+        lower.contains('trời') ||
+        lower.contains('nóng')) {
+      final w = context?.weather;
+      if (w != null) {
+        return AiReply('Thời tiết hiện tại: $w (ngoại tuyến).', 'offline');
+      }
+      return const AiReply(
+        'Đang ngoại tuyến, chưa lấy được thời tiết.',
+        'offline',
+      );
+    }
+    if (lower.contains('xin chào') ||
+        lower.contains('hello') ||
+        lower.trim() == 'hi' ||
+        lower.contains('giúp') ||
+        lower.contains('làm gì')) {
+      return const AiReply(
+        'Chào bạn! Tôi là trợ lý NavBridge. Đang ngoại tuyến nên tôi trả lời '
+            'được một số câu như: "trạm xăng gần nhất", "thời tiết", "bao lâu '
+            'tới nơi". Có mạng để hỏi đầy đủ hơn.',
+        'offline',
+      );
+    }
+    return const AiReply(
+      'Hiện không có kết nối mạng nên trợ lý AI đang tạm tắt. '
+          'Tôi vẫn trả lời được: trạm xăng, thời tiết, thời gian đến.',
+      'offline',
+    );
   }
 
   String _formatStations(

@@ -82,8 +82,10 @@ int statutoryLimit(String highway, {String vehicle = 'car'}) {
     'secondary_link': 50,
     'tertiary': 50,
     'tertiary_link': 50,
-    'unclassified': 50,
-    'residential': 50,
+    // Urban streets without a median: posted 40 km/h (QCVN 41) — 50 was
+    // too high and made the limit read wrong on city roads.
+    'unclassified': 40,
+    'residential': 40,
     'living_street': 20,
     'service': 30,
     'pedestrian': 10,
@@ -101,7 +103,7 @@ int statutoryLimit(String highway, {String vehicle = 'car'}) {
     'secondary_link': 50,
     'tertiary': 60,
     'tertiary_link': 50,
-    'unclassified': 50,
+    'unclassified': 40,
     'residential': 40,
     'living_street': 20,
     'service': 30,

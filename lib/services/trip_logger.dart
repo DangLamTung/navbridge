@@ -53,10 +53,7 @@ class TripFix {
         {
           'timestampMs': ms,
           'activity': [
-            {
-              'type': speedMps > 2 ? 'IN_VEHICLE' : 'STILL',
-              'confidence': 100,
-            },
+            {'type': speedMps > 2 ? 'IN_VEHICLE' : 'STILL', 'confidence': 100},
           ],
         },
       ],
@@ -72,9 +69,9 @@ class TripLogger {
   final List<TripFix> fixes = [];
 
   TripLogger({required this.name, DateTime? startedAt})
-      : startedAt = startedAt ?? DateTime.now();
+    : startedAt = startedAt ?? DateTime.now();
 
-  static const Duration _minInterval = Duration(seconds: 5);
+  static const Duration _minInterval = Duration(seconds: 1);
   static const double _minDistance = 20.0;
 
   int get fixCount => fixes.length;
@@ -93,34 +90,35 @@ class TripLogger {
   }) {
     if (fixes.isNotEmpty) {
       final last = fixes.last;
-      final moved = distanceMeters(
-          LatLng(last.lat, last.lng), pos);
+      final moved = distanceMeters(LatLng(last.lat, last.lng), pos);
       if (DateTime.now().difference(last.time) < _minInterval &&
           moved < _minDistance) {
         return; // too soon and too close — skip
       }
     }
-    fixes.add(TripFix(
-      time: DateTime.now(),
-      lat: pos.latitude,
-      lng: pos.longitude,
-      accuracyM: accuracyM,
-      speedMps: speedMps,
-      source: source,
-    ));
+    fixes.add(
+      TripFix(
+        time: DateTime.now(),
+        lat: pos.latitude,
+        lng: pos.longitude,
+        accuracyM: accuracyM,
+        speedMps: speedMps,
+        source: source,
+      ),
+    );
   }
 
   /// Serialize to the Google Takeout `Records.json` shape.
   Map<String, dynamic> toTakeoutJson() => {
-        'locations': [for (final f in fixes) f.toTakeout()],
-        'endLocationDetails': [
-          {
-            'endTime': fixes.isEmpty
-                ? startedAt.toIso8601String()
-                : fixes.last.time.toIso8601String(),
-          },
-        ],
-      };
+    'locations': [for (final f in fixes) f.toTakeout()],
+    'endLocationDetails': [
+      {
+        'endTime': fixes.isEmpty
+            ? startedAt.toIso8601String()
+            : fixes.last.time.toIso8601String(),
+      },
+    ],
+  };
 
   String get defaultFileName {
     final d = startedAt;

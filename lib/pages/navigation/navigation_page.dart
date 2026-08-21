@@ -12,14 +12,15 @@
 library;
 
 import 'dart:async';
-import 'dart:math' show Point, max;
+import 'dart:convert';
+import 'dart:math' show max;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'package:navbridge/services/ble_clock.dart';
@@ -32,15 +33,20 @@ import 'package:navbridge/core/nav_protocol.dart';
 import 'package:navbridge/core/map_protocol.dart';
 import 'package:navbridge/pages/settings_screen.dart';
 import 'package:navbridge/services/offline_poi.dart';
+import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/offline_router.dart';
 import 'package:navbridge/services/offline_tiles.dart';
 import 'package:navbridge/services/poi_search.dart';
+import 'package:navbridge/core/gps_noise_simulator.dart';
+import 'package:navbridge/core/location_kalman.dart';
 import 'package:navbridge/core/route_profile.dart';
 import 'package:navbridge/core/settings.dart';
 import 'package:navbridge/services/quick_places.dart';
 import 'package:navbridge/services/osm_api.dart';
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/overpass.dart';
+import 'package:navbridge/services/radar.dart';
+import 'package:navbridge/services/route_export.dart';
 import 'package:navbridge/services/trip_logger.dart';
 import 'package:navbridge/core/trip_plan.dart';
 import 'package:navbridge/ui/arrival_card.dart';
@@ -64,6 +70,7 @@ import 'package:navbridge/ui/nav_status_bar.dart';
 import 'package:navbridge/ui/nav_top_bar.dart';
 import 'package:navbridge/ui/navigation_card.dart';
 import 'package:navbridge/ui/poi_info_card.dart';
+import 'package:navbridge/ui/radar_frame_bar.dart';
 import 'package:navbridge/ui/road_info_chip.dart';
 import 'package:navbridge/ui/route_preview_card.dart';
 import 'package:navbridge/ui/search_pill.dart';
@@ -76,10 +83,13 @@ part 'modules/nav_build.dart';
 part 'modules/nav_gps.dart';
 part 'modules/nav_map.dart';
 part 'modules/nav_navigation.dart';
+part 'modules/nav_plan.dart';
 part 'modules/nav_poi.dart';
+part 'modules/nav_radar.dart';
 part 'modules/nav_route_edit.dart';
 part 'modules/nav_screens.dart';
 part 'modules/nav_search.dart';
+part 'modules/nav_signs.dart';
 part 'modules/nav_simple.dart';
 part 'modules/nav_voice.dart';
 part 'modules/nav_weather.dart';
@@ -205,14 +215,15 @@ class _NavigationPageState extends State<NavigationPage>
   /// route build/flicker twice.
   int _planSeq = 0;
 
-  // --- draggable route (Google-style grab-the-line to add a via point) ---
-  // One handle per route segment (a simple A→B route has exactly one).
-  List<LatLng> _dragHandles = [];
-  final ValueNotifier<MapCamera?> _camNotifier = ValueNotifier(null);
-
   // --- route criteria: traffic / elevation / avoid highway / ferry -------
   bool _avoidHighway = false; // re-plan without motorways (OSRM)
   bool _avoidFerry = false; // re-plan without ferries (OSRM)
+  RoutePreference _routePreference = RoutePreference.fastest; // route style
+  bool _navStarting = false; // re-entry latch so nav can't start twice
+  bool _topBarCollapsed = false; // directions bar collapsed to a compact pill
+  bool _stopsCollapsed = false; // stops panel list collapsed to its header
+  bool _routeOptionsCollapsed = true; // route card options section collapsed
+  bool _routeCardCollapsed = true; // whole route card collapsed to a pill
   ElevationInfo? _elevation; // ascent/descent of the current route
   final Map<String, ElevationInfo> _elevationCache = {};
   bool _elevationExpanded =
@@ -284,6 +295,9 @@ class _NavigationPageState extends State<NavigationPage>
           );
     if (!mounted) return;
     setNavState(() => _routeCameras = near);
+    // Road signs ride the same lifecycle as cameras: refreshed/cleared
+    // wherever the route or the toggle changes.
+    unawaited(_refreshRouteSigns());
   }
 
   /// Load the on-device GraphHopper routing graph — kicked off in the
@@ -332,7 +346,7 @@ class _NavigationPageState extends State<NavigationPage>
   bool _tilt3d = false; // tilted perspective camera (turn off = flat 2D)
   bool _terrain3d = false; // true 3D terrain relief (needs offline DEM)
   bool _nightMode = false; // night/dark map
-  bool _satellite = false; // satellite imagery basemap (real terrain)
+  final bool _satellite = false; // satellite imagery basemap (removed toggle)
   bool _showStatusBar = false; // Google-style bottom info bar (default off)
 
   /// Dark theme for simple nav mode (no map) — toggled on the simple screen.
@@ -372,7 +386,16 @@ class _NavigationPageState extends State<NavigationPage>
   TripLogger? _trip;
 
   // --- offline mode ---
-  OfflineTileProvider _tileProvider = OfflineTileProvider();
+  // Browse basemap is LOCKED to ONE source so the map never swaps styles when
+  // zooming. _tileProvider.source MUST match _tileSource — the tile cache and
+  // downloaded regions are keyed by it.
+  final String _tileSource = 'carto';
+  final OfflineTileProvider _tileProvider = OfflineTileProvider(
+    // Keep in sync with [_tileSource] ('carto') — the tile cache and
+    // downloaded regions are keyed by this. (A field initializer can't
+    // reference _tileSource directly — the implicit_this lint forbids it.)
+    source: 'carto',
+  );
   bool _offline = false;
 
   /// Whether to show the transient "Đang ngoại tuyến" banner. Shown briefly
@@ -404,17 +427,6 @@ class _NavigationPageState extends State<NavigationPage>
     'vietmapsat': VietmapConfig.satelliteTiles,
   };
 
-  /// Basemap layer names in menu order. Vietmap layers are only offered when
-  /// real keys were provided at build time.
-  List<String> get _tileLayerNames => [
-    'osm',
-    'carto',
-    'topo',
-    'esri',
-    if (VietmapConfig.hasKeys) ...['vietmap', 'vietmapsat'],
-  ];
-  String _tileSource = 'osm'; // active basemap layer
-
   // --- multi-stop plan ---
   final List<TripStop> _stops = [];
 
@@ -442,13 +454,45 @@ class _NavigationPageState extends State<NavigationPage>
   bool _spokenFinal = false;
   bool _arrivedSpoken = false;
   String? _lastManeuverSig; // icon+road of the maneuver we last announced
+  bool _speedingSpoken = false; // overspeed alert already announced (episode)
+  DateTime? _lastOverspeedAt; // last overspeed voice alert (60 s cooldown)
+  int? _signSpeedLimit; // effective limit from the last speed-limit sign passed
+
+  /// Effective speed limit: the last speed-limit sign (incl. Waze) the car
+  /// passed on the route, falling back to the road's tagged/VN-default limit.
+  /// This is what overspeed alerts + the speed chip announce.
+  int get _effectiveSpeedLimit => _signSpeedLimit ?? _roadInfo?.speedLimit ?? 0;
+
+  double _lastGpsAccuracy = 0; // latest GPS fix accuracy (m) → Kalman noise
+  bool _gpsWeakSpoken = false; // low-GPS alert announced (episode)
+  DateTime? _lastGpsWeakAt; // last low-GPS voice alert (60 s cooldown)
   DateTime? _lastReRoute; // cooldown for off-route re-routing
 
   // --- online GPS road-snapping (OSRM match) + off-route timing ----------
   final List<LatLng> _gpsWindow = []; // rolling trace for /match
   DateTime? _lastGpsMatch; // throttle: match at most every 5 s
+  DateTime? _lastGpsFixTime; // diagnostic: measure the real fix rate
   double _lastSpeedMps = 0;
   DateTime? _offRouteSince; // when the car first went >50 m off-route
+  DateTime? _lastNetMatch; // throttle: network snap at most every 1 s
+  DateTime? _netOffSince; // when the car first hit a road NOT on the route
+
+  // --- road signs (stop / give-way / traffic lights) -------------------
+  List<RoadSign> _routeSigns = []; // map layer: signs near the route
+  String? _lastSignSig; // dedupe: don't repeat the same sign
+  DateTime? _lastSignCheck; // 1 Hz throttle
+
+  /// Latest NETWORK-matching verdict (see [_networkMatch]): true = the car's
+  /// nearest road IS part of the route. Trusted by the raw off-route check in
+  /// [_handleNav] only while fresh (<2 s) — lets a snapped-on-route fix
+  /// suppress false reroutes without ever blocking a real one.
+  bool _netOnRoute = false;
+
+  // --- rain radar overlay (RainViewer) --------------------------------
+  RadarData? _radar; // fetched frame index (cached ~5 min)
+  DateTime? _radarFetchedAt;
+  bool _radarLoading = false;
+  int _radarFrame = 0; // selected frame within [_radarFrames]
 
   // --- wrong-way (inverse) detection -------------------------------
   /// Last RAW GPS fix — used to compute the travel heading for wrong-way
@@ -506,11 +550,6 @@ class _NavigationPageState extends State<NavigationPage>
       // camera alerts on. The GraphHopper routing graph, however, is already
       // loading in the background from initState ([_maybeLoadRoutingGraph]),
       // so a forced-offline / graphhopper route is ready without a long wait.
-      // Initial camera for the route drag handle (kept fresh by
-      // onPositionChanged).
-      try {
-        _camNotifier.value = _map.camera;
-      } catch (_) {}
     });
     _connSub = onlineStream().listen((online) {
       _applyConnectivity(online);
@@ -533,9 +572,11 @@ class _NavigationPageState extends State<NavigationPage>
       smoothCamera = s.smoothCamera;
       simpleMode = s.simpleMode;
       cameraAlerts = s.cameraAlerts;
+      radarOn = s.radar;
       wakeWord = s.wakeWord;
       debugPrint(
-        'SETTINGS: cameraAlerts=$cameraAlerts (persisted=$s.cameraAlerts)',
+        'SETTINGS: cameraAlerts=$cameraAlerts radar=$radarOn '
+        '(persisted=$s.cameraAlerts)',
       );
       setState(() => _offline = _offline || forceOffline);
       _flashOfflineBanner();

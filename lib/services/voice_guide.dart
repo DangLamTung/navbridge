@@ -46,6 +46,20 @@ class VoiceGuide {
     }
   }
 
+  /// Speak [text] by QUEUEING it behind anything currently playing (for the
+  /// AI assistant reading a long answer aloud sentence-by-sentence). Unlike
+  /// [speak] it does NOT interrupt the current utterance, so streaming
+  /// sentences flow naturally one after another. Call [stop] to flush.
+  Future<void> speakQueued(String text) async {
+    if (!_ready || text.isEmpty) return;
+    try {
+      await _tts.setQueueMode(1); // 1 = add to queue, don't interrupt
+      await _tts.speak(text);
+    } catch (e) {
+      debugPrint('VOICE: speakQueued failed: $e');
+    }
+  }
+
   Future<void> stop() async {
     try {
       await _tts.stop();

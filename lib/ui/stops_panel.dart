@@ -15,6 +15,8 @@ class StopsPanel extends StatelessWidget {
     required this.onMoveDown,
     required this.onRemove,
     required this.onSave,
+    this.collapsed = false,
+    this.onToggleCollapse,
   });
 
   final List<TripStop> stops;
@@ -22,6 +24,12 @@ class StopsPanel extends StatelessWidget {
   final ValueChanged<int> onMoveDown;
   final ValueChanged<int> onRemove;
   final VoidCallback onSave;
+
+  /// When true only the header is shown (the list is collapsed away).
+  final bool collapsed;
+
+  /// Toggles [collapsed]; when null the chevron is hidden.
+  final VoidCallback? onToggleCollapse;
 
   @override
   Widget build(BuildContext context) {
@@ -57,6 +65,18 @@ class StopsPanel extends StatelessWidget {
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                   ),
                 ),
+                if (onToggleCollapse != null)
+                  IconButton(
+                    tooltip: collapsed
+                        ? 'Mở rộng danh sách'
+                        : 'Thu gọn danh sách',
+                    icon: Icon(
+                      collapsed ? Icons.expand_more : Icons.expand_less,
+                      size: 20,
+                      color: Colors.grey[600],
+                    ),
+                    onPressed: onToggleCollapse,
+                  ),
               ],
             ),
           ),
@@ -66,59 +86,61 @@ class StopsPanel extends StatelessWidget {
           // directions bar (its button is the single add-stop entry).
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 240),
-            child: ListView.separated(
-              shrinkWrap: true,
-              padding: EdgeInsets.zero,
-              itemCount: stops.length,
-              separatorBuilder: (_, _) => const Divider(height: 1),
-              itemBuilder: (context, i) => Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 11,
-                      backgroundColor: i == stops.length - 1
-                          ? const Color(0xFFEA4335)
-                          : kAppBlue,
-                      child: Text(
-                        '${i + 1}',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                        ),
+            child: collapsed
+                ? const SizedBox.shrink()
+                : ListView.separated(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    itemCount: stops.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, i) => Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 11,
+                            backgroundColor: i == stops.length - 1
+                                ? const Color(0xFFEA4335)
+                                : kAppBlue,
+                            child: Text(
+                              '${i + 1}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              stops[i].name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.arrow_upward, size: 16),
+                            visualDensity: VisualDensity.compact,
+                            onPressed: i == 0 ? null : () => onMoveUp(i),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.arrow_downward, size: 16),
+                            visualDensity: VisualDensity.compact,
+                            onPressed: i == stops.length - 1
+                                ? null
+                                : () => onMoveDown(i),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, size: 16),
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () => onRemove(i),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        stops[i].name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.arrow_upward, size: 16),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: i == 0 ? null : () => onMoveUp(i),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.arrow_downward, size: 16),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: i == stops.length - 1
-                          ? null
-                          : () => onMoveDown(i),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 16),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => onRemove(i),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+                  ),
           ),
         ],
       ),

@@ -32,6 +32,9 @@ class AppSettings {
   /// Speed/red-light camera alerts while navigating (phạt nguội DB).
   final bool cameraAlerts;
 
+  /// Rain-radar overlay on the map (RainViewer, free/no key).
+  final bool radar;
+
   /// Picture-in-Picture window shape while navigating:
   ///   '34' 3:4 (default — larger, easy to read)
   ///   'portrait' 9:16 · 'landscape' 4:3
@@ -60,6 +63,7 @@ class AppSettings {
     this.routingEngine = 'auto',
     this.smoothCamera = true,
     this.cameraAlerts = true,
+    this.radar = false,
     this.pipAspect = '34',
     this.ridingMode = false,
     this.simpleMode = false,
@@ -75,6 +79,7 @@ class AppSettings {
     'routingEngine': routingEngine,
     'smoothCamera': smoothCamera,
     'cameraAlerts': cameraAlerts,
+    'radar': radar,
     'pipAspect': pipAspect,
     'ridingMode': ridingMode,
     'simpleMode': simpleMode,
@@ -104,6 +109,7 @@ Future<AppSettings> loadSettings() async {
       routingEngine: (j['routingEngine'] ?? 'auto') as String,
       smoothCamera: (j['smoothCamera'] ?? true) as bool,
       cameraAlerts: (j['cameraAlerts'] ?? true) as bool,
+      radar: (j['radar'] ?? false) as bool,
       pipAspect: (rawPip == 'portrait' || rawPip == 'landscape')
           ? '34'
           : rawPip,

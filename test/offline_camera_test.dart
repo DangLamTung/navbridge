@@ -13,7 +13,7 @@ void main() {
     for (final c in cams) {
       expect(c.lat, inInclusiveRange(8.0, 23.6));
       expect(c.lng, inInclusiveRange(102.0, 110.0));
-      expect(['speed', 'red_light', 'violations'], contains(c.focus));
+      expect(['speed', 'red_light', 'violations', 'sign'], contains(c.focus));
       expect(c.name, isNotEmpty);
     }
   });
