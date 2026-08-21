@@ -27,8 +27,7 @@ import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/poi_search.dart';
 import 'package:navbridge/ui/sign_icons.dart';
 import 'package:navbridge/services/terrain.dart';
-// KALMAN (disabled 2026-08-20, user request — using raw fused fix now):
-// import 'package:navbridge/core/location_kalman.dart';
+import 'package:navbridge/core/location_kalman.dart';
 import 'package:navbridge/core/route_snap.dart';
 import 'package:navbridge/core/trip_plan.dart';
 
@@ -307,26 +306,19 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// instead of freezing between fixes.
   ll.LatLng? _drPos;
 
-  /// Last RAW GPS fix ([widget.current]) — the camera is anchored to this so
-  /// it never drifts away from the real position.
-  ll.LatLng? _lastRealFix;
-  double _drSpeedMps = 0; // raw fused speed estimate (m/s)
-  ll.LatLng? _prevRawFix; // previous raw fix (finite-difference speed fallback)
-  double _lastGlideSpeedMps = 0; // EMA'd fallback glide speed (m/s)
-  DateTime _lastFixTime = DateTime.fromMillisecondsSinceEpoch(0);
+  /// Filtered (Kalman) speed estimate (m/s) — drives the parked check and is
+  /// far steadier than the raw fused speed under vibration.
+  double _drSpeedMps = 0;
   DateTime _drLastFix = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastCamStep = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastCamMove = DateTime.fromMillisecondsSinceEpoch(0);
 
-  /// Constant-velocity complementary filter: fuses the 1 Hz GPS fixes into a
-  /// smooth position + speed + heading, and dead-reckons between them (this
-  /// replaced the old finite-difference speed estimate, which GPS jitter made
-  /// jumpy — the car used to lurch / the arrow used to shake). It assumes the
-  /// car is always on the route, so it follows the engine's route bearing and
-  /// keeps the puck glued to the snapped fix.
-  // KALMAN (disabled by user request 2026-08-20 — trust the raw fused fix).
-  // Restore: uncomment the line below + the location_kalman import above.
-  // final LocationKalman _lk = LocationKalman();
+  /// Constant-velocity complementary (Kalman) filter: fuses the GPS fixes
+  /// into a smooth position + speed + heading, and dead-reckons between them
+  /// (~30 fps), so raw-fix jitter (rough-road vibration, GPS wander) never
+  /// makes the car arrow / map jump. The filtered position is snapped back
+  /// onto the route each frame so the puck rides the road.
+  final LocationKalman _lk = LocationKalman();
 
   /// 10 s idle → auto-center back on the car after the user pans away.
   Timer? _recenterTimer;
@@ -1342,16 +1334,14 @@ class _VectorNavMapState extends State<VectorNavMap>
     }
     final dtS = now.difference(_lastCamStep).inMilliseconds / 1000.0;
     _lastCamStep = now;
-    // KALMAN (disabled): used to dead-reckon `_lk.predict(dtS)` here. Now the
-    // car follows the RAW Android Fused Location fix directly — a simple
-    // linear glide toward the last fix at the reported speed so the camera
-    // doesn't teleport between fixes (no filtering of any kind).
-    if (dtS > 0 && dtS < 1.0 && _drSpeedMps > 0.5) {
-      final real = _lastRealFix;
-      final dr = _drPos;
-      if (real != null && dr != null) {
-        _drPos = _advanceToward(dr, real, _drSpeedMps * dtS);
-      }
+    // Dead-reckon the complementary filter between fixes (~30 fps) so the
+    // camera keeps gliding smoothly; snap the predicted position back onto
+    // the route so it never cuts a corner (Google-style "puck rides road").
+    if (dtS > 0 && dtS < 1.0) {
+      final p = _lk.predict(dtS);
+      final snapped = _snapToRoute(p);
+      _drPos = snapped;
+      _lk.snapTo(snapped);
     }
     // Parked + settled → stop ticking until the next GPS fix (saves battery).
     if (_drSpeedMps < 1.0 &&
@@ -1534,54 +1524,11 @@ class _VectorNavMapState extends State<VectorNavMap>
   }
 
   /// Project [p] onto the route polyline so the car arrow + camera always
-  /// RIDE the road (the Kalman glide can cut across a corner between fixes;
-  /// this glues the drawn position back onto the route, Google-Maps style).
-  /// Project [p] onto the route polyline so the car arrow + camera always
   /// RIDE the road (Google-Maps style). Only snaps when the point is near
   /// the route (≤40 m) — a genuine off-route deviation stays free so the
   /// puck shows the real position.
   ll.LatLng _snapToRoute(ll.LatLng p) =>
       snapToRoutePolyline(p, widget.routeGeometry);
-
-  /// Move [from] toward [to] by at most [maxM] metres (linear, clamped to not
-  /// overshoot). Used to glide the car toward the raw fused fix between GPS
-  /// updates without any filtering (Kalman disabled).
-  ll.LatLng _advanceToward(ll.LatLng from, ll.LatLng to, double maxM) {
-    if (maxM <= 0) return from;
-    final d = _distMeters(from, to);
-    if (d <= maxM) return to;
-    final t = maxM / d;
-    return ll.LatLng(
-      from.latitude + (to.latitude - from.latitude) * t,
-      from.longitude + (to.longitude - from.longitude) * t,
-    );
-  }
-
-  /// Speed used for the between-fix camera/puck glide. Prefers the receiver's
-  /// own speed estimate; falls back to a smoothed finite difference over
-  /// consecutive fixes so the car keeps gliding (not freezing between fixes)
-  /// even when the Android fused provider reports speed = 0 — which is what
-  /// made the GPS look like it "runs too slow" after the Kalman was removed.
-  double _glideSpeedMps(ll.LatLng fix) {
-    final reported = widget.speedMps;
-    if (reported != null && !reported.isNaN && reported > 0.5) {
-      _lastGlideSpeedMps = reported;
-      return reported;
-    }
-    final now = DateTime.now();
-    final dtS = now.difference(_lastFixTime).inMilliseconds / 1000.0;
-    final prev = _prevRawFix;
-    _prevRawFix = fix;
-    _lastFixTime = now;
-    if (prev != null && dtS > 0.05 && dtS < 5) {
-      final v = _distMeters(prev, fix) / dtS;
-      if (v.isFinite && v < 60) {
-        // Light EMA so a single bad fix can't spike the glide.
-        _lastGlideSpeedMps = _lastGlideSpeedMps * 0.6 + v * 0.4;
-      }
-    }
-    return _lastGlideSpeedMps;
-  }
 
   @override
   void didUpdateWidget(VectorNavMap old) {
@@ -1623,17 +1570,20 @@ class _VectorNavMapState extends State<VectorNavMap>
     if (old.selectedPoi != widget.selectedPoi && widget.selectedPoi != null) {
       _focusPoi(widget.selectedPoi!);
     }
-    // KALMAN (disabled by user request 2026-08-20): the car now follows the
-    // RAW Android Fused Location fix (`widget.current`, already road-snapped
-    // by `_handleNav`), with the drawn position projected onto the route so it
-    // rides the road. No filtering layer between the fix and the puck.
+    // Complementary (Kalman) filter: fuse the fix (trusted by its accuracy)
+    // + the receiver's speed into a smooth position/velocity, so vibration
+    // jitter in the raw fixes doesn't make the arrow/map jump. The filtered
+    // position is then projected onto the route so the puck rides the road.
     final newCur = widget.current;
     if (newCur != null && newCur != old.current) {
       final now = DateTime.now();
-      // (was: _lk.update(newCur, accuracy: widget.gpsAccuracy, ...))
-      _lastRealFix = newCur;
-      _drPos = _snapToRoute(newCur);
-      _drSpeedMps = _glideSpeedMps(newCur);
+      _lk.update(
+        newCur,
+        accuracy: widget.gpsAccuracy,
+        speedMps: widget.speedMps,
+      );
+      _drPos = _snapToRoute(_lk.position ?? newCur);
+      _drSpeedMps = _lk.speedMps;
       _drLastFix = now;
     }
     _followPosition();
