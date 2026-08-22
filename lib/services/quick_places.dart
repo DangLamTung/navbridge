@@ -111,6 +111,16 @@ class QuickPlaces {
     await _save();
   }
 
+  /// Remove a saved place — the slot stays and renders as unset
+  /// ("+ Nhà riêng" / "+ Cơ quan").
+  Future<void> remove(String id) async {
+    _places = [
+      for (final p in _places)
+        if (p.id != id) p,
+    ];
+    await _save();
+  }
+
   /// Move a slot from [from] to [to] (drag-reorder) and persist.
   Future<void> reorder(int from, int to) async {
     if (from < 0 ||

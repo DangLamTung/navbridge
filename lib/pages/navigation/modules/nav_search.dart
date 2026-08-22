@@ -454,15 +454,18 @@ extension _NavSearch on _NavigationPageState {
         onTap: () {
           debugPrint('QUICK: tap id=$id set=$set');
           if (set) {
-            // Set → navigate straight there.
-            _planToPoint(p.label, p.lat, p.lng);
+            // Set → options menu (navigate / change / remove). The chip's
+            // long-press is captured by the drag-reorder gesture, so this
+            // menu is the ONLY reliable way to reselect a saved quick place.
+            unawaited(_quickPlaceMenu(id, label, p));
           } else {
             // Unset → search an address to set it.
             unawaited(_pickQuickPlace(id, label));
           }
         },
         onLongPress: () {
-          // Long-press → change/set the address.
+          // Long-press → change/set the address (fires when the drag doesn't
+          // claim the gesture on some devices).
           unawaited(_pickQuickPlace(id, label));
         },
         child: Padding(
@@ -485,13 +488,103 @@ extension _NavSearch on _NavigationPageState {
     );
   }
 
+  /// Bottom-sheet actions for a SET quick place: navigate / change / remove.
+  /// The chip's long-press is taken over by the drag-reorder gesture, so this
+  /// menu is the reliable way to reselect a saved place.
+  Future<void> _quickPlaceMenu(String id, String label, QuickPlace p) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.navigation, color: kAppBlue),
+              title: Text('Đi đến $label'),
+              subtitle: Text(
+                p.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              onTap: () => Navigator.of(ctx).pop('go'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_location_alt, color: kAppBlue),
+              title: Text('Đổi địa chỉ $label'),
+              onTap: () => Navigator.of(ctx).pop('change'),
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.delete_outline,
+                color: Colors.redAccent,
+              ),
+              title: Text('Xoá $label'),
+              onTap: () => Navigator.of(ctx).pop('remove'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    switch (choice) {
+      case 'go':
+        _planToPoint(p.label, p.lat, p.lng);
+      case 'change':
+        unawaited(_pickQuickPlace(id, label));
+      case 'remove':
+        await QuickPlaces.instance.remove(id);
+        if (mounted) setNavState(() {});
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Đã xoá $label.')));
+        }
+    }
+  }
+
   /// Open an address-search dialog to set/change a quick place, then navigate.
   Future<void> _pickQuickPlace(String id, String label) async {
-    final picked = await showDialog<OsmSuggestion>(
+    var picked = await showDialog<OsmSuggestion>(
       context: context,
       builder: (_) => _QuickPlacePicker(label: label, focus: _current),
     );
     if (picked == null || !mounted) return;
+    // Google / Vietmap suggestions carry only a refId — resolve the real
+    // coordinates on selection (mirrors the main search) so the quick place
+    // is never saved / routed to (0,0).
+    if (picked.source == 'google' && picked.refId.isNotEmpty) {
+      final g = await googlePlaceDetails(picked.refId);
+      if (g == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không lấy được tọa độ địa điểm.')),
+          );
+        }
+        return;
+      }
+      picked = OsmSuggestion(
+        refId: picked.refId,
+        display: picked.display,
+        lat: g.$1,
+        lng: g.$2,
+      );
+    } else if (picked.source == 'vietmap' && picked.refId.isNotEmpty) {
+      final v = await vietmapPlace(picked.refId);
+      if (v == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không lấy được tọa độ địa điểm.')),
+          );
+        }
+        return;
+      }
+      picked = OsmSuggestion(
+        refId: picked.refId,
+        display: picked.display,
+        lat: v.$1,
+        lng: v.$2,
+      );
+    }
     debugPrint(
       'QUICK: set $id = "${picked.display}" ${picked.lat},${picked.lng}',
     );
@@ -515,6 +608,14 @@ extension _NavSearch on _NavigationPageState {
   Future<void> _planToPoint(String name, double lat, double lng) async {
     debugPrint('PLAN: to "$name" $lat,$lng');
     if (!mounted) return;
+    // Guard: a suggestion without resolved coordinates (a Google/Vietmap
+    // placeholder) must never route to (0,0) in the ocean or to NaN.
+    if ((lat == 0 && lng == 0) || lat.isNaN || lng.isNaN) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Không lấy được tọa độ địa điểm.')),
+      );
+      return;
+    }
     setNavState(() {
       _suggestions = [];
       _building = true;
