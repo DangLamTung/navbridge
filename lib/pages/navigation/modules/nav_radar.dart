@@ -29,24 +29,33 @@ extension _NavRadar on _NavigationPageState {
   }
 
   /// Weather-satellite (infrared cloud) frames — a DISTINCT layer from the
-  /// rain radar. The feed often has no satellite product (e.g. at night), so
-  /// this may be empty and the layer renders nothing.
+  /// rain radar. When RainViewer has no satellite product (common), a single
+  /// "current" frame is returned so the Vệ tinh bar still shows; the layer
+  /// itself then uses the NASA GIBS cloud fallback (see [_satelliteLayerUrl]).
   List<RadarFrame> get _satelliteFrames {
     final d = _radar;
-    if (d == null) return const [];
-    final s = d.satellite;
-    if (s.length <= 8) return s;
-    return s.sublist(s.length - 8); // a compact recent window
+    final s = d?.satellite ?? const <RadarFrame>[];
+    if (s.isNotEmpty) {
+      if (s.length <= 8) return s;
+      return s.sublist(s.length - 8); // a compact recent window
+    }
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    return [RadarFrame(time: nowSec, path: '')];
   }
 
-  /// URL template for the currently selected weather-satellite frame.
+  /// URL template for the weather-satellite layer. Prefers RainViewer's own
+  /// satellite frames (time-scrubbable) when the feed has them; otherwise
+  /// falls back to live NASA GIBS cloud tiles so clouds ALWAYS show.
   String? get _satelliteLayerUrl {
     final d = _radar;
-    if (d == null) return null;
-    final frames = _satelliteFrames;
-    if (frames.isEmpty) return null;
-    final i = _satelliteFrame.clamp(0, frames.length - 1);
-    return satelliteTileUrl(d, frames[i]);
+    if (d != null && d.hasSatellite) {
+      final frames = _satelliteFrames;
+      if (frames.isNotEmpty) {
+        final i = _satelliteFrame.clamp(0, frames.length - 1);
+        return satelliteTileUrl(d, frames[i]);
+      }
+    }
+    return nasaCloudTileUrl();
   }
 
   Future<void> _toggleSatellite() async {

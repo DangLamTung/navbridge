@@ -34,6 +34,24 @@ void main() {
     });
   });
 
+  group('nasaCloudTileUrl', () {
+    test(
+      'builds a GIBS Himawari tile template with a 40-min-old rounded time',
+      () {
+        final now = DateTime.utc(2026, 8, 22, 2, 37, 5);
+        final url = nasaCloudTileUrl(now: now);
+        // 40 min back = 01:57 → rounded down to the 10-min mark 01:50.
+        expect(
+          url,
+          contains(
+            'Himawari_AHI_Band13_Clean_Infrared/default/'
+            '2026-08-22T01:50:00Z/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png',
+          ),
+        );
+      },
+    );
+  });
+
   group('RadarData satellite', () {
     test('hasSatellite reflects the infrared frames', () {
       const empty = RadarData(host: 'h', past: [], nowcast: []);

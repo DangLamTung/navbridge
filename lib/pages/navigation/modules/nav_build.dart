@@ -95,6 +95,7 @@ extension _NavBuild on _NavigationPageState {
           onSelect: _setRadarFrame,
           loading: _radarLoading,
           onRefresh: _ensureRadar,
+          onClose: _toggleRadar,
         ),
       );
     }
@@ -109,6 +110,7 @@ extension _NavBuild on _NavigationPageState {
           onSelect: _setSatelliteFrame,
           loading: _radarLoading,
           onRefresh: _ensureRadar,
+          onClose: _toggleSatellite,
         ),
       );
     }

@@ -127,8 +127,8 @@ extension _NavMap on _NavigationPageState {
                   maxNativeZoom: 7,
                 ),
               ),
-            // Weather satellite (RainViewer infrared clouds) — a DISTINCT
-            // translucent layer from the radar, own time scrubber.
+            // Weather satellite (clouds) — a DISTINCT translucent layer from
+            // the radar, own time scrubber. GIBS tiles exist only up to z6.
             if (_satelliteOn && _satelliteLayerUrl != null)
               Opacity(
                 opacity: 0.55,
@@ -136,7 +136,7 @@ extension _NavMap on _NavigationPageState {
                   urlTemplate: _satelliteLayerUrl!,
                   userAgentPackageName: 'com.navbridge.app',
                   tileProvider: NetworkTileProvider(),
-                  maxNativeZoom: 7,
+                  maxNativeZoom: 6,
                 ),
               ),
             if (route != null)

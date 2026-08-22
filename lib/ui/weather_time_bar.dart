@@ -23,6 +23,7 @@ class WeatherTimeBar extends StatelessWidget {
     required this.onSelect,
     this.loading = false,
     this.onRefresh,
+    this.onClose,
   });
 
   /// Layer name ("Radar" / "Vệ tinh").
@@ -45,6 +46,9 @@ class WeatherTimeBar extends StatelessWidget {
   final bool loading;
 
   final VoidCallback? onRefresh;
+
+  /// Hides/turns off the layer this bar controls (the ✕ button).
+  final VoidCallback? onClose;
 
   @override
   Widget build(BuildContext context) {

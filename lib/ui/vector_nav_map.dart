@@ -485,14 +485,15 @@ class _VectorNavMapState extends State<VectorNavMap>
         'layout': <String, dynamic>{'visibility': 'none'},
         'paint': <String, dynamic>{'raster-opacity': 0.55},
       });
-      // Weather-satellite overlay (RainViewer infrared clouds) — a DISTINCT
-      // translucent layer from the radar, with its own time scrubber.
+      // Weather-satellite overlay (clouds) — a DISTINCT translucent layer
+      // from the radar, with its own time scrubber. The GIBS fallback tiles
+      // exist only up to z6 (RainViewer satellite also tops out ~z7).
       src['satellite'] = <String, dynamic>{
         'type': 'raster',
         'tiles': <String>[],
         'tileSize': 256,
-        'maxzoom': 7,
-        'attribution': '© RainViewer',
+        'maxzoom': 6,
+        'attribution': '© NASA GIBS / RainViewer',
       };
       layers.add(<String, dynamic>{
         'id': 'satellite',

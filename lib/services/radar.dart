@@ -95,6 +95,29 @@ String radarTileUrl(RadarData d, RadarFrame f) =>
 String satelliteTileUrl(RadarData d, RadarFrame f) =>
     '${d.host}${f.path}/256/{z}/{x}/{y}/1/1_1.png';
 
+/// NASA GIBS current cloud-imagery tile URL template (Himawari-9 AHI Band 13
+/// "clean infrared" over Asia-Pacific — covers Việt Nam). Used as a FALLBACK
+/// when RainViewer's satellite feed is empty (which it often is), so the
+/// weather-satellite layer always has clouds to show. `{z}/{y}/{x}` are
+/// filled by the map renderer. The time is ~40 min in the past, rounded to a
+/// 10-min mark — GIBS lags the latest frames, so a too-recent time returns no
+/// tiles. Tiles exist only up to z6 (GoogleMapsCompatible_Level6).
+String nasaCloudTileUrl({DateTime? now}) {
+  final t = now ?? DateTime.now().toUtc();
+  final past = t.subtract(const Duration(minutes: 40));
+  final rounded = DateTime.utc(
+    past.year,
+    past.month,
+    past.day,
+    past.hour,
+    (past.minute ~/ 10) * 10,
+  );
+  final time = '${rounded.toIso8601String().split('.').first}Z';
+  return 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/'
+      'Himawari_AHI_Band13_Clean_Infrared/default/$time/'
+      'GoogleMapsCompatible_Level6/{z}/{y}/{x}.png';
+}
+
 /// Short label for a frame relative to now: "Hiện tại", "-20p", "+10p"…
 String radarFrameLabel(RadarFrame f, {DateTime? now}) {
   final t = (now ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000;
