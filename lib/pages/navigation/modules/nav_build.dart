@@ -463,6 +463,17 @@ extension _NavBuild on _NavigationPageState {
                               ],
                             ),
                           ),
+                        // Weather-layer time scrubbers in NAV mode: sit in
+                        // normal flow below the road chip so they can NEVER
+                        // overlap the ETA bar or the right-side controls.
+                        if (_navigating)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 6, 10, 0),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: _weatherBars(),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -620,10 +631,6 @@ extension _NavBuild on _NavigationPageState {
                       top: _overlayTop + 116,
                       child: _weatherBars(),
                     ),
-                  // Nav mode: the same scrubbers sit above the bottom ETA bar
-                  // so the driver can scrub the rain while driving.
-                  if (_navigating)
-                    Positioned(left: 12, bottom: 96, child: _weatherBars()),
                   // Raster-only controls (zoom/locate target the raster map
                   // controller) — hide during vector navigation mode.
                   // Positioned BELOW the floated BLE + voice buttons (which

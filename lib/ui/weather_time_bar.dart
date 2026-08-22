@@ -57,36 +57,38 @@ class WeatherTimeBar extends StatelessWidget {
       borderRadius: BorderRadius.circular(14),
       color: Colors.white,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        // Compact so the floating bar never reaches the right-side map
+        // controls on small screens (the old full-width bar overlapped them).
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 20, color: color),
-            const SizedBox(width: 6),
+            Icon(icon, size: 18, color: color),
+            const SizedBox(width: 4),
             Text(
               title,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
             if (loading)
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 4),
                 child: SizedBox(
-                  width: 14,
-                  height: 14,
+                  width: 12,
+                  height: 12,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
               ),
             SizedBox(
-              width: 150,
+              width: 104,
               child: SliderTheme(
                 data: SliderThemeData(
                   trackHeight: 3,
                   thumbShape: const RoundSliderThumbShape(
-                    enabledThumbRadius: 7,
+                    enabledThumbRadius: 6,
                   ),
                   overlayShape: const RoundSliderOverlayShape(
-                    overlayRadius: 14,
+                    overlayRadius: 12,
                   ),
                   activeTrackColor: color,
                   inactiveTrackColor: color.withValues(alpha: 0.2),
@@ -102,12 +104,12 @@ class WeatherTimeBar extends StatelessWidget {
               ),
             ),
             SizedBox(
-              width: 58,
+              width: 44,
               child: Text(
                 radarFrameLabel(frames[i]),
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                  fontSize: 12,
+                  fontSize: 11,
                   fontWeight: FontWeight.w700,
                   color: Color(0xFF1A73E8),
                 ),
@@ -117,10 +119,12 @@ class WeatherTimeBar extends StatelessWidget {
               IconButton(
                 icon: const Icon(
                   Icons.refresh,
-                  size: 18,
+                  size: 16,
                   color: Color(0xFF1A73E8),
                 ),
                 visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                 onPressed: onRefresh,
                 tooltip: 'Cập nhật',
               ),
