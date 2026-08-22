@@ -271,10 +271,20 @@ class NavTopBar extends StatelessWidget {
                           ),
                         ),
                         const Spacer(),
-                        Icon(
-                          Icons.keyboard_arrow_up,
-                          size: 16,
-                          color: Colors.grey[500],
+                        // Close button — collapse the step list. The banner
+                        // (whose tap toggles it) can be out of reach once the
+                        // list is scrolled, so the panel needs its own close.
+                        InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: onToggle,
+                          child: Padding(
+                            padding: const EdgeInsets.all(4),
+                            child: Icon(
+                              Icons.close,
+                              size: 18,
+                              color: Colors.grey[600],
+                            ),
+                          ),
                         ),
                       ],
                     ),
