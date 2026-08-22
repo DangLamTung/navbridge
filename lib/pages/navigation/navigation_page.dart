@@ -34,6 +34,7 @@ import 'package:navbridge/core/map_protocol.dart';
 import 'package:navbridge/pages/settings_screen.dart';
 import 'package:navbridge/services/offline_poi.dart';
 import 'package:navbridge/services/offline_road_signs.dart';
+import 'package:navbridge/services/offline_speed_limits.dart';
 import 'package:navbridge/services/offline_router.dart';
 import 'package:navbridge/services/offline_tiles.dart';
 import 'package:navbridge/services/poi_search.dart';

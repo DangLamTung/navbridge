@@ -304,6 +304,10 @@ extension _NavGps on _NavigationPageState {
           if (r.maxspeed == null && !_offline && !forceOffline) {
             unawaited(_correctSpeedFromOsm(pos));
           }
+          // Offline, nationwide, instant: the bundled DATMAP layer carries the
+          // REAL posted limit on 93k road segments — overwrite the statutory
+          // estimate whenever a segment is right under the car.
+          unawaited(_correctSpeedFromDatmap(pos));
           return;
         }
       } catch (_) {
@@ -338,6 +342,30 @@ extension _NavGps on _NavigationPageState {
     } finally {
       if (mounted) setNavState(() => _roadLoading = false);
     }
+  }
+
+  /// Real posted speed-limit correction from the bundled DATMAP layer
+  /// (offline, nationwide, instant — no network). The on-device graph can only
+  /// estimate the statutory class default; DATMAP carries the actual posted
+  /// limit on 93k road segments, so when one is within a few metres of the car
+  /// its value wins. Best-effort: on no match the graph/statutory value stands.
+  Future<void> _correctSpeedFromDatmap(LatLng pos) async {
+    final lim = await speedLimitAt(pos);
+    if (lim == null || !mounted) return;
+    final cur = _roadInfo;
+    if (cur == null || lim == cur.speedLimit) return;
+    debugPrint(
+      'ROAD: datmap limit=$lim (was ${cur.speedLimit}) ${cur.highway}',
+    );
+    setNavState(() {
+      _roadInfo = RoadInfo(
+        name: cur.name,
+        highway: cur.highway,
+        maxspeed: '$lim',
+        label: cur.label,
+        speedLimit: lim,
+      );
+    });
   }
 
   /// Road info straight from the on-device graph (nearest edge), with the
