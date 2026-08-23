@@ -15,6 +15,8 @@ import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
+import 'offline_geo.dart';
+
 /// The kind of road sign — drives the map icon and the spoken warning.
 /// Uses Việt Nam standard signage (QCVN 41:2019/BGTVT) codes where relevant
 /// (P.123 cấm rẽ trái, P.124 cấm rẽ phải, P.125 cấm quay đầu, P.127 cấm vượt,
@@ -173,7 +175,7 @@ List<(int, double)> _signsAheadOnRoute(
     final s = signs[i];
     // Quick reject: straight-line farther than max ahead → can't be ahead.
     if (s.distanceM(current) > maxAheadMeters + 500) continue;
-    final m = _routeMetersAhead(current, s.pos, geometry);
+    final m = routeMetersAhead(current, s.pos, geometry);
     if (m != null && m >= 0 && m <= maxAheadMeters) {
       out.add((i, m));
     }
@@ -228,67 +230,13 @@ List<int> _signsNearRoute((List<LatLng>, List<RoadSign>, double) args) {
     if (s.lat < loLat || s.lat > hiLat || s.lng < loLng || s.lng > hiLng) {
       continue;
     }
-    if (!_withinCoarseCorridor(geometry, s.pos, corridorMeters)) continue;
-    if (_nearestAlong(geometry, s.pos) != null) {
+    if (!withinCoarseCorridor(geometry, s.pos, corridorMeters)) continue;
+    if (nearestAlong(geometry, s.pos) != null) {
       out.add(i);
     }
   }
   return out;
 }
 
-const int _kCoarseTarget = 256;
-bool _withinCoarseCorridor(List<LatLng> geo, LatLng p, double corridorMeters) {
-  if (geo.isEmpty) return false;
-  final step = math.max(1, (geo.length / _kCoarseTarget).ceil());
-  var best = double.infinity;
-  for (var i = 0; i < geo.length; i += step) {
-    final d = const Distance().as(LengthUnit.Meter, geo[i], p);
-    if (d < best) best = d;
-    if (best <= corridorMeters * 3) return true;
-  }
-  return best <= corridorMeters * 3;
-}
-
-/// Metres from [from] (projected onto [geo]) to [target] (projected onto
-/// [geo]), along the polyline. Null if either point is beyond the ends.
-double? _routeMetersAhead(LatLng from, LatLng target, List<LatLng> geo) {
-  final f = _nearestAlong(geo, from);
-  final t = _nearestAlong(geo, target);
-  if (f == null || t == null) return null;
-  return t - f;
-}
-
-/// Cumulative distance from the polyline start to the nearest point on it to
-/// [p]. Null if [p] is farther than 200m from the polyline.
-double? _nearestAlong(List<LatLng> geo, LatLng p) {
-  const Distance d = Distance();
-  double bestDist = double.infinity;
-  double bestCum = 0;
-  double cum = 0;
-  for (var i = 0; i < geo.length - 1; i++) {
-    final a = geo[i];
-    final b = geo[i + 1];
-    final seg = d.as(LengthUnit.Meter, a, b);
-    final proj = _projectOnSegment(a, b, p);
-    final off = d.as(LengthUnit.Meter, proj, p);
-    if (off < bestDist) {
-      bestDist = off;
-      bestCum = cum + d.as(LengthUnit.Meter, a, proj);
-    }
-    cum += seg;
-  }
-  if (bestDist > 200) return null;
-  return bestCum;
-}
-
-LatLng _projectOnSegment(LatLng a, LatLng b, LatLng p) {
-  final ax = a.longitude, ay = a.latitude;
-  final bx = b.longitude, by = b.latitude;
-  final px = p.longitude, py = p.latitude;
-  final dx = bx - ax, dy = by - ay;
-  final len2 = dx * dx + dy * dy;
-  if (len2 == 0) return a;
-  var t = ((px - ax) * dx + (py - ay) * dy) / len2;
-  t = t.clamp(0.0, 1.0);
-  return LatLng(ay + t * dy, ax + t * dx);
-}
+// Polyline helpers (`withinCoarseCorridor`, `routeMetersAhead`,
+// `nearestAlong`, `projectOnSegment`) live in `offline_geo.dart`.

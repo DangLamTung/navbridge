@@ -14,6 +14,8 @@ import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
+import 'offline_geo.dart';
+
 /// One offline camera / traffic-sign point.
 class OfflineCamera {
   final String name;
@@ -89,7 +91,6 @@ Future<List<OfflineCamera>> loadOfflineCameras() {
 
 Future<List<OfflineCamera>> _doLoad() async {
   if (_loaded && _cameras != null) return _cameras!;
-  _loaded = true;
   try {
     final raw = await rootBundle.loadString(
       'assets/offline_map/vietnam_cameras.json',
@@ -101,6 +102,7 @@ Future<List<OfflineCamera>> _doLoad() async {
               .cast<Map<String, dynamic>>())
         OfflineCamera.fromJson(it),
     ];
+    _loaded = true;
   } catch (_) {
     _cameras = const [];
   }
@@ -146,7 +148,7 @@ List<(int, double)> _camerasAheadOnRoute(
     final c = cams[i];
     // Quick reject: straight-line farther than max ahead → can't be "ahead".
     if (c.distanceM(current) > maxAheadMeters + 500) continue;
-    final m = _routeMetersAhead(current, c.pos, geometry);
+    final m = routeMetersAhead(current, c.pos, geometry);
     if (m != null && m >= 0 && m <= maxAheadMeters) {
       out.add((i, m));
     }
@@ -218,89 +220,16 @@ List<int> _camerasNearRoute((List<LatLng>, List<OfflineCamera>, double) args) {
       continue; // outside the route's padded bounding box — cannot be near it
     }
     // Coarse pre-filter (see doc above).
-    if (!_withinCoarseCorridor(geometry, c.pos, corridorMeters)) continue;
-    // `_nearestAlong` returns null when the camera is >200 m from the
+    if (!withinCoarseCorridor(geometry, c.pos, corridorMeters)) continue;
+    // `nearestAlong` returns null when the camera is >200 m from the
     // polyline (i.e. on a parallel/adjacent street) — exactly the corridor
     // filter we want.
-    if (_nearestAlong(geometry, c.pos) != null) {
+    if (nearestAlong(geometry, c.pos) != null) {
       out.add(i);
     }
   }
   return out;
 }
 
-/// Cheap test: is [p] within roughly [corridorMeters] of the polyline,
-/// using a decimated polyline + a straight-line distance check? Returns
-/// false for cameras clearly far from the road, so the expensive exact
-/// projection in [_nearestAlong] only runs for the few candidates that might
-/// actually be on/near the route.
-///
-/// Decimation is ADAPTIVE: long polylines (e.g. a 191 km route with tens of
-/// thousands of vertices) are sampled down to ~[kCoarseTarget] vertices so
-/// the check stays O(samples) per camera, while short routes check every
-/// vertex (no decimation) so a camera mid-route is never missed.
-///
-/// Deliberately LOOSE (corridor × 3) so it never rejects a camera the exact
-/// scan would accept.
-const int kCoarseTarget = 256;
-bool _withinCoarseCorridor(List<LatLng> geo, LatLng p, double corridorMeters) {
-  if (geo.isEmpty) return false;
-  final step = math.max(1, (geo.length / kCoarseTarget).ceil());
-  var best = double.infinity;
-  for (var i = 0; i < geo.length; i += step) {
-    final d = const Distance().as(LengthUnit.Meter, geo[i], p);
-    if (d < best) best = d;
-    if (best <= corridorMeters * 3) return true; // close enough — early out
-  }
-  return best <= corridorMeters * 3;
-}
-
-/// Metres from [from] (projected onto [geo]) to [target] (projected onto
-/// [geo]), along the polyline. Returns null if either point is beyond the
-/// polyline's ends.
-double? _routeMetersAhead(LatLng from, LatLng target, List<LatLng> geo) {
-  // Find along-route distance (from start) of the nearest points.
-  final f = _nearestAlong(geo, from);
-  final t = _nearestAlong(geo, target);
-  if (f == null || t == null) return null;
-  return t - f;
-}
-
-/// Cumulative distance from the polyline start to the nearest point on it to
-/// [p]. Returns null if [p] is farther than 200m from the polyline (i.e. not
-/// on the route — e.g. a camera on a parallel street).
-double? _nearestAlong(List<LatLng> geo, LatLng p) {
-  const Distance d = Distance();
-  double bestDist = double.infinity;
-  double bestCum = 0;
-  double cum = 0;
-  for (var i = 0; i < geo.length - 1; i++) {
-    final a = geo[i];
-    final b = geo[i + 1];
-    final seg = d.as(LengthUnit.Meter, a, b);
-    // Project p onto segment a-b (linear approx at city scale).
-    final proj = _projectOnSegment(a, b, p);
-    final off = d.as(LengthUnit.Meter, proj, p);
-    if (off < bestDist) {
-      bestDist = off;
-      bestCum = cum + d.as(LengthUnit.Meter, a, proj);
-    }
-    cum += seg;
-  }
-  // Too far from the route → not on it (parallel street / unrelated).
-  if (bestDist > 200) return null;
-  return bestCum;
-}
-
-LatLng _projectOnSegment(LatLng a, LatLng b, LatLng p) {
-  // Planar projection (fine at city scale).
-  final ax = a.longitude, ay = a.latitude;
-  final bx = b.longitude, by = b.latitude;
-  final px = p.longitude, py = p.latitude;
-  final dx = bx - ax, dy = by - ay;
-  final len2 = dx * dx + dy * dy;
-  if (len2 == 0) return a;
-  var t = ((px - ax) * dx + (py - ay) * dy) / len2;
-  t = t.clamp(0.0, 1.0);
-  return LatLng(ay + t * dy, ax + t * dx);
-}
+// Polyline helpers (`withinCoarseCorridor`, `routeMetersAhead`,
+// `nearestAlong`, `projectOnSegment`) live in `offline_geo.dart`.
