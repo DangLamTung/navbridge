@@ -109,12 +109,7 @@ extension _NavWeather on _NavigationPageState {
       return;
     }
     // Throttle the projection work to ~1 Hz.
-    final now = DateTime.now();
-    if (_lastCameraCheck != null &&
-        now.difference(_lastCameraCheck!) < const Duration(seconds: 1)) {
-      return;
-    }
-    _lastCameraCheck = now;
+    if (!_cameraGate.tryOpen()) return;
     if (geometry.length < 2) {
       debugPrint('CAMERA: SKIPPED (geometry ${geometry.length})');
       return;
@@ -151,8 +146,7 @@ extension _NavWeather on _NavigationPageState {
       final m = next.routeMeters.round();
       final near = next.routeMeters <= 100;
       final zsig = '$sig/${near ? 'near' : 'far'}';
-      if (zsig != _lastCameraSig) {
-        _lastCameraSig = zsig;
+      if (!_cameraDedupe.seen(zsig)) {
         final phrase = switch (next.camera.focus) {
           'speed' =>
             near

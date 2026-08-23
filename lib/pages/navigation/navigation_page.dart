@@ -81,6 +81,7 @@ import 'package:navbridge/ui/widgets.dart';
 
 part 'modules/nav_bars.dart';
 part 'modules/nav_build.dart';
+part 'modules/nav_gates.dart';
 part 'modules/nav_gps.dart';
 part 'modules/nav_map.dart';
 part 'modules/nav_navigation.dart';
@@ -186,6 +187,8 @@ class _NavigationPageState extends State<NavigationPage>
   RouteProfile _routeProfile = RouteProfile.car; // road type for routing
   NavProgress? _progress;
   StreamSubscription<Position>? _gpsSub;
+  StreamSubscription<ClockLink>? _clockSub;
+  StreamSubscription<ClockLink>? _mapClockSub;
   bool _navigating = false;
 
   /// True while the OS Picture-in-Picture window is on screen (nav only). When
@@ -244,8 +247,8 @@ class _NavigationPageState extends State<NavigationPage>
   /// Nearest camera AHEAD on the route (from `offline_cameras.dart`), used
   /// for the PiP camera chip + the alert trigger distance.
   CameraAhead? _nextCamera;
-  String? _lastCameraSig; // dedupe: only alert once per camera
-  DateTime? _lastCameraCheck;
+  final _cameraGate = _PerSecondGate(); // 1 Hz per-fix check throttle
+  final _cameraDedupe = _ZoneDedupe(); // speak each camera far + near only
 
   /// All bundled cameras, shown as a map layer when [cameraAlerts] is on.
   List<OfflineCamera> _cameras = [];
@@ -480,8 +483,8 @@ class _NavigationPageState extends State<NavigationPage>
 
   // --- road signs (stop / give-way / traffic lights) -------------------
   List<RoadSign> _routeSigns = []; // map layer: signs near the route
-  String? _lastSignSig; // dedupe: don't repeat the same sign
-  DateTime? _lastSignCheck; // 1 Hz throttle
+  final _signGate = _PerSecondGate(); // 1 Hz per-fix check throttle
+  final _signDedupe = _ZoneDedupe(); // speak each sign far + near only
 
   /// Latest NETWORK-matching verdict (see [_networkMatch]): true = the car's
   /// nearest road IS part of the route. Trusted by the raw off-route check in
@@ -522,7 +525,7 @@ class _NavigationPageState extends State<NavigationPage>
     // swap to the compact layout whenever the OS PiP window appears.
     PipService.instance.init();
     PipService.instance.isPipMode.addListener(_onPipChanged);
-    _clock.linkStream.listen((l) {
+    _clockSub = _clock.linkStream.listen((l) {
       if (!mounted) return;
       setState(() {
         _clockStatus = switch (l) {
@@ -532,7 +535,7 @@ class _NavigationPageState extends State<NavigationPage>
         };
       });
     });
-    _mapClock.linkStream.listen((l) {
+    _mapClockSub = _mapClock.linkStream.listen((l) {
       if (!mounted) return;
       setState(() {
         _mapStatus = switch (l) {
@@ -656,6 +659,8 @@ class _NavigationPageState extends State<NavigationPage>
     if (t != null && t.hasEnoughData) {
       unawaited(saveTrip(t).then((_) {}, onError: (Object _) {}));
     }
+    _clockSub?.cancel();
+    _mapClockSub?.cancel();
     _clock.dispose();
     _mapClock.dispose();
     _map.dispose();

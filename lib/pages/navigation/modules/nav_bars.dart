@@ -546,7 +546,7 @@ extension _NavBars on _NavigationPageState {
     setNavState(() => cameraAlerts = !cameraAlerts);
     if (!cameraAlerts) {
       _nextCamera = null; // hide the PiP camera chip when off
-      _lastCameraSig = null;
+      _cameraDedupe.reset();
     } else {
       unawaited(_ensureCameras()); // load the camera index (lazy, not at boot)
       unawaited(_refreshRouteCameras()); // route-nearby layer back on

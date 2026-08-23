@@ -10,12 +10,7 @@ extension _NavSigns on _NavigationPageState {
   /// Per-GPS-fix check (throttled ~1 s): find the next stop/give-way sign
   /// ahead on the route and speak it when within ~400 m.
   void _checkSignAhead(LatLng snapped, List<LatLng> geometry) {
-    final now = DateTime.now();
-    if (_lastSignCheck != null &&
-        now.difference(_lastSignCheck!) < const Duration(seconds: 1)) {
-      return;
-    }
-    _lastSignCheck = now;
+    if (!_signGate.tryOpen()) return;
     unawaited(_signAheadAsync(snapped, geometry));
   }
 
@@ -69,8 +64,7 @@ extension _NavSigns on _NavigationPageState {
     final sig =
         '${next.kind.key}/${next.lat.toStringAsFixed(5)},'
         '${next.lng.toStringAsFixed(5)}/$zone';
-    if (sig == _lastSignSig) return;
-    _lastSignSig = sig;
+    if (_signDedupe.seen(sig)) return;
     final phrase = switch (next.kind) {
       RoadSignKind.stop =>
         near ? 'Biển STOP sắp tới' : 'Biển STOP phía trước ${m.round()} mét',

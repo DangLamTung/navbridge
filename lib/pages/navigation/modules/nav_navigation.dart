@@ -473,8 +473,8 @@ extension _NavNavigation on _NavigationPageState {
     _signSpeedLimit = null; // speed-limit signs reset each nav session
     _gpsWeakSpoken = false;
     _lastGpsWeakAt = null;
-    _lastCameraSig = null;
-    _lastCameraCheck = null; // camera checks run fresh during the sim
+    _cameraDedupe.reset();
+    _cameraGate.reset(); // camera checks run fresh during the sim
     _offRouteSince = null;
     _gpsWindow.clear();
     _startWeather();
@@ -625,7 +625,7 @@ extension _NavNavigation on _NavigationPageState {
       _selectedPoi = null;
       _searchResults = [];
       _routeSigns = [];
-      _lastSignSig = null;
+      _signDedupe.reset();
     });
     unawaited(_refreshRouteCameras()); // route cleared → layer empties
     _offRouteSince = null;
