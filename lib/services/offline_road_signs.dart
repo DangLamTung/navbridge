@@ -9,13 +9,12 @@
 library;
 
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
-import 'offline_geo.dart';
+import 'offline_scan.dart';
 
 /// The kind of road sign — drives the map icon and the spoken warning.
 /// Uses Việt Nam standard signage (QCVN 41:2019/BGTVT) codes where relevant
@@ -70,7 +69,7 @@ enum RoadSignKind {
 }
 
 /// One road-sign point.
-class RoadSign {
+class RoadSign implements OfflinePoint {
   final String name;
   final double lat;
   final double lng;
@@ -87,6 +86,7 @@ class RoadSign {
     this.value,
   });
 
+  @override
   LatLng get pos => LatLng(lat, lng);
 
   /// Straight-line distance (m) from [p].
@@ -155,7 +155,7 @@ Future<List<SignAhead>> signsAheadOnRoute(
 }) async {
   final signs = await loadOfflineRoadSigns();
   if (signs.isEmpty || geometry.length < 2) return const [];
-  final res = await compute(_signsAheadOnRoute, (
+  final res = await compute(pointsAheadOnRoute<RoadSign>, (
     current,
     geometry,
     signs,
@@ -164,25 +164,8 @@ Future<List<SignAhead>> signsAheadOnRoute(
   return [for (final (i, m) in res) SignAhead(sign: signs[i], routeMeters: m)];
 }
 
-/// Top-level (isolate-safe) worker for [signsAheadOnRoute]: returns
-/// (sign index, along-route metres) pairs for signs ahead of [current].
-List<(int, double)> _signsAheadOnRoute(
-  (LatLng, List<LatLng>, List<RoadSign>, double) args,
-) {
-  final (current, geometry, signs, maxAheadMeters) = args;
-  final out = <(int, double)>[];
-  for (var i = 0; i < signs.length; i++) {
-    final s = signs[i];
-    // Quick reject: straight-line farther than max ahead → can't be ahead.
-    if (s.distanceM(current) > maxAheadMeters + 500) continue;
-    final m = routeMetersAhead(current, s.pos, geometry);
-    if (m != null && m >= 0 && m <= maxAheadMeters) {
-      out.add((i, m));
-    }
-  }
-  out.sort((a, b) => a.$2.compareTo(b.$2));
-  return out;
-}
+// The isolate workers (`pointsAheadOnRoute` / `pointsNearRoute`) live in
+// `offline_scan.dart`; see [signsAheadOnRoute] / [signsNearRoute].
 
 /// Signs within ~[corridorMeters] of the route polyline — the nav-map layer
 /// shows ONLY these (not all ~11k nationwide), so the driver sees the signs
@@ -193,7 +176,7 @@ Future<List<RoadSign>> signsNearRoute(
 }) async {
   final signs = await loadOfflineRoadSigns();
   if (signs.isEmpty || geometry.length < 2) return const [];
-  final idxs = await compute(_signsNearRoute, (
+  final idxs = await compute(pointsNearRoute<RoadSign>, (
     geometry,
     signs,
     corridorMeters,
@@ -201,42 +184,5 @@ Future<List<RoadSign>> signsNearRoute(
   return [for (final i in idxs) signs[i]];
 }
 
-/// Top-level (isolate-safe) worker: indices of [signs] within the corridor.
-/// Same bbox + coarse + exact-scan pipeline as the camera layer.
-List<int> _signsNearRoute((List<LatLng>, List<RoadSign>, double) args) {
-  final (geometry, signs, corridorMeters) = args;
-  var minLat = geometry.first.latitude;
-  var maxLat = geometry.first.latitude;
-  var minLng = geometry.first.longitude;
-  var maxLng = geometry.first.longitude;
-  for (final p in geometry) {
-    if (p.latitude < minLat) minLat = p.latitude;
-    if (p.latitude > maxLat) maxLat = p.latitude;
-    if (p.longitude < minLng) minLng = p.longitude;
-    if (p.longitude > maxLng) maxLng = p.longitude;
-  }
-  final latPad = corridorMeters / 111320.0;
-  final lngPad =
-      corridorMeters /
-      (111320.0 * math.cos(((minLat + maxLat) / 2.0) * math.pi / 180.0));
-  final loLat = minLat - latPad;
-  final hiLat = maxLat + latPad;
-  final loLng = minLng - lngPad;
-  final hiLng = maxLng + lngPad;
-
-  final out = <int>[];
-  for (var i = 0; i < signs.length; i++) {
-    final s = signs[i];
-    if (s.lat < loLat || s.lat > hiLat || s.lng < loLng || s.lng > hiLng) {
-      continue;
-    }
-    if (!withinCoarseCorridor(geometry, s.pos, corridorMeters)) continue;
-    if (nearestAlong(geometry, s.pos) != null) {
-      out.add(i);
-    }
-  }
-  return out;
-}
-
-// Polyline helpers (`withinCoarseCorridor`, `routeMetersAhead`,
-// `nearestAlong`, `projectOnSegment`) live in `offline_geo.dart`.
+// Route scanning (`pointsAheadOnRoute` / `pointsNearRoute`) lives in
+// `offline_scan.dart`; polyline helpers live in `offline_geo.dart`.

@@ -8,16 +8,15 @@
 library;
 
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
-import 'offline_geo.dart';
+import 'offline_scan.dart';
 
 /// One offline camera / traffic-sign point.
-class OfflineCamera {
+class OfflineCamera implements OfflinePoint {
   final String name;
   final double lat;
   final double lng;
@@ -49,6 +48,7 @@ class OfflineCamera {
     this.district,
   });
 
+  @override
   LatLng get pos => LatLng(lat, lng);
 
   /// Distance in metres from [p] to this camera.
@@ -125,7 +125,7 @@ Future<List<CameraAhead>> camerasAheadOnRoute(
 }) async {
   final cams = await loadOfflineCameras();
   if (cams.isEmpty || geometry.length < 2) return const [];
-  final res = await compute(_camerasAheadOnRoute, (
+  final res = await compute(pointsAheadOnRoute<OfflineCamera>, (
     current,
     geometry,
     cams,
@@ -136,26 +136,8 @@ Future<List<CameraAhead>> camerasAheadOnRoute(
   ];
 }
 
-/// Top-level (isolate-safe) worker for [camerasAheadOnRoute]: returns
-/// (camera index, along-route metres) pairs for cameras ahead of [current],
-/// ordered by distance.
-List<(int, double)> _camerasAheadOnRoute(
-  (LatLng, List<LatLng>, List<OfflineCamera>, double) args,
-) {
-  final (current, geometry, cams, maxAheadMeters) = args;
-  final out = <(int, double)>[];
-  for (var i = 0; i < cams.length; i++) {
-    final c = cams[i];
-    // Quick reject: straight-line farther than max ahead → can't be "ahead".
-    if (c.distanceM(current) > maxAheadMeters + 500) continue;
-    final m = routeMetersAhead(current, c.pos, geometry);
-    if (m != null && m >= 0 && m <= maxAheadMeters) {
-      out.add((i, m));
-    }
-  }
-  out.sort((a, b) => a.$2.compareTo(b.$2));
-  return out;
-}
+// The isolate workers (`pointsAheadOnRoute` / `pointsNearRoute`) live in
+// `offline_scan.dart`; see [camerasAheadOnRoute] / [camerasNearRoute].
 
 /// Cameras within ~[corridorMeters] of the route polyline — the map layer
 /// shows ONLY these (not all ~1,800 nationwide cameras), so the driver sees
@@ -172,7 +154,7 @@ Future<List<OfflineCamera>> camerasNearRoute(
 }) async {
   final cams = await loadOfflineCameras();
   if (cams.isEmpty || geometry.length < 2) return const [];
-  final idxs = await compute(_camerasNearRoute, (
+  final idxs = await compute(pointsNearRoute<OfflineCamera>, (
     geometry,
     cams,
     corridorMeters,
@@ -180,56 +162,5 @@ Future<List<OfflineCamera>> camerasNearRoute(
   return [for (final i in idxs) cams[i]];
 }
 
-/// Top-level (isolate-safe) worker: returns the indices of [cams] that lie
-/// within ~[corridorMeters] of the [geometry] polyline. Runs off the UI
-/// isolate so route length never freezes the app.
-///
-/// Two cheap pre-filters keep the O(polyline) exact scan tiny:
-///   1. Bounding box: a camera outside the route's padded box is skipped.
-///   2. Coarse corridor: straight-line distance to a DECIMATED polyline with
-///      a LOOSE threshold — rejects cameras inside the bbox but far from the
-///      road, so `_nearestAlong` (the expensive exact scan) only runs for
-///      the few survivors.
-List<int> _camerasNearRoute((List<LatLng>, List<OfflineCamera>, double) args) {
-  final (geometry, cams, corridorMeters) = args;
-  // Bounding box of the route + corridor padding.
-  var minLat = geometry.first.latitude;
-  var maxLat = geometry.first.latitude;
-  var minLng = geometry.first.longitude;
-  var maxLng = geometry.first.longitude;
-  for (final p in geometry) {
-    if (p.latitude < minLat) minLat = p.latitude;
-    if (p.latitude > maxLat) maxLat = p.latitude;
-    if (p.longitude < minLng) minLng = p.longitude;
-    if (p.longitude > maxLng) maxLng = p.longitude;
-  }
-  // Convert the corridor to degrees (lat ~111 km/°, lng shrinks with cos lat).
-  final latPad = corridorMeters / 111320.0;
-  final lngPad =
-      corridorMeters /
-      (111320.0 * math.cos(((minLat + maxLat) / 2.0) * math.pi / 180.0));
-  final loLat = minLat - latPad;
-  final hiLat = maxLat + latPad;
-  final loLng = minLng - lngPad;
-  final hiLng = maxLng + lngPad;
-
-  final out = <int>[];
-  for (var i = 0; i < cams.length; i++) {
-    final c = cams[i];
-    if (c.lat < loLat || c.lat > hiLat || c.lng < loLng || c.lng > hiLng) {
-      continue; // outside the route's padded bounding box — cannot be near it
-    }
-    // Coarse pre-filter (see doc above).
-    if (!withinCoarseCorridor(geometry, c.pos, corridorMeters)) continue;
-    // `nearestAlong` returns null when the camera is >200 m from the
-    // polyline (i.e. on a parallel/adjacent street) — exactly the corridor
-    // filter we want.
-    if (nearestAlong(geometry, c.pos) != null) {
-      out.add(i);
-    }
-  }
-  return out;
-}
-
-// Polyline helpers (`withinCoarseCorridor`, `routeMetersAhead`,
-// `nearestAlong`, `projectOnSegment`) live in `offline_geo.dart`.
+// Route scanning (`pointsAheadOnRoute` / `pointsNearRoute`) lives in
+// `offline_scan.dart`; polyline helpers live in `offline_geo.dart`.
