@@ -16,6 +16,7 @@ dependencies:
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
   # GPS position + permission
+  flutter_overlay_window: ^0.5.0
   geolocator: ^12.0.0
   # Android-specific GPS stream settings (intervalDuration — without it
   # geolocator_android defaults to a 5 s fix interval, which makes the

@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Network (OSM tiles, OSRM routing, Nominatim) -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Floating speed-limit/camera widget over other apps (Waze-Mod style) -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <!-- GPS for turn-by-turn -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
@@ -26,6 +29,7 @@
     <!-- Always-on wake-word in the background (Android 14+ requires the mic
          service type + this permission). Harmless on Android 13. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+    <!-- Floating speed-limit/camera widget foreground service (flutter_overlay_window) -->
     <!-- TTS engine (voice guidance → Bluetooth speaker) -->
     <queries>
         <intent>
@@ -80,6 +84,15 @@
             android:foregroundServiceType="dataSync|remoteMessaging|location|microphone"
             android:stopWithTask="false"
             android:exported="false"/>
+        <!-- Floating speed-limit/camera widget over other apps (flutter_overlay_window). -->
+        <service
+            android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Floating speed-limit / camera widget over other apps" />
+        </service>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

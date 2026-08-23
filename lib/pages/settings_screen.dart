@@ -16,6 +16,7 @@ import 'package:navbridge/core/settings.dart';
 import 'package:navbridge/pages/offline_screen.dart';
 import 'package:navbridge/pages/trips_screen.dart';
 import 'package:navbridge/services/offline_tiles.dart';
+import 'package:navbridge/services/overlay_widget.dart';
 import 'package:navbridge/services/vietmap_config.dart'
     show VietmapConfig, dataSource;
 import 'package:navbridge/ui/widgets.dart';
@@ -35,6 +36,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _routingEngine = 'auto';
   bool _smoothCamera = true;
   bool _cameraAlerts = true;
+  bool _overlayOn = false; // floating speed/limit widget over other apps
   String _pipAspect = '34';
   bool _ridingMode = false;
   final _wakeWordCtrl = TextEditingController();
@@ -198,6 +200,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       cameraAlerts = v;
     });
     await saveSettings(_currentSettings());
+  }
+
+  /// Floating speed-limit / camera widget over other apps (Waze-Mod style):
+  /// requests the "display over other apps" permission and shows/hides the
+  /// self-contained overlay widget.
+  Future<void> _setOverlay(bool v) async {
+    if (v) {
+      await startOverlay();
+      if (!mounted) return;
+      final granted = await overlayPermissionGranted();
+      if (mounted) setState(() => _overlayOn = granted);
+    } else {
+      await stopOverlay();
+      if (mounted) setState(() => _overlayOn = false);
+    }
   }
 
   void _setPipAspect(String v) {
@@ -671,6 +688,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ? 'Báo bằng giọng nói khi tới gần camera và hiển thị '
                               'chấm camera trên bản đồ.'
                         : 'Tắt cảnh báo + ẩn camera trên bản đồ.',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _overlayOn,
+                  onChanged: _setOverlay,
+                  activeThumbColor: kAppBlue,
+                  secondary: const Icon(Icons.speed, color: kAppBlue, size: 22),
+                  title: const Text(
+                    'Widget nổi tốc độ / giới hạn',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    _overlayOn
+                        ? 'Cửa sổ nhỏ nổi trên mọi ứng dụng (như Waze Mod): '
+                              'tốc độ hiện tại + giới hạn thật + camera gần nhất — '
+                              'dùng được khi chạy Google Maps/Waze khác.'
+                        : 'Hiện widget tốc độ/giới hạn nổi trên các ứng dụng khác '
+                              '(cần quyền "hiển thị trên ứng dụng khác").',
                     style: TextStyle(fontSize: 11, color: Colors.grey[700]),
                   ),
                 ),
