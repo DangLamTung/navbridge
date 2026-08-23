@@ -14,6 +14,7 @@ import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
+import 'offline_loader.dart';
 import 'offline_scan.dart';
 
 /// The kind of road sign — drives the map icon and the spoken warning.
@@ -111,36 +112,23 @@ class SignAhead {
   const SignAhead({required this.sign, required this.routeMeters});
 }
 
-List<RoadSign>? _signs;
-bool _loaded = false;
-Future<List<RoadSign>>? _loading;
+final OfflineListLoader<RoadSign> _signs = OfflineListLoader<RoadSign>(
+  _fetchSigns,
+);
 
 /// Load the bundled sign index once (idempotent, cached).
-Future<List<RoadSign>> loadOfflineRoadSigns() {
-  if (_signs != null) return Future.value(_signs!);
-  if (_loading != null) return _loading!;
-  final fut = _doLoad();
-  _loading = fut;
-  return fut;
-}
+Future<List<RoadSign>> loadOfflineRoadSigns() => _signs.load();
 
-Future<List<RoadSign>> _doLoad() async {
-  if (_loaded && _signs != null) return _signs!;
-  _loaded = true;
-  try {
-    final raw = await rootBundle.loadString(
-      'assets/offline_map/vietnam_signs.json',
-    );
-    final data = jsonDecode(raw) as Map<String, dynamic>;
-    _signs = [
-      for (final it
-          in (data['signs'] as List? ?? const []).cast<Map<String, dynamic>>())
-        RoadSign.fromJson(it),
-    ];
-  } catch (_) {
-    _signs = const [];
-  }
-  return _signs!;
+Future<List<RoadSign>> _fetchSigns() async {
+  final raw = await rootBundle.loadString(
+    'assets/offline_map/vietnam_signs.json',
+  );
+  final data = jsonDecode(raw) as Map<String, dynamic>;
+  return [
+    for (final it
+        in (data['signs'] as List? ?? const []).cast<Map<String, dynamic>>())
+      RoadSign.fromJson(it),
+  ];
 }
 
 /// Find the first sign AHEAD of [current] along [geometry], ordered by

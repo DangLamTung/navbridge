@@ -13,6 +13,7 @@ import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
+import 'offline_loader.dart';
 import 'offline_scan.dart';
 
 /// One offline camera / traffic-sign point.
@@ -76,37 +77,22 @@ class CameraAhead {
   const CameraAhead({required this.camera, required this.routeMeters});
 }
 
-List<OfflineCamera>? _cameras;
-bool _loaded = false;
-Future<List<OfflineCamera>>? _loading;
+final OfflineListLoader<OfflineCamera> _cameras =
+    OfflineListLoader<OfflineCamera>(_fetchCameras);
 
 /// Load the bundled camera index once (idempotent, cached).
-Future<List<OfflineCamera>> loadOfflineCameras() {
-  if (_cameras != null) return Future.value(_cameras!);
-  if (_loading != null) return _loading!;
-  final fut = _doLoad();
-  _loading = fut;
-  return fut;
-}
+Future<List<OfflineCamera>> loadOfflineCameras() => _cameras.load();
 
-Future<List<OfflineCamera>> _doLoad() async {
-  if (_loaded && _cameras != null) return _cameras!;
-  try {
-    final raw = await rootBundle.loadString(
-      'assets/offline_map/vietnam_cameras.json',
-    );
-    final data = jsonDecode(raw) as Map<String, dynamic>;
-    _cameras = [
-      for (final it
-          in (data['cameras'] as List? ?? const [])
-              .cast<Map<String, dynamic>>())
-        OfflineCamera.fromJson(it),
-    ];
-    _loaded = true;
-  } catch (_) {
-    _cameras = const [];
-  }
-  return _cameras!;
+Future<List<OfflineCamera>> _fetchCameras() async {
+  final raw = await rootBundle.loadString(
+    'assets/offline_map/vietnam_cameras.json',
+  );
+  final data = jsonDecode(raw) as Map<String, dynamic>;
+  return [
+    for (final it
+        in (data['cameras'] as List? ?? const []).cast<Map<String, dynamic>>())
+      OfflineCamera.fromJson(it),
+  ];
 }
 
 /// Find cameras AHEAD of [current] along [geometry], ordered by distance along
