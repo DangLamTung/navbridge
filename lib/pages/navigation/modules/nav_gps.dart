@@ -31,9 +31,10 @@ extension _NavGps on _NavigationPageState {
     if (p == LocationPermission.deniedForever) {
       debugPrint('GPS: permission denied forever — opening app settings');
       await Geolocator.openAppSettings();
-      p = await Geolocator.checkPermission();
-      return p == LocationPermission.whileInUse ||
-          p == LocationPermission.always;
+      // Assume they might grant it; the lifecycle observer will restart GPS
+      // when they return to the app if they do. Returning false here would
+      // instantly flash the error snackbar while they're leaving the app.
+      return true;
     }
     if (p == LocationPermission.denied) {
       p = await Geolocator.requestPermission();
@@ -350,6 +351,7 @@ extension _NavGps on _NavigationPageState {
   /// limit on 93k road segments, so when one is within a few metres of the car
   /// its value wins. Best-effort: on no match the graph/statutory value stands.
   Future<void> _correctSpeedFromDatmap(LatLng pos) async {
+    if (_roadLoading) return; // don't stack/race with the main road fetch
     final lim = await speedLimitAt(pos);
     if (lim == null || !mounted) return;
     final cur = _roadInfo;

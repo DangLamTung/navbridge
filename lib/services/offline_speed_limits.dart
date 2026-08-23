@@ -76,12 +76,12 @@ Future<void> _doLoad() async {
     );
     _index = await compute(_buildIndex, raw);
   } catch (_) {
-    // Keep null on any failure — queries just return null (statutory default).
+    // Keep null on any failure — queries return null (statutory default).
     _index = null;
   }
-  return _index == null
-      ? Future.error('speed-limit load failed')
-      : Future.value();
+  // Never surface an error here: [speedLimitAt] (and the fire-and-forget
+  // nav correction) must degrade to the statutory default on a bad load,
+  // not throw an unhandled async exception.
 }
 
 /// Top-level (isolate-safe) worker: parse the GeoJSON string into the
