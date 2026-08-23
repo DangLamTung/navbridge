@@ -38,13 +38,20 @@ routing, Overpass, Open-Meteo, RainViewer — no API keys required).
 
 ### Safety & awareness
 - **Speed / red-light camera alerts** (phạt nguội DB) — bundled offline
-  `vietnam_cameras.json`, refreshed by `tool/fetch_overpass_cameras.py` /
-  `tool/fetch_police_cameras.py`, including Waze camera & road-sign data
+  `vietnam_cameras.json` with **8,600+ enforcement points nationwide**
+  (refreshed by `tool/fetch_overpass_cameras.py` /
+  `tool/fetch_police_cameras.py`, plus aggregated online traffic-camera data)
 - **Road signs** (STOP, nhường đường, traffic lights, cấm vượt / cấm rẽ /
   cấm quay đầu, speed limits…) from the bundled offline Việt Nam index
-  `vietnam_signs.json` (built by `tools/signs/build_signs.py`) — spoken
-  warnings ahead on the route + colored dots on the map
+  `vietnam_signs.json` — **48,600+ signs** (built by
+  `tools/signs/build_signs.py` plus aggregated online traffic-sign data) —
+  spoken warnings ahead on the route + colored dots on the map
   (`lib/services/offline_road_signs.dart`, `lib/ui/sign_icons.dart`)
+- **Real posted speed limits, offline** — a bundled nationwide
+  `vietnam_speed_limits.geojson` (93,000+ road segments with actual posted
+  limits, aggregated from online navigation data) corrects the statutory
+  class default during navigation, with **no network** needed
+  (`lib/services/offline_speed_limits.dart`)
 - **Rain radar overlay** (RainViewer, free/no key) with a past/nowcast frame
   selector so you can watch the storm move
 
@@ -64,8 +71,9 @@ routing, Overpass, Open-Meteo, RainViewer — no API keys required).
   on demand) — navigation works with no network at all
 - Offline region downloader (slippy tiles with progress/cancel), offline POI
   + geocoding fallback, offline camera/sign databases
-- **Bundled offline datasets for the whole of Việt Nam** — 7,500+ cameras,
-  47,000+ road signs, 20,000+ POIs (see *Data & attribution* below)
+- **Bundled offline datasets for the whole of Việt Nam** — 8,600+ cameras,
+  48,600+ road signs, 93,000+ speed-limit segments, 20,000+ POIs (see *Data &
+  attribution* below)
 - **Simulated drive mode** for testing without GPS, driven by a seeded GPS
   noise simulator (`lib/core/gps_noise_simulator.dart`) and trip replay
   (`--dart-define=TRIPREPLAY`)
@@ -146,11 +154,14 @@ keys required):
 
 | Dataset | Entries | Sources | Refresh |
 |---|---|---|---|
-| Cameras<br>`vietnam_cameras.json` | 7,541<br>(speed / violations / red-light) | police "phạt nguội" lists, OSM Overpass, Waze | `tool/fetch_police_cameras.py` · `tool/fetch_overpass_cameras.py` |
-| Road signs<br>`vietnam_signs.json` | 47,623 | OSM Overpass, Waze | `tools/signs/build_signs.py` · `tools/signs/build_waze_signs.py` |
+| Cameras<br>`vietnam_cameras.json` | 8,618<br>(speed / violations / red-light) | police "phạt nguội" lists, OSM Overpass, Waze, online traffic-camera data | `tool/fetch_police_cameras.py` · `tool/fetch_overpass_cameras.py` |
+| Road signs<br>`vietnam_signs.json` | 48,653 | OSM Overpass, Waze, online traffic-sign data | `tools/signs/build_signs.py` · `tools/signs/build_waze_signs.py` |
+| Speed limits<br>`vietnam_speed_limits.geojson` | 93,463 road segments<br>(real posted limits) | online navigation data | — |
 | POIs<br>`vietnam_pois.json` | 20,607 across 25 categories | OSM Overpass | — |
 
 Map data, routing and POIs come from OpenStreetMap (© OpenStreetMap
 contributors, ODbL). Camera lists are derived from public provincial police
-"phạt nguội" data and OSM/Waze reports. All data is provided **as-is for
-awareness only** — always obey posted speed limits and traffic law.
+"phạt nguội" data, OSM/Waze reports and aggregated online traffic-camera
+data. Speed-limit and traffic-sign data are aggregated from online navigation
+sources. All data is provided **as-is for awareness only** — always obey
+posted speed limits and traffic law.
