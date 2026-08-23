@@ -45,26 +45,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _deepSeekCtrl = TextEditingController();
   final _geminiCtrl = TextEditingController();
   String _aiSaveStatus = '';
+  StreamSubscription<bool>? _connSub;
 
   @override
   void initState() {
     super.initState();
     // The globals reflect the persisted choices AND any session overrides
     // (the user may have gone online "if needed" from the map) — show that.
-    setState(() {
-      _simpleMode = simpleMode;
-      _vehicleType = vehicleType;
-      _geocodingProvider = geocodingProvider;
-      _routingEngine = routingEngine;
-      _smoothCamera = smoothCamera;
-      _cameraAlerts = cameraAlerts;
-      _pipAspect = pipAspect;
-      _ridingMode = ridingMode;
-      _wakeWordCtrl.text = wakeWord;
+    _simpleMode = simpleMode;
+    _vehicleType = vehicleType;
+    _geocodingProvider = geocodingProvider;
+    _routingEngine = routingEngine;
+    _smoothCamera = smoothCamera;
+    _cameraAlerts = cameraAlerts;
+    _pipAspect = pipAspect;
+    _ridingMode = ridingMode;
+    _wakeWordCtrl.text = wakeWord;
+    _connSub = onlineStream().listen((o) {
+      if (mounted) setState(() => _online = o);
     });
-    onlineStream().listen((o) => setState(() => _online = o));
-    isOnline().then((o) => setState(() => _online = o));
+    isOnline().then((o) {
+      if (mounted) setState(() => _online = o);
+    });
     _loadAiKeys();
+  }
+
+  @override
+  void dispose() {
+    _connSub?.cancel();
+    _wakeWordCtrl.dispose();
+    _deepSeekCtrl.dispose();
+    _geminiCtrl.dispose();
+    super.dispose();
   }
 
   /// Snapshot the current globals into a persisted [AppSettings] — keeps ALL
@@ -254,13 +266,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (newVal != null && mounted) {
       await _saveAiKeys();
     }
-  }
-
-  @override
-  void dispose() {
-    _deepSeekCtrl.dispose();
-    _geminiCtrl.dispose();
-    super.dispose();
   }
 
   @override

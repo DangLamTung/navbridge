@@ -54,6 +54,8 @@ extension _NavNavigation on _NavigationPageState {
     // lights are map-only). Offline index, ~1 Hz throttle inside.
     _checkSignAhead(snapped, _route?.geometry ?? const []);
     _refreshRoad(snapped);
+    // Speak when the posted limit changes (crossing a new segment / zone).
+    _maybeSpeakLimitChange();
     _logFix(pos, speedMps);
     // Background nav: live notification + heads-up at each new maneuver.
     unawaited(
@@ -398,7 +400,7 @@ extension _NavNavigation on _NavigationPageState {
       _lastManeuverSig = null;
       _speedingSpoken = false;
       _lastOverspeedAt = null;
-      _signSpeedLimit = null; // speed-limit signs reset each nav session
+      _resetSignSpeed(); // speed-limit + zone + announce reset per session
       _gpsWeakSpoken = false;
       _lastGpsWeakAt = null;
       _offRouteSince = null;
@@ -428,7 +430,7 @@ extension _NavNavigation on _NavigationPageState {
     _lastManeuverSig = null;
     _speedingSpoken = false;
     _lastOverspeedAt = null;
-    _signSpeedLimit = null; // speed-limit signs reset each nav session
+    _resetSignSpeed(); // speed-limit + zone + announce reset per session
     _gpsWeakSpoken = false;
     _lastGpsWeakAt = null;
     _offRouteSince = null;
@@ -470,7 +472,7 @@ extension _NavNavigation on _NavigationPageState {
     _lastManeuverSig = null;
     _speedingSpoken = false;
     _lastOverspeedAt = null;
-    _signSpeedLimit = null; // speed-limit signs reset each nav session
+    _resetSignSpeed(); // speed-limit + zone + announce reset per session
     _gpsWeakSpoken = false;
     _lastGpsWeakAt = null;
     _cameraDedupe.reset();

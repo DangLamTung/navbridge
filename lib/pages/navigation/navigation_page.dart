@@ -461,11 +461,33 @@ class _NavigationPageState extends State<NavigationPage>
   bool _speedingSpoken = false; // overspeed alert already announced (episode)
   DateTime? _lastOverspeedAt; // last overspeed voice alert (60 s cooldown)
   int? _signSpeedLimit; // effective limit from the last speed-limit sign passed
+  int?
+  _zoneSpeedLimit; // 40 in "khu đông dân cư" (populated) zone; null outside
 
-  /// Effective speed limit: the last speed-limit sign (incl. Waze) the car
-  /// passed on the route, falling back to the road's tagged/VN-default limit.
-  /// This is what overspeed alerts + the speed chip announce.
-  int get _effectiveSpeedLimit => _signSpeedLimit ?? _roadInfo?.speedLimit ?? 0;
+  // Speed-limit-change announcement state: speak the limit only once it has
+  // been stable for ~2 s and not repeated within ~4 s (avoids boundary spam).
+  int? _lastSpokenLimit;
+  int? _pendingLimit;
+  DateTime? _pendingSince;
+  DateTime? _lastLimitSpoke;
+
+  /// Effective speed limit: the last speed-limit sign (incl. Waze) or the
+  /// populated-area zone the car is in, falling back to the road's
+  /// tagged/VN-default limit. This is what overspeed alerts + the speed chip
+  /// announce.
+  int get _effectiveSpeedLimit =>
+      _signSpeedLimit ?? _zoneSpeedLimit ?? _roadInfo?.speedLimit ?? 0;
+
+  /// Reset the sign/zone speed-limit + limit-announce state for a fresh
+  /// navigation or simulation session.
+  void _resetSignSpeed() {
+    _signSpeedLimit = null;
+    _zoneSpeedLimit = null;
+    _lastSpokenLimit = null;
+    _pendingLimit = null;
+    _pendingSince = null;
+    _lastLimitSpoke = null;
+  }
 
   double _lastGpsAccuracy = 0; // latest GPS fix accuracy (m) → Kalman noise
   bool _gpsWeakSpoken = false; // low-GPS alert announced (episode)

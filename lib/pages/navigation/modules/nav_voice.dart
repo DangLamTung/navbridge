@@ -250,6 +250,42 @@ extension _NavVoice on _NavigationPageState {
     }
   }
 
+  /// Speak when the effective speed limit CHANGES — crossing onto a road with
+  /// a different posted limit (e.g. "Giới hạn 60 km/h") or entering/leaving a
+  /// populated zone. Waits for the new limit to be stable ~2 s (road info can
+  /// flicker) and never repeats within ~4 s, so a bumpy boundary can't spam.
+  void _maybeSpeakLimitChange() {
+    if (!_voiceOn || !_voice.ready) return;
+    if (!_navigating && !_simulating) return;
+    final limit = _effectiveSpeedLimit;
+    if (limit <= 0) return;
+    final now = DateTime.now();
+    if (limit == _lastSpokenLimit) {
+      _pendingLimit = null;
+      _pendingSince = null;
+      return;
+    }
+    if (limit != _pendingLimit) {
+      // New candidate limit — arm the stability window.
+      _pendingLimit = limit;
+      _pendingSince = now;
+      return;
+    }
+    if (_pendingSince == null ||
+        now.difference(_pendingSince!) < const Duration(seconds: 2)) {
+      return; // not yet stable
+    }
+    if (_lastLimitSpoke != null &&
+        now.difference(_lastLimitSpoke!) < const Duration(seconds: 4)) {
+      return; // cooldown from the last announcement
+    }
+    _lastLimitSpoke = now;
+    _lastSpokenLimit = limit;
+    _pendingLimit = null;
+    _pendingSince = null;
+    _voice.speak('Giới hạn $limit km/h');
+  }
+
   /// Warn by voice when GPS quality is poor (reported accuracy ≥ 30 m) so the
   /// driver knows the fix may wander off the road. Announces once per degraded
   /// episode, then at most every 60 s while still bad; resets when the fix

@@ -72,10 +72,8 @@ extension _NavGps on _NavigationPageState {
             // Every fix (no distance filter) → the nav UI, voice and the clock
             // update as fast as the sensor reports, instead of every 3 m.
             distanceFilter: 0,
-            // Fix rate: geolocator_android defaults to a 5000 ms interval when
-            // null — a fix every 5 s makes the car/puck look like it 'runs too
-            // slow'. Request 500 ms (2 Hz) so navigation responds in real time.
-            intervalDuration: const Duration(milliseconds: 500),
+            // Fix rate: 1000 ms (1 Hz) standard steady rate.
+            intervalDuration: const Duration(milliseconds: 1000),
           ),
         ).listen(
           _onGpsFix,
@@ -355,17 +353,22 @@ extension _NavGps on _NavigationPageState {
     final lim = await speedLimitAt(pos);
     if (lim == null || !mounted) return;
     final cur = _roadInfo;
-    if (cur == null || lim == cur.speedLimit) return;
+    if (cur == null) return;
+    // The DATMAP limit is a posted (car) value; for motorbikes/trucks it only
+    // TIGHTENS the vehicle's statutory class default (never lifts it), same as
+    // the OSM maxspeed handling.
+    final v = effectiveLimit(cur.highway, vehicle: vehicleType, taggedKmh: lim);
+    if (v == cur.speedLimit) return;
     debugPrint(
-      'ROAD: datmap limit=$lim (was ${cur.speedLimit}) ${cur.highway}',
+      'ROAD: datmap limit=$lim -> $v (was ${cur.speedLimit}) ${cur.highway}',
     );
     setNavState(() {
       _roadInfo = RoadInfo(
         name: cur.name,
         highway: cur.highway,
-        maxspeed: '$lim',
+        maxspeed: '$v',
         label: cur.label,
-        speedLimit: lim,
+        speedLimit: v,
       );
     });
   }

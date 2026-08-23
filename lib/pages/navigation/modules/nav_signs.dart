@@ -34,6 +34,27 @@ extension _NavSigns on _NavigationPageState {
         break;
       }
     }
+    // Populated-area boundary: entering "khu đông dân cư" drops the limit to
+    // 40 km/h (built-up area, VN); leaving clears it back to the road default.
+    // `ahead` is ordered by distance, so the first boundary sign is the one
+    // we are about to cross.
+    for (final a in ahead) {
+      final k = a.sign.kind;
+      if (k == RoadSignKind.populated) {
+        if (_zoneSpeedLimit != 40) {
+          _zoneSpeedLimit = 40;
+          if (mounted) setNavState(() {});
+        }
+        break;
+      }
+      if (k == RoadSignKind.populatedEnd) {
+        if (_zoneSpeedLimit != null) {
+          _zoneSpeedLimit = null;
+          if (mounted) setNavState(() {});
+        }
+        break;
+      }
+    }
     // Nearest sign ahead that we ANNOUNCE: STOP, give-way, and the VN
     // prohibitions drivers must slow for (cấm vượt / cấm rẽ / cấm quay đầu).
     // Speed, "đông dân cư" and traffic-light signs are map-only.
