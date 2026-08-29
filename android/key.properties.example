@@ -1,0 +1,23 @@
+# Release signing — copy this file to android/key.properties (gitignored) and
+# fill in your real values. This signs release APKs built LOCALLY.
+#
+#   storeFile    keystore path, RELATIVE to the android/ dir
+#                (e.g. app/upload-keystore.jks → android/app/upload-keystore.jks)
+#   storePassword keystore password
+#   keyAlias     key alias inside the keystore
+#   keyPassword  key password
+#
+# In CI (GitHub Actions) don't use this file — set these repo Secrets instead
+# (see .github/workflows/release.yml):
+#   ANDROID_KEYSTORE_BASE64   (base64 of the .jks file)
+#   ANDROID_KEYSTORE_PASSWORD
+#   ANDROID_KEY_ALIAS
+#   ANDROID_KEY_PASSWORD
+#
+# Generate a keystore once with:
+#   keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA \
+#     -keysize 2048 -validity 10000 -alias navbridge
+storeFile=app/upload-keystore.jks
+storePassword=changeit
+keyAlias=navbridge
+keyPassword=changeit

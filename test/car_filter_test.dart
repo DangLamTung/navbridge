@@ -75,6 +75,22 @@ void main() {
       expect(err, lessThan(20));
     });
 
+    test('snapTo pins the position without touching speed or heading', () {
+      final f = CarFilter();
+      f.update(const LatLng(10.82, 106.62), routeBearing: 90);
+      for (var i = 1; i <= 5; i++) {
+        final lng = 106.62 + (i * 10.0) / mPerLng;
+        f.update(LatLng(10.82, lng), dt: 1.0, routeBearing: 90);
+      }
+      final speedBefore = f.speedMps;
+      final bearingBefore = f.bearing;
+      f.snapTo(const LatLng(10.80, 106.60));
+      expect(f.position.latitude, closeTo(10.80, 1e-9));
+      expect(f.position.longitude, closeTo(106.60, 1e-9));
+      expect(f.speedMps, closeTo(speedBefore, 1e-9));
+      expect(f.bearing, closeTo(bearingBefore, 1e-9));
+    });
+
     test('falls back to the travel bearing when no route bearing is given', () {
       final f = CarFilter();
       f.update(const LatLng(10.82, 106.62));

@@ -228,6 +228,7 @@ extension _NavPoi on _NavigationPageState {
   /// `food`) for eating places.
   String? _offlineKeyForPoiType(PoiType t) => switch (t) {
     PoiType.fuel => 'fuel',
+    PoiType.charging => null, // no bundled charging data yet
     PoiType.food => 'restaurant',
     PoiType.cafeVong => 'cafe',
     PoiType.hotel => 'hotel',
@@ -235,6 +236,62 @@ extension _NavPoi on _NavigationPageState {
     PoiType.hospital => 'hospital',
     PoiType.parking => 'parking',
   };
+
+  /// True when [a] and [b] are the same station (within ~40 m) — the offline
+  /// + online merge used to show one station twice at slightly different
+  /// coordinates.
+  bool _sameStation(PoiResult a, PoiResult b) =>
+      distanceMeters(a.pos, b.pos) < 40;
+
+  /// Vietmap (VN-native) POI pass — autocomplete "trạm xăng"/"trạm sạc" then
+  /// resolve coordinates. Best-effort: empty without VIETMAP_API_KEY.
+  Future<List<PoiResult>> _vietmapPois(
+    String query,
+    PoiType type,
+    LatLng c, {
+    int limit = 8,
+    String? exclude,
+  }) async {
+    final pois = await vietmapPoiSearch(query, c, limit: limit);
+    final rx = exclude == null ? null : RegExp(exclude, caseSensitive: false);
+    return [
+      for (final p in pois)
+        if (rx == null || !rx.hasMatch(p.name))
+          PoiResult(name: p.name, lat: p.lat, lng: p.lng, type: type),
+    ];
+  }
+
+  /// Google rating used for ranking — treated as 0 (ignored) when there is
+  /// no rating or fewer than [minReviews] reviews, so a single 5★ review
+  /// can't beat a well-reviewed 4.8.
+  static double _ratingKey(PoiResult p, {int minReviews = 5}) {
+    final r = p.rating ?? 0;
+    if (r < 0.1 || (p.userRatingsTotal ?? 0) < minReviews) return 0;
+    return r;
+  }
+
+  /// Centers for the ±15 km route-corridor POI search: the car + points
+  /// ahead on the route every ~10 km (each Google search uses a 15 km radius,
+  /// so together they cover the corridor along the driving path, up to
+  /// ~30 km ahead).
+  List<LatLng> _poiCorridorCenters(LatLng car, List<LatLng> route) {
+    if (route.length < 2) return [car];
+    final startIdx = (_engine?.snappedSegmentIndex ?? 0).clamp(
+      0,
+      route.length - 1,
+    );
+    final out = <LatLng>[car];
+    double cum = 0;
+    for (var i = startIdx; i + 1 < route.length && out.length < 4; i++) {
+      cum += distanceMeters(route[i], route[i + 1]);
+      if (cum >= 10000) {
+        out.add(route[i + 1]);
+        cum = 0;
+      }
+    }
+    if (out.length == 1 && startIdx < route.length) out.add(route.last);
+    return out;
+  }
 
   /// Search the [type] quick-POI category and show the best candidates.
   /// OFFLINE-FIRST: the bundled Vietnam POI index is merged with the live
@@ -245,6 +302,11 @@ extension _NavPoi on _NavigationPageState {
   Future<void> _searchPoi(PoiType type) async {
     final c = _current ?? _origin;
     if (c == null) return;
+    final route = _route?.geometry ?? const <LatLng>[];
+    // ±15 km corridor along the route: the car + points ahead every ~10 km
+    // (each Google search uses a 15 km radius, so together they cover the
+    // corridor the driver is heading into, not just a circle around the car).
+    final centers = _poiCorridorCenters(c, route);
     setNavState(() {
       _poiBusy = true;
       _poiType = type;
@@ -265,21 +327,65 @@ extension _NavPoi on _NavigationPageState {
       // Online Overpass pass is best-effort — offline results still show if
       // it fails (or the phone is offline).
       try {
-        for (final r in await searchPois(type, c, radius: 15000, limit: 30)) {
-          final dup = results.any(
-            (x) => (x.lat - r.lat).abs() < 1e-5 && (x.lng - r.lng).abs() < 1e-5,
+        for (final r in await searchPois(type, c, radius: 10000, limit: 30)) {
+          if (!results.any((x) => _sameStation(x, r))) results.add(r);
+        }
+      } catch (_) {}
+      // Google Places pass — the best VN coverage with REAL ratings, searched
+      // along the ±15 km route corridor (nearest gas / highest-rated food).
+      try {
+        for (final r in await googlePoiSearch(type, centers, radius: 15000)) {
+          if (!results.any((x) => _sameStation(x, r))) results.add(r);
+        }
+      } catch (_) {}
+      // Vietmap pass — real VN place names (e.g. "Petrolimex") using the key
+      // the app already has; best-effort. Only for xăng / trạm sạc.
+      try {
+        final List<PoiResult> vm;
+        if (type == PoiType.fuel) {
+          vm = await _vietmapPois('trạm xăng', type, c, limit: 8);
+        } else if (type == PoiType.charging) {
+          vm = await _vietmapPois(
+            'trạm sạc',
+            type,
+            c,
+            limit: 8,
+            exclude: 'gội đầu|massage|dưỡng sinh|trạm sạc đầu',
           );
-          if (!dup) results.add(r);
+        } else {
+          vm = const [];
+        }
+        for (final r in vm) {
+          if (!results.any((x) => _sameStation(x, r))) results.add(r);
         }
       } catch (_) {}
       if (results.isEmpty) {
         throw Exception('Không tìm thấy ${type.label.toLowerCase()} gần đây');
       }
-      // During navigation rank by route position (ahead + same side of the
-      // road); otherwise nearest-first.
-      final route = _route?.geometry ?? const <LatLng>[];
       List<PoiResult> ranked;
-      if (route.length > 2) {
+      if (type == PoiType.food || type == PoiType.cafeVong) {
+        // Nhà hàng: highest rating first (with a sane minimum review count so
+        // one 5★ review doesn't top the list), then review count, then
+        // nearest.
+        results.sort((a, b) {
+          final ra = _ratingKey(a);
+          final rb = _ratingKey(b);
+          if (ra != rb) return rb.compareTo(ra);
+          final va = a.userRatingsTotal ?? 0;
+          final vb = b.userRatingsTotal ?? 0;
+          if (va != vb) return vb.compareTo(va);
+          return distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos));
+        });
+        ranked = results;
+      } else if (type == PoiType.fuel) {
+        // Trạm xăng: nearest first (Google's distance pass around the car +
+        // corridor coverage ahead).
+        results.sort(
+          (a, b) =>
+              distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos)),
+        );
+        ranked = results;
+      } else if (route.length > 2) {
         final startIdx =
             (_engine?.snappedSegmentIndex ?? 0).clamp(
                   0,
@@ -327,10 +433,30 @@ extension _NavPoi on _NavigationPageState {
       // Online pass is best-effort — offline stations still show if it fails.
       try {
         for (final r in await searchPois(PoiType.fuel, c, limit: 8)) {
-          final dup = results.any(
-            (x) => (x.lat - r.lat).abs() < 1e-5 && (x.lng - r.lng).abs() < 1e-5,
-          );
-          if (!dup) results.add(r);
+          if (!results.any((x) => _sameStation(x, r))) results.add(r);
+        }
+      } catch (_) {}
+      // Vietmap pass — real VN gas stations ("Petrolimex"…) via the app's key.
+      try {
+        for (final r in await _vietmapPois(
+          'trạm xăng',
+          PoiType.fuel,
+          c,
+          limit: 8,
+        )) {
+          if (!results.any((x) => _sameStation(x, r))) results.add(r);
+        }
+      } catch (_) {}
+      // Google pass — nearest real gas stations (rankby=distance around the
+      // car) with names/ratings from Google Places.
+      try {
+        for (final r in await googlePoiSearch(
+          PoiType.fuel,
+          [c],
+          radius: 15000,
+          limit: 20,
+        )) {
+          if (!results.any((x) => _sameStation(x, r))) results.add(r);
         }
       } catch (_) {}
       results.sort(
@@ -346,6 +472,38 @@ extension _NavPoi on _NavigationPageState {
       }
     } finally {
       if (mounted) setNavState(() => _poiBusy = false);
+    }
+  }
+
+  /// "Điều hướng bằng Google Maps": hand off to the installed Google Maps app
+  /// (turn-by-turn with Google's roads + live traffic) via a `google.navigation`
+  /// deep link. Legitimate + free — NavBridge stays primary for the E-ink
+  /// clock / overlay / voice.
+  Future<void> _openGoogleMapsNav() async {
+    final dest = _destination ?? (_stops.isEmpty ? null : _stops.last.pos);
+    final origin = _current ?? _origin;
+    if (dest == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Chưa có điểm đến để mở Google Maps.')),
+        );
+      return;
+    }
+    final u = Uri.parse(
+      'google.navigation:q=${dest.latitude},${dest.longitude}&mode=d'
+      '${origin != null ? '&origin=${origin.latitude},${origin.longitude}' : ''}'
+      '&language=vi',
+    );
+    final ok = await launchUrl(u, mode: LaunchMode.externalApplication);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Không mở được Google Maps (chưa cài đặt?).'),
+          ),
+        );
     }
   }
 
@@ -500,7 +658,6 @@ extension _NavPoi on _NavigationPageState {
         _selectedPoi = null;
       });
       unawaited(_loadElevation(route));
-      unawaited(_refreshRouteCameras());
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(

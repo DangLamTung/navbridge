@@ -72,7 +72,8 @@ extension _NavGps on _NavigationPageState {
             // Every fix (no distance filter) → the nav UI, voice and the clock
             // update as fast as the sensor reports, instead of every 3 m.
             distanceFilter: 0,
-            // Fix rate: 1000 ms (1 Hz) standard steady rate.
+            // Fix rate: 1000 ms (1 Hz) standard steady rate; the trip log
+            // records at the same 1 Hz.
             intervalDuration: const Duration(milliseconds: 1000),
           ),
         ).listen(
@@ -116,24 +117,158 @@ extension _NavGps on _NavigationPageState {
     }
   }
 
-  /// Shared GPS-fix handler (stream fixes + the fast seed). Updates the map,
-  /// the engine and (in nav mode) the ETA/voice/clock.
-  void _onGpsFix(Position p) {
+  /// True while the ESP32 GPS bridge has a fresh, valid fix (last frame or
+  /// NMEA line parsed < 4 s ago). While true the receiver wins — the phone's
+  /// GPS is ignored (ESP-first, phone fallback).
+  bool _espActive() {
+    final at = _espFixAt;
+    if (!_espValid || at == null) return false;
+    return DateTime.now().difference(at) < const Duration(seconds: 4);
+  }
+
+  /// One raw NMEA line from the ESP32 display's GPS broadcast. Parses it into
+  /// a fix and, when valid, feeds it through the same pipeline as a phone fix
+  /// (outlier gate + heading filter + map + speed chip + trip log).
+  void _onEspNmea(String line) {
+    final fix = _nmea.push(line);
+    debugPrint('GPS/ESP: nmea="$line"');
+    if (fix == null) return;
+    _espValid = fix.valid;
+    _espFixAt = DateTime.now();
+    if (!fix.valid) return;
+    // The board streams ~one NMEA line/sec; GGA and RMC both carry position,
+    // so throttle feeding to ~2 Hz to avoid double-processing the same fix.
+    final now = DateTime.now();
+    if (_espLastFeed != null &&
+        now.difference(_espLastFeed!) < const Duration(milliseconds: 400)) {
+      return;
+    }
+    _espLastFeed = now;
+    final pos = Position(
+      latitude: fix.lat,
+      longitude: fix.lon,
+      // All timestamps are UTC so the outlier gate's dt stays consistent with
+      // the geolocator's (also UTC) fixes when the source switches.
+      timestamp: fix.timeUtc ?? DateTime.now().toUtc(),
+      accuracy: fix.accuracyMeters,
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: fix.heading,
+      speed: fix.speedMps,
+      speedAccuracy: 0,
+      headingAccuracy: 0,
+    );
+    _onGpsFix(pos, fromEsp: true);
+  }
+
+  /// One compact AA55 GPS frame (type 0x0A) from the ESP bridge — the board's
+  /// current protocol. Feeds the fix through the same pipeline (ESP-first).
+  void _onEspGpsFrame(Uint8List bytes) {
+    final f = parseMapGpsFrame(bytes);
+    if (f == null) return;
+    _espValid = f.valid;
+    _espFixAt = DateTime.now();
+    if (!f.valid) return;
+    final now = DateTime.now();
+    // The compact frame has no speed/heading — derive them from the movement
+    // between consecutive 1 Hz frames.
+    final cur = LatLng(f.lat, f.lon);
+    if (_espPrevPos != null && _espPrevAt != null) {
+      final dt = now.difference(_espPrevAt!).inMilliseconds / 1000.0;
+      if (dt > 0.05) {
+        final dist = fastDistanceMeters(_espPrevPos!, cur);
+        _espSpeedMps = dist / dt;
+        if (dist > 1.0) {
+          _espHeading = _bearingDeg(_espPrevPos!, cur);
+        }
+      }
+    }
+    _espPrevPos = cur;
+    _espPrevAt = now;
+    // Throttle to ~2 Hz (frames arrive at 1 Hz; symmetric with the NMEA path).
+    if (_espLastFeed != null &&
+        now.difference(_espLastFeed!) < const Duration(milliseconds: 400)) {
+      return;
+    }
+    _espLastFeed = now;
+    debugPrint(
+      'GPS/ESP: frame q=${f.quality} sats=${f.sats} '
+      '${f.lat.toStringAsFixed(6)},${f.lon.toStringAsFixed(6)} '
+      '${(_espSpeedMps ?? 0) * 3.6}km/h',
+    );
+    final pos = Position(
+      latitude: f.lat,
+      longitude: f.lon,
+      timestamp: now.toUtc(),
+      accuracy: f.accuracyMeters,
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: _espHeading ?? 0,
+      speed: _espSpeedMps ?? 0,
+      speedAccuracy: 0,
+      headingAccuracy: 0,
+    );
+    _onGpsFix(pos, fromEsp: true);
+  }
+
+  /// True course (deg 0..359, N=0) from [a] to [b].
+  double _bearingDeg(LatLng a, LatLng b) {
+    const kPi = 3.141592653589793;
+    final lat1 = a.latitude * kPi / 180;
+    final lat2 = b.latitude * kPi / 180;
+    final dLon = (b.longitude - a.longitude) * kPi / 180;
+    final y = sin(dLon) * cos(lat2);
+    final x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+    return (atan2(y, x) * 180 / kPi + 360) % 360;
+  }
+
+  /// Shared GPS-fix handler (stream fixes + the fast seed + ESP NMEA). Updates
+  /// the map, the engine and (in nav mode) the ETA/voice/clock.
+  void _onGpsFix(Position p, {bool fromEsp = false}) {
     // Simulated drive drives the route itself — ignore real (stationary) GPS
     // so it can't yank the car back to the phone's location (T9).
     if (_simulating) return;
-    final now = DateTime.now();
+    // ESP-first: while the receiver has a fresh valid fix, ignore the phone's
+    // GPS (its antenna is worse). The phone resumes when the ESP fix goes stale.
+    if (!fromEsp && _espActive()) return;
+    final pos = LatLng(p.latitude, p.longitude);
+    // Use the FIX's own timestamp for the outlier gate, NOT wall-clock: the
+    // geolocator batch-delivers fixes, so a 10 m jump that is 0.1 s apart in
+    // fix-time can look like a normal 1 s gap in wall-time — wall-clock dt let
+    // the 270–449 km/h bursts through (the trip logs proved it). With fix-time
+    // dt the gate sees the true short interval and rejects the burst.
+    final fixTime = p.timestamp;
     final dt = _lastGpsFixTime == null
-        ? 0.0
-        : now.difference(_lastGpsFixTime!).inMilliseconds / 1000.0;
-    _lastGpsFixTime = now;
+        ? null
+        : fixTime.difference(_lastGpsFixTime!).inMilliseconds / 1000.0;
+    // Outlier gate (Google/Mapbox-style innovation gate): reject a fix that is
+    // too inaccurate or a position jump inconsistent with the recent smoothed
+    // speed BEFORE it reaches the map, the complementary filter and the speed
+    // chip — a single GPS burst (e.g. a 130 km/h reading) must never move the
+    // arrow or flash the speed. Skipped when the user turns the GPS filter
+    // off in Settings (raw mode — no fixes dropped).
+    if (gpsFilter && !_outlierGate.accept(pos, accuracy: p.accuracy, dt: dt)) {
+      debugPrint(
+        'GPS: REJECTED acc=${p.accuracy}m '
+        'dt=${dt == null ? '-' : dt.toStringAsFixed(2)}s',
+      );
+      return;
+    }
+    _lastGpsFixTime = fixTime;
     debugPrint(
-      'GPS: fix dt=${dt.toStringAsFixed(2)}s acc=${p.accuracy}m '
+      'GPS${fromEsp ? '/ESP' : ''}: fix dt=${(dt ?? 0).toStringAsFixed(2)}s '
+      'acc=${p.accuracy}m '
       'spd=${p.speed.isNaN ? 0 : p.speed.toStringAsFixed(0)}',
     );
-    final pos = LatLng(p.latitude, p.longitude);
     _current = pos;
-    _heading = p.heading.isNaN ? null : p.heading;
+    final spd = p.speed.isNaN ? 0.0 : p.speed;
+    // Filtered heading: holds while stationary, only applies a big change
+    // after two agreeing fixes (see [StrictHeading]).
+    _headingFilter.update(p.heading, pos);
+    _lastSpeedMps = spd;
+    // ~1 Hz: keep the floating widget's auto-hide in sync with the map
+    // (zoom-out / radar / satellite hide it). No-op unless it changed.
+    _syncOverlayVisibility();
     // Browse mode: no engine/route yet — still redraw so the blue
     // current-location marker follows the phone. Without this setState
     // the marker never appeared on the browse map even though the GPS
@@ -154,7 +289,6 @@ extension _NavGps on _NavigationPageState {
     // Keep a short trace for online OSRM /match road-snapping.
     _gpsWindow.add(pos);
     if (_gpsWindow.length > 15) _gpsWindow.removeAt(0);
-    _lastSpeedMps = p.speed;
     _lastGpsAccuracy = p.accuracy;
     // Voice-alert when GPS accuracy degrades (fixes may wander off-road).
     _maybeSpeakGpsWeak(p.accuracy);
@@ -324,6 +458,12 @@ extension _NavGps on _NavigationPageState {
     } finally {
       if (mounted) setNavState(() => _roadLoading = false);
     }
+    // Apply the real posted DATMAP limit here too — the graph branch already
+    // calls _correctSpeedFromDatmap, but this Overpass fallback path skipped
+    // it, so the announced limit could be the statutory estimate instead of
+    // the real per-segment value. (After the finally so the _roadLoading
+    // guard inside the helper passes.)
+    unawaited(_correctSpeedFromDatmap(pos));
   }
 
   /// Background speed-limit correction: re-fetch road info from OSM (which
@@ -412,7 +552,7 @@ extension _NavGps on _NavigationPageState {
   void _logFix(LatLng pos, double speedMps) {
     final t = _trip;
     if (t == null) return;
-    t.addFix(pos, speedMps: speedMps);
+    t.addFix(pos, speedMps: speedMps, heading: _heading);
   }
 
   /// Start recording a trip (no-op if one is already active).

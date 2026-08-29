@@ -20,6 +20,8 @@ import 'package:navbridge/services/offline_poi.dart';
 import 'package:navbridge/services/offline_tiles.dart' show isOnline;
 import 'package:navbridge/services/osm_api.dart';
 import 'package:navbridge/services/poi_search.dart';
+import 'package:navbridge/services/vietmap_api.dart';
+import 'package:navbridge/services/vietmap_config.dart';
 import 'package:latlong2/latlong.dart';
 
 /// Everything the assistant knows about the current drive, injected into the
@@ -150,6 +152,14 @@ class AiAssistant {
       final off = await _offlineAnswer(question, context, center);
       if (off != null) return off;
     }
+    // WEB grounding — HIGH priority: runs for almost every online question
+    // (place queries too, so the answer can combine real places with current
+    // web facts like ratings/news). Only pure nav-state / current-weather /
+    // greeting questions skip it (answered from live drive context).
+    if (_shouldWebSearch(question)) {
+      final web = await _webSearch(question);
+      if (web.isNotEmpty) userText = '$userText\n\n$web';
+    }
     if (deepSeekKey.isEmpty && geminiKey.isEmpty) {
       throw Exception(
         'Chưa cấu hình khoá AI. Vào ⚙ Cài đặt → Trợ lý AI để nhập khoá.',
@@ -224,6 +234,17 @@ class AiAssistant {
 
   bool _isGasQuery(String q) => _gasRx.hasMatch(q);
 
+  /// Does [q] ask about the CURRENT PRICE of fuel ("giá xăng hôm nay bao
+  /// nhiêu?") rather than finding a station? Price questions must go to the
+  /// web-search pass (real current price) — NOT the nearby-station list, or
+  /// the AI lists stations and can't (mustn't) give a price.
+  static final RegExp _gasPriceRx = RegExp(
+    r'(giá xăng|gia xang|xăng bao nhiêu|xang bao nhieu|xăng hôm nay|xang hom nay|xăng giá|xang gia|giá dầu|gia dau|dầu bao nhiêu|dau bao nhieu|ron 95 bao nhiêu|e5 bao nhiêu|giá ron|gia ron|1 lít xăng|1 lit xang|giá xăng dầu|gia xang dau)',
+    caseSensitive: false,
+  );
+
+  bool _isGasPriceQuery(String q) => _gasPriceRx.hasMatch(q.toLowerCase());
+
   /// Real nearby gas stations → prompt block + places. Google Places first
   /// (best VN data), Overpass fallback.
   Future<(String, List<AiPlace>)> _groundGas(LatLng center) async {
@@ -279,6 +300,10 @@ class AiAssistant {
   ) async {
     if (center == null) return ('', const <AiPlace>[]);
     final lower = q.toLowerCase();
+    // "Giá xăng hôm nay …" = a PRICE question, not "find a station" — return
+    // empty so the web-search pass (in ask()) supplies the latest price; the
+    // station list would only tempt the model to list stations with no price.
+    if (_isGasPriceQuery(lower)) return ('', const <AiPlace>[]);
     if (_isGasQuery(lower)) return _groundGas(center);
     final type = _poiTypeForQuery(lower);
     // "Đẹp / đèo / ngắm cảnh / gợi ý dọc đường" → real scenic spots + mountain
@@ -306,7 +331,15 @@ class AiAssistant {
         debugPrint('AI: scenic search failed: $e');
       }
     }
-    if (type == null) return ('', const <AiPlace>[]);
+    if (type == null) {
+      // Named-place query ("tìm quán phở X", "khách sạn Vinpearl ở đâu") —
+      // the driver names a SPECIFIC place → ground in a real place search
+      // (Google Places Text Search first, Vietmap fallback).
+      if (_isNamedPlaceQuery(lower)) {
+        return _groundNamedPlace(lower, center);
+      }
+      return ('', const <AiPlace>[]);
+    }
     try {
       final pois = await searchPois(type, center, radius: 8000, limit: 5);
       if (pois.isEmpty) return ('', const <AiPlace>[]);
@@ -374,6 +407,343 @@ class AiAssistant {
       return PoiType.hospital;
     }
     return null;
+  }
+
+  /// Does [q] ask to find a SPECIFIC place by name (not a category the
+  /// category-POI search already handles)? e.g. "tìm quán phở Hùng",
+  /// "khách sạn Vinpearl ở đâu", "siêu thị gần đây".
+  static final RegExp _placeIntentRx = RegExp(
+    r'(tìm|kiếm|tim|kiem|ở đâu|o dau|chỗ nào|cho nao|quanh đây|quanh day|gần đây|gan day|địa điểm|dia diem|chỗ|cho|quán|quan|tiệm|tiem|cửa hàng|cua hang|siêu thị|sieu thi|chợ|cho|trạm|tram|bãi|bai|sân bay|san bay|công viên|cong vien|điểm dừng|diem dung|khách sạn|khach san|nhà nghỉ|nha nghi|bến xe|ben xe)',
+    caseSensitive: false,
+  );
+
+  bool _isNamedPlaceQuery(String q) => _placeIntentRx.hasMatch(q);
+
+  /// Strip the search intent words off a place query so the engine searches
+  /// just the place name: "tìm quán phở Hùng gần đây" → "quán phở Hùng".
+  String _cleanPlaceQuery(String q) {
+    var s = q.trim();
+    final lead = RegExp(
+      r'^(tìm kiếm|tìm|kiếm|cho tôi|giúp tôi|hãy|chỉ|đi tìm|đưa tôi|cho mình|mình muốn)\s+',
+      caseSensitive: false,
+    );
+    // Strip a chain of leading intent words ("giúp tôi tìm …").
+    var prev = '';
+    while (s != prev) {
+      prev = s;
+      s = s.replaceFirst(lead, '');
+    }
+    s = s.replaceFirst(
+      RegExp(
+        r'\s*(gần đây|gần nhất|ở đâu|quanh đây|chỗ nào|chỗ|tại)\s*[?!.]*$',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    return s.trim();
+  }
+
+  /// Real NAMED-place search (Google Places Text Search first — best VN data
+  /// with real coordinates — then Vietmap autocomplete + place lookup).
+  /// Returns a prompt block + places for the "Đi đến" chips.
+  Future<(String, List<AiPlace>)> _groundNamedPlace(
+    String q,
+    LatLng center,
+  ) async {
+    final clean = _cleanPlaceQuery(q);
+    if (clean.isEmpty) return ('', const <AiPlace>[]);
+    const Distance d = Distance();
+    // 1) Google Places Text Search — real names + coordinates.
+    try {
+      final g = await googlePlaceTextSearch(
+        clean,
+        center,
+        radius: 20000,
+        limit: 5,
+      );
+      if (g.isNotEmpty) {
+        final lines = <String>[];
+        final places = <AiPlace>[];
+        for (final (n, la, ln) in g) {
+          final m = d.as(LengthUnit.Meter, center, LatLng(la, ln)).round();
+          lines.add('$n (cách ~$m m)');
+          places.add(AiPlace(n, la, ln));
+        }
+        debugPrint('AI: place search → Google ${g.length} results');
+        return (
+          '\n\nKết quả tìm "$clean" (Google Maps thật — chỉ dùng danh sách này, kèm khoảng cách):\n- ${lines.join('\n- ')}',
+          places,
+        );
+      }
+    } catch (e) {
+      debugPrint('AI: Google place search failed: $e');
+    }
+    // 2) Vietmap autocomplete + place (coords) when the key is present.
+    if (VietmapConfig.hasKeys) {
+      try {
+        final vm = await vietmapAutocomplete(clean, focus: center);
+        final places = <AiPlace>[];
+        final lines = <String>[];
+        for (final s in vm.take(3)) {
+          final p = await vietmapPlace(s.refId);
+          if (p == null) continue;
+          final (la, ln, _) = p;
+          final m = d.as(LengthUnit.Meter, center, LatLng(la, ln)).round();
+          lines.add('${s.display} (cách ~$m m)');
+          places.add(AiPlace(s.display, la, ln));
+        }
+        if (places.isNotEmpty) {
+          debugPrint('AI: place search → Vietmap ${places.length} results');
+          return (
+            '\n\nKết quả tìm "$clean" (Vietmap thật — chỉ dùng danh sách này, kèm khoảng cách):\n- ${lines.join('\n- ')}',
+            places,
+          );
+        }
+      } catch (e) {
+        debugPrint('AI: Vietmap place search failed: $e');
+      }
+    }
+    return ('', const <AiPlace>[]);
+  }
+
+  /// Drive-context / greeting questions are already answered from the live
+  /// drive context — don't burn a web search on them. (Traffic / speed-limit /
+  /// đèo / route questions DO get web, so e.g. "cao tốc nào đang kẹt" can
+  /// pull current info.)
+  static final RegExp _driveCtxRx = RegExp(
+    r'(bao lâu|mấy phút|mấy km|còn xa|eta|đến nơi|tới nơi|rẽ|lượt|tiếp theo|chạy tiếp|camera|thời tiết|mưa|hướng đi|trạm dừng|chỗ đỗ|đỗ xe)',
+    caseSensitive: false,
+  );
+  static final RegExp _greetingRx = RegExp(
+    r'^(chào|hello|hi|hey|alo|ờ|ok|vâng)\b',
+    caseSensitive: false,
+  );
+
+  bool _shouldWebSearch(String q) {
+    if (_greetingRx.hasMatch(q)) return false;
+    if (_driveCtxRx.hasMatch(q)) return false;
+    return true;
+  }
+
+  /// Keyless real web grounding for factual questions. All sources run in
+  /// PARALLEL and the first non-empty wins, so latency stays low even though
+  /// DuckDuckGo / Wikipedia can be slow. Returns a compact block the model
+  /// must base its answer on (never invented numbers/news).
+  Future<String> _webSearch(String q) async {
+    final query = _cleanWebQuery(q);
+    final futures = <Future<String>>[
+      _ddgInstantAnswer(query),
+      _ddgHtmlSnippets(query),
+      _wikipediaIntro(query),
+    ];
+    // Tavily (when a key is configured) is the PRIMARY source — clean JSON
+    // built for AI grounding; the free DDG / Wikipedia sources back it up.
+    if (AiConfig.tavilyApiKey.isNotEmpty) {
+      futures.insert(0, _tavilySearch(query));
+    }
+    final results = await Future.wait(futures);
+    debugPrint(
+      'AI: web "$query" → ${results.map((r) => r.length).join('/')} chars',
+    );
+    for (final r in results) {
+      if (r.isNotEmpty) return r;
+    }
+    return '';
+  }
+
+  /// Tavily Search API (real-time, AI-optimized): POST /search with the key
+  /// from AiConfig. Returns a compact Vietnamese web block (the model must
+  /// base its answer on it), or '' when no key / on any failure. Tavily is
+  /// used FIRST when configured because it returns clean snippets + a direct
+  /// answer instead of scraped HTML.
+  Future<String> _tavilySearch(String query) async {
+    final key = AiConfig.tavilyApiKey;
+    if (key.isEmpty) return '';
+    try {
+      final res = await http
+          .post(
+            Uri.parse('https://api.tavily.com/search'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $key',
+            },
+            body: jsonEncode({
+              'query': query,
+              'max_results': 5,
+              'search_depth': 'basic',
+              'include_answer': true,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) {
+        debugPrint('AI: tavily HTTP ${res.statusCode}: ${res.body}');
+        return '';
+      }
+      final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map;
+      final answer = (data['answer'] as String?)?.trim() ?? '';
+      final results = (data['results'] as List?) ?? const [];
+      final lines = <String>[];
+      if (answer.isNotEmpty) lines.add(answer);
+      for (final r in results.take(5)) {
+        if (r is Map) {
+          final title = (r['title'] as String?)?.trim() ?? '';
+          final content = (r['content'] as String?)?.trim() ?? '';
+          if (content.isNotEmpty) {
+            final t = title.isEmpty ? '' : '$title: ';
+            final c = content.length > 400
+                ? '${content.substring(0, 400)}…'
+                : content;
+            lines.add('$t$c');
+          }
+        }
+      }
+      debugPrint(
+        'AI: tavily results=${results.length} ans=${answer.length} '
+        'lines=${lines.length}',
+      );
+      if (lines.isNotEmpty) {
+        return 'Thông tin web (Tavily):\n- ${lines.take(5).join('\n- ')}';
+      }
+    } catch (e) {
+      debugPrint('AI: tavily failed: $e');
+    }
+    return '';
+  }
+
+  /// DuckDuckGo Instant Answer API (structured abstract + related topics).
+  Future<String> _ddgInstantAnswer(String query) async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse(
+              'https://api.duckduckgo.com/?q=${Uri.encodeQueryComponent(query)}'
+              '&format=json&no_html=1&skip_disambig=1&kl=vi-vn',
+            ),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) {
+        debugPrint('AI: ddg-ia HTTP ${res.statusCode}');
+        return '';
+      }
+      final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map;
+      final heading = (data['Heading'] as String?)?.trim() ?? '';
+      final lines = <String>[];
+      final abs = (data['AbstractText'] as String?)?.trim();
+      if (abs != null && abs.isNotEmpty) lines.add(abs);
+      for (final rt in ((data['RelatedTopics'] as List?) ?? const [])) {
+        if (lines.length >= 5) break;
+        if (rt is Map) {
+          final t = (rt['Text'] as String?)?.trim();
+          if (t != null && t.isNotEmpty && lines.length < 5) lines.add(t);
+          for (final tp in ((rt['Topics'] as List?) ?? const [])) {
+            if (tp is Map && lines.length < 5) {
+              final t2 = (tp['Text'] as String?)?.trim();
+              if (t2 != null && t2.isNotEmpty) lines.add(t2);
+            }
+          }
+        }
+      }
+      if (lines.isNotEmpty) {
+        return 'Thông tin web (DuckDuckGo${heading.isNotEmpty ? ' — $heading' : ''}):\n- ${lines.take(5).join('\n- ')}';
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  /// DuckDuckGo HTML lite — real result snippets (best for current facts like
+  /// giá xăng hôm nay). Uses a REAL mobile browser UA so DDG doesn't serve an
+  /// anti-bot page to the generic "navbridge" UA.
+  Future<String> _ddgHtmlSnippets(String query) async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse(
+              'https://html.duckduckgo.com/html/?q=${Uri.encodeQueryComponent(query)}',
+            ),
+            headers: const {
+              'User-Agent':
+                  'Mozilla/5.0 (Linux; Android 13; itel-P663LN) '
+                  'AppleWebKit/537.36 (KHTML, like Gecko) '
+                  'Chrome/120.0 Mobile Safari/537.36',
+            },
+          )
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) {
+        debugPrint('AI: ddg-html HTTP ${res.statusCode}');
+        return '';
+      }
+      final results = <String>[];
+      final re = RegExp(
+        r'class="result__snippet"[^>]*>(.*?)</a>',
+        dotAll: true,
+      );
+      for (final m in re.allMatches(res.body)) {
+        final s = _stripHtml(m.group(1) ?? '');
+        if (s.isNotEmpty) results.add(s);
+        if (results.length >= 4) break;
+      }
+      debugPrint(
+        'AI: ddg-html body=${res.body.length} snippets=${results.length}',
+      );
+      if (results.isNotEmpty) {
+        return 'Thông tin web (DuckDuckGo):\n- ${results.take(4).join('\n- ')}';
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  /// Wikipedia (tiếng Việt) — khái niệm / sự kiện / địa danh.
+  Future<String> _wikipediaIntro(String query) async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse(
+              'https://vi.wikipedia.org/w/api.php?action=query&format=json'
+              '&prop=extracts&exintro=1&explaintext=1&redirects=1'
+              '&generator=search&gsrsearch=${Uri.encodeQueryComponent(query)}'
+              '&gsrlimit=1&gsrnamespace=0',
+            ),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) {
+        debugPrint('AI: wikipedia HTTP ${res.statusCode}');
+        return '';
+      }
+      final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map;
+      final pages = ((data['query'] as Map?)?['pages'] as Map?) ?? const {};
+      for (final p in pages.values) {
+        if (p is Map) {
+          final ex = (p['extract'] as String?)?.trim();
+          final title = (p['title'] as String?)?.trim() ?? '';
+          if (ex != null && ex.isNotEmpty) {
+            final text = ex.length > 900 ? '${ex.substring(0, 900)}…' : ex;
+            return 'Wikipedia — $title:\n$text';
+          }
+        }
+      }
+      debugPrint('AI: wikipedia no extract');
+    } catch (_) {}
+    return '';
+  }
+
+  static String _stripHtml(String s) => s
+      .replaceAll(RegExp(r'<[^>]+>'), '')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#x27;', "'")
+      .replaceAll('&amp;', '&')
+      .replaceAll('&nbsp;', ' ')
+      .trim();
+
+  /// Drop question fillers that hurt search-engine matching ("giá xăng hôm
+  /// nay bao nhiêu?" → "giá xăng hôm nay").
+  String _cleanWebQuery(String q) {
+    var s = q.trim();
+    s = s.replaceAll(RegExp(r'[?!.]+$'), '');
+    s = s.replaceFirst(
+      RegExp(r'\s*(bao nhiêu|bao nhieu|bấy nhiêu)\s*$', caseSensitive: false),
+      '',
+    );
+    return s.trim();
   }
 
   /// Parse the AI's tool-call marker `[ĐI ĐẾN: Tên]` off the reply: returns
@@ -503,6 +873,21 @@ class AiAssistant {
   @visibleForTesting
   List<ChatTurn> trimHistoryForTest(List<ChatTurn> history) =>
       _trimHistory(history);
+
+  @visibleForTesting
+  String cleanPlaceQueryForTest(String q) => _cleanPlaceQuery(q);
+
+  @visibleForTesting
+  bool isNamedPlaceQueryForTest(String q) => _isNamedPlaceQuery(q);
+
+  @visibleForTesting
+  bool isGasPriceQueryForTest(String q) => _isGasPriceQuery(q);
+
+  @visibleForTesting
+  String cleanWebQueryForTest(String q) => _cleanWebQuery(q);
+
+  @visibleForTesting
+  bool shouldWebSearchForTest(String q) => _shouldWebSearch(q);
 
   Future<AiReply> _askDeepSeek(
     String key,

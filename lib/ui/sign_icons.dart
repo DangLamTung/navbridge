@@ -21,8 +21,35 @@ class SignIcon extends StatelessWidget {
   final int? value;
   final double size;
 
+  /// Folder with the real QCVN 41 sign PNGs (bundled assets).
+  static const String _assetDir = 'assets/offline_map/signs';
+
+  /// Real sign image for [kind], or null to fall back to [CustomPaint]
+  /// (dynamic signs such as the speed limit, and signs without a clean
+  /// public-domain image).
+  static String? _assetFor(RoadSignKind kind) => switch (kind) {
+    RoadSignKind.stop => '$_assetDir/stop.png',
+    RoadSignKind.giveWay => '$_assetDir/give_way.png',
+    RoadSignKind.populated => '$_assetDir/populated.png',
+    RoadSignKind.populatedEnd => '$_assetDir/populated_end.png',
+    RoadSignKind.noPassing => '$_assetDir/no_passing.png',
+    RoadSignKind.noLeftTurn => '$_assetDir/no_left_turn.png',
+    RoadSignKind.noRightTurn => '$_assetDir/no_right_turn.png',
+    RoadSignKind.noUTurn => '$_assetDir/no_u_turn.png',
+    RoadSignKind.endProhibitions => '$_assetDir/end_prohibitions.png',
+    _ => null,
+  };
+
   @override
   Widget build(BuildContext context) {
+    final asset = _assetFor(kind);
+    if (asset != null) {
+      return SizedBox(
+        width: size,
+        height: size,
+        child: Image.asset(asset, fit: BoxFit.contain, gaplessPlayback: true),
+      );
+    }
     return SizedBox(
       width: size,
       height: size,
@@ -367,14 +394,18 @@ class _ProhibitionPainter extends CustomPainter {
   }) {
     final w = size.width, h = size.height;
     final cy = h * 0.60;
-    final stemStart = Offset(w * 0.28, cy);
-    final stemEnd = Offset(left ? w * 0.62 : w * 0.38, cy);
-    final tip = Offset(left ? w * 0.72 : w * 0.28, h * 0.30);
+    // P.123 (cấm rẽ trái) / P.124 (cấm rẽ phải): the arrow TURNS toward the
+    // named side and its head sits there. (This was mirrored before — for
+    // `left` the stem went RIGHT while the arrowhead pointed left, so the
+    // cấm rẽ trái sign looked like a right turn.)
+    final stemStart = Offset(left ? w * 0.62 : w * 0.38, cy);
+    final stemEnd = Offset(left ? w * 0.38 : w * 0.62, cy);
+    final tip = Offset(left ? w * 0.28 : w * 0.72, h * 0.30);
     final path = Path()..moveTo(stemStart.dx, stemStart.dy);
     path.lineTo(stemEnd.dx, stemEnd.dy);
     path.lineTo(tip.dx, tip.dy);
     canvas.drawPath(path, ink..style = PaintingStyle.stroke);
-    // arrowhead
+    // arrowhead (opens toward the turn direction)
     final a1 = Offset(
       tip.dx + (left ? -w * 0.10 : w * 0.10),
       tip.dy + h * 0.06,

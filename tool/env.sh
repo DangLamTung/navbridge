@@ -25,8 +25,19 @@ else
   set +a
 fi
 
+# The user's .env commonly names the Google key GOOGLEMAPS_API_KEY; map it to
+# the specific flags the app reads (Google Places + Geocoding) so search works
+# with a single key. The specific *_KEY entries win if also present.
+if [[ -z "${GOOGLE_PLACES_KEY:-}" && -n "${GOOGLEMAPS_API_KEY:-}" ]]; then
+  GOOGLE_PLACES_KEY="$GOOGLEMAPS_API_KEY"
+fi
+if [[ -z "${GOOGLE_GEOCODE_KEY:-}" && -n "${GOOGLEMAPS_API_KEY:-}" ]]; then
+  GOOGLE_GEOCODE_KEY="$GOOGLEMAPS_API_KEY"
+fi
+
 for key in VIETMAP_API_KEY VIETMAP_TILE_KEY GOOGLE_GEOCODE_KEY \
-  GOOGLE_PLACES_KEY GRAPH_URL DEEPSEEK_API_KEY GEMINI_API_KEY; do
+  GOOGLE_PLACES_KEY WINDY_API_KEY GRAPH_URL DEEPSEEK_API_KEY GEMINI_API_KEY \
+  TAVILY_API_KEY; do
   val="${!key:-}"
   if [[ -n "$val" ]]; then
     DART_DEFINES+=("--dart-define=$key=$val")

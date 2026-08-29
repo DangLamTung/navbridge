@@ -1,0 +1,4 @@
+features: 93463
+total points: 305236
+lon range: 103.0269 .. 109.2358
+lat range: 8.9264 .. 22.8276

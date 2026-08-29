@@ -30,6 +30,7 @@ class TripFix {
   final double lng;
   final double accuracyM; // meters
   final double speedMps; // m/s (0 when unknown)
+  final double? heading; // degrees, 0 = N (null when unknown)
   final String source; // 'GPS' | 'SIM'
 
   TripFix({
@@ -38,6 +39,7 @@ class TripFix {
     required this.lng,
     required this.accuracyM,
     required this.speedMps,
+    this.heading,
     required this.source,
   });
 
@@ -49,6 +51,7 @@ class TripFix {
       'longitudeE7': (lng * 1e7).round(),
       'accuracy': accuracyM.round(),
       'source': source,
+      'heading': heading?.round(), // debug: the displayed travel heading
       'activity': [
         {
           'timestampMs': ms,
@@ -71,8 +74,10 @@ class TripLogger {
   TripLogger({required this.name, DateTime? startedAt})
     : startedAt = startedAt ?? DateTime.now();
 
+  // Record at ~1 Hz (1 s / 5 m): standard steady rate — enough that slow
+  // heading flips still show in the log without bloating the file.
   static const Duration _minInterval = Duration(seconds: 1);
-  static const double _minDistance = 20.0;
+  static const double _minDistance = 5.0;
 
   int get fixCount => fixes.length;
 
@@ -86,6 +91,7 @@ class TripLogger {
     LatLng pos, {
     double accuracyM = 10,
     double speedMps = 0,
+    double? heading,
     String source = 'GPS',
   }) {
     if (fixes.isNotEmpty) {
@@ -103,6 +109,7 @@ class TripLogger {
         lng: pos.longitude,
         accuracyM: accuracyM,
         speedMps: speedMps,
+        heading: heading,
         source: source,
       ),
     );

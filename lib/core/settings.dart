@@ -29,6 +29,12 @@ class AppSettings {
   /// Speed/red-light camera alerts while navigating (phạt nguội DB).
   final bool cameraAlerts;
 
+  /// GPS outlier filter (innovation gate): reject fixes that are too
+  /// inaccurate or jump inconsistently with recent speed before they reach
+  /// the map / complementary filter / speed chip. Off → raw fixes pass
+  /// through unfiltered (position/speed may jump).
+  final bool gpsFilter;
+
   /// Rain-radar overlay on the map (RainViewer, free/no key).
   final bool radar;
 
@@ -51,19 +57,51 @@ class AppSettings {
   /// differently — the user sets whatever word their device actually hears.
   final String wakeWord;
 
+  /// Floating speed/limit widget layout id: 'vertical' (default) | 'horizontal'.
+  /// Picked on the widget-layout page in Settings.
+  final String overlayLayout;
+
+  /// Floating widget scale (0.8 to 1.5, default 1.0).
+  final double overlayScale;
+
+  /// Spoken guidance volume (0.0–1.0, default 1.0). Applied to the TTS engine
+  /// at init and before every utterance.
+  final double voiceVolume;
+
+  /// Bluetooth auto-connect: automatically scan & reconnect to external display
+  /// (E-ink clock / ESP display) when in range or app launches.
+  final bool bleAutoConnect;
+
+  /// Remembered MAC address of the last connected BLE display.
+  final String lastBleMac;
+
+  /// Remembered display name (e.g. 'EINK-CLOCK' / 'NAV-OSM').
+  final String lastBleName;
+
+  /// Remembered BLE device type: 'clock' | 'map' | 'auto'.
+  final String lastBleType;
+
   const AppSettings({
     this.forceOffline = false,
     this.dataSource = 'osm',
     this.vehicleType = 'car',
-    this.geocodingProvider = 'photon',
+    this.geocodingProvider = 'google',
     this.routingEngine = 'auto',
     this.smoothCamera = true,
     this.cameraAlerts = true,
+    this.gpsFilter = true,
     this.radar = false,
     this.pipAspect = '34',
     this.ridingMode = false,
     this.simpleMode = false,
     this.wakeWord = 'dậy đi',
+    this.overlayLayout = 'vertical',
+    this.overlayScale = 1.0,
+    this.voiceVolume = 1.0,
+    this.bleAutoConnect = true,
+    this.lastBleMac = '',
+    this.lastBleName = '',
+    this.lastBleType = 'auto',
   });
 
   Map<String, dynamic> toJson() => {
@@ -74,13 +112,27 @@ class AppSettings {
     'routingEngine': routingEngine,
     'smoothCamera': smoothCamera,
     'cameraAlerts': cameraAlerts,
+    'gpsFilter': gpsFilter,
     'radar': radar,
     'pipAspect': pipAspect,
     'ridingMode': ridingMode,
     'simpleMode': simpleMode,
     'wakeWord': wakeWord,
+    'overlayLayout': overlayLayout,
+    'overlayScale': overlayScale,
+    'voiceVolume': voiceVolume,
+    'bleAutoConnect': bleAutoConnect,
+    'lastBleMac': lastBleMac,
+    'lastBleName': lastBleName,
+    'lastBleType': lastBleType,
   };
 }
+
+/// Global BLE auto-connect preference + remembered target device.
+bool bleAutoConnect = true;
+String lastBleMac = '';
+String lastBleName = '';
+String lastBleType = 'auto';
 
 Future<File> _settingsFile() async {
   final sup = await getApplicationSupportDirectory();
@@ -95,6 +147,22 @@ Future<AppSettings> loadSettings() async {
     // The user asked for the larger 3:4 PiP — migrate any older value so it
     // takes effect on existing installs instead of silently keeping 9:16/4:3.
     final rawPip = (j['pipAspect'] ?? '34') as String;
+    final rawLayout = (j['overlayLayout'] ?? 'vertical') as String;
+    // Map legacy layout names to vertical / horizontal.
+    final mappedLayout = switch (rawLayout) {
+      'pill' || 'horizontal' => 'horizontal',
+      _ => 'vertical',
+    };
+    final autoConnect = (j['bleAutoConnect'] ?? true) as bool;
+    final mac = (j['lastBleMac'] ?? '') as String;
+    final name = (j['lastBleName'] ?? '') as String;
+    final type = (j['lastBleType'] ?? 'auto') as String;
+
+    bleAutoConnect = autoConnect;
+    lastBleMac = mac;
+    lastBleName = name;
+    lastBleType = type;
+
     return AppSettings(
       forceOffline: (j['forceOffline'] ?? false) as bool,
       dataSource: (j['dataSource'] ?? 'osm') as String,
@@ -103,6 +171,7 @@ Future<AppSettings> loadSettings() async {
       routingEngine: (j['routingEngine'] ?? 'auto') as String,
       smoothCamera: (j['smoothCamera'] ?? true) as bool,
       cameraAlerts: (j['cameraAlerts'] ?? true) as bool,
+      gpsFilter: (j['gpsFilter'] ?? true) as bool,
       radar: (j['radar'] ?? false) as bool,
       pipAspect: (rawPip == 'portrait' || rawPip == 'landscape')
           ? '34'
@@ -110,6 +179,19 @@ Future<AppSettings> loadSettings() async {
       ridingMode: (j['ridingMode'] ?? false) as bool,
       simpleMode: (j['simpleMode'] ?? false) as bool,
       wakeWord: (j['wakeWord'] ?? 'dậy đi') as String,
+      overlayLayout: mappedLayout,
+      overlayScale: ((j['overlayScale'] ?? 1.0) as num).toDouble().clamp(
+        0.8,
+        1.5,
+      ),
+      voiceVolume: ((j['voiceVolume'] ?? 1.0) as num).toDouble().clamp(
+        0.0,
+        1.0,
+      ),
+      bleAutoConnect: autoConnect,
+      lastBleMac: mac,
+      lastBleName: name,
+      lastBleType: type,
     );
   } catch (_) {
     return const AppSettings();
@@ -118,6 +200,10 @@ Future<AppSettings> loadSettings() async {
 
 Future<void> saveSettings(AppSettings s) async {
   try {
+    bleAutoConnect = s.bleAutoConnect;
+    lastBleMac = s.lastBleMac;
+    lastBleName = s.lastBleName;
+    lastBleType = s.lastBleType;
     final f = await _settingsFile();
     await f.writeAsString(jsonEncode(s.toJson()), flush: true);
   } catch (_) {}

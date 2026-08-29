@@ -12,6 +12,8 @@ import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
+import 'offline_loader.dart';
+
 /// One offline POI with optional rich metadata (info card fields).
 class OfflinePoi {
   final String name;
@@ -98,45 +100,31 @@ class OfflinePoiCategory {
   });
 }
 
-List<OfflinePoiCategory>? _categories;
-bool _loaded = false;
-Future<List<OfflinePoiCategory>>? _loading;
+final OfflineListLoader<OfflinePoiCategory> _categories =
+    OfflineListLoader<OfflinePoiCategory>(_fetchCategories);
 
 /// Load the bundled POI index once (idempotent, returns the cached result).
-Future<List<OfflinePoiCategory>> loadOfflinePois() {
-  if (_categories != null) return Future.value(_categories!);
-  if (_loading != null) return _loading!;
-  final fut = _doLoad();
-  _loading = fut;
-  return fut;
-}
+Future<List<OfflinePoiCategory>> loadOfflinePois() => _categories.load();
 
-Future<List<OfflinePoiCategory>> _doLoad() async {
-  if (_loaded && _categories != null) return _categories!;
-  _loaded = true;
-  try {
-    final raw = await rootBundle.loadString(
-      'assets/offline_map/vietnam_pois.json',
-    );
-    final data = jsonDecode(raw) as Map<String, dynamic>;
-    _categories = [
-      for (final e in data.entries)
-        OfflinePoiCategory(
-          key: e.key,
-          label: (e.value['label'] ?? e.key) as String,
-          emoji: (e.value['emoji'] ?? '📍') as String,
-          items: [
-            for (final it
-                in (e.value['items'] as List? ?? const [])
-                    .cast<Map<String, dynamic>>())
-              OfflinePoi.fromJson(e.key, it),
-          ],
-        ),
-    ];
-  } catch (_) {
-    _categories = const [];
-  }
-  return _categories!;
+Future<List<OfflinePoiCategory>> _fetchCategories() async {
+  final raw = await rootBundle.loadString(
+    'assets/offline_map/vietnam_pois.json',
+  );
+  final data = jsonDecode(raw) as Map<String, dynamic>;
+  return [
+    for (final e in data.entries)
+      OfflinePoiCategory(
+        key: e.key,
+        label: (e.value['label'] ?? e.key) as String,
+        emoji: (e.value['emoji'] ?? '📍') as String,
+        items: [
+          for (final it
+              in (e.value['items'] as List? ?? const [])
+                  .cast<Map<String, dynamic>>())
+            OfflinePoi.fromJson(e.key, it),
+        ],
+      ),
+  ];
 }
 
 /// All categories (each with its items). Sorted alphabetically for stable UI.

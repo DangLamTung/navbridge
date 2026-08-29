@@ -11,6 +11,8 @@ import 'package:flutter/material.dart';
 import 'package:navbridge/services/ble_clock.dart';
 import 'package:navbridge/core/config.dart';
 
+import 'package:navbridge/core/settings.dart';
+
 class DevicePickerSheet extends StatefulWidget {
   final BleClock clock;
   final Future<void> Function(ScannedClockDevice device) onPicked;
@@ -157,15 +159,42 @@ class _DevicePickerSheetState extends State<DevicePickerSheet> {
                               : Icons.devices,
                           color: target ? Colors.green : null,
                         ),
-                        title: Text(
-                          d.name.isEmpty ? '(không có tên)' : d.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontWeight: target
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                          ),
+                        title: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                d.name.isEmpty ? '(không có tên)' : d.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontWeight: target
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                            if (lastBleMac.isNotEmpty &&
+                                d.id.toUpperCase() == lastBleMac.toUpperCase())
+                              Container(
+                                margin: const EdgeInsets.only(left: 6),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Text(
+                                  'Tự động kết nối',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.blue,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                         subtitle: Text('${d.id}  •  ${d.rssi} dBm'),
                         trailing: target

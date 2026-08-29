@@ -178,9 +178,20 @@ class NavForegroundService {
     }
   }
 
-  /// Push a live nav update to the notification (throttle: ~1 Hz is plenty).
+  /// Push a live nav update to the notification. Throttled to ~5 s so a busy
+  /// phone isn't rebuilding the platform notification + channel call on EVERY
+  /// GPS fix (1-2 Hz) — that per-fix platform work added up on low-end
+  /// devices and contributed to the long-route "not responding" CPU. The
+  /// notification showing a distance up to 5 s old is unnoticeable.
+  DateTime? _lastNavUpdate;
   Future<void> updateNav(NavProgress? nav, {String eta = ''}) async {
     if (nav == null) return;
+    final now = DateTime.now();
+    if (_lastNavUpdate != null &&
+        now.difference(_lastNavUpdate!) < const Duration(seconds: 5)) {
+      return;
+    }
+    _lastNavUpdate = now;
     final icon = '${iconSymbol(nav.iconCode)} ';
     final title = '$icon$eta';
     final text =

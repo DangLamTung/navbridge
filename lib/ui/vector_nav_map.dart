@@ -23,11 +23,12 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/offline_cameras.dart';
+import 'package:navbridge/services/offline_geo.dart';
 import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/poi_search.dart';
 import 'package:navbridge/ui/sign_icons.dart';
 import 'package:navbridge/services/terrain.dart';
-import 'package:navbridge/core/location_kalman.dart';
+import 'package:navbridge/core/car_filter.dart';
 import 'package:navbridge/core/route_snap.dart';
 import 'package:navbridge/core/trip_plan.dart';
 
@@ -46,6 +47,20 @@ const List<String> kCarIcons = [
   'plane',
 ];
 
+/// Big, always-visible emoji for a POI type. The map's offline font (Roboto)
+/// has NO emoji glyphs, so these are drawn as Flutter overlay markers (like
+/// the car arrow + sign icons), not native MapLibre symbols.
+String poiTypeEmoji(PoiType t) => switch (t) {
+  PoiType.fuel => '⛽',
+  PoiType.charging => '🔌',
+  PoiType.food => '🍜',
+  PoiType.cafeVong => '☕',
+  PoiType.hotel => '🏨',
+  PoiType.atm => '🏧',
+  PoiType.hospital => '🏥',
+  PoiType.parking => '🅿️',
+};
+
 /// Notifies the page about the nav-map camera follow state so it can render
 /// the auto-center button in a layer above the platform view (a sibling
 /// widget inside the map's Stack is occluded by the MapLibre platform view).
@@ -53,6 +68,12 @@ class VectorNavMapController extends ChangeNotifier {
   bool _following = true;
   bool get following => _following;
   VoidCallback? _recenter;
+
+  /// Latest zoom the nav vector map reached (default 19). Updated by the map
+  /// whenever the camera moves/settles, so the page can drive the floating-
+  /// widget auto-hide ("hidden when zoomed out") without owning the map.
+  double _zoom = 19;
+  double get zoom => _zoom;
 
   void attachRecenter(VoidCallback cb) => _recenter = cb;
   void recenter() => _recenter?.call();
@@ -62,6 +83,12 @@ class VectorNavMapController extends ChangeNotifier {
       _following = v;
       notifyListeners();
     }
+  }
+
+  void setZoom(double z) {
+    if ((z - _zoom).abs() < 0.01) return;
+    _zoom = z;
+    notifyListeners();
   }
 }
 
@@ -96,12 +123,17 @@ class VectorNavMap extends StatefulWidget {
     this.smoothCamera = true,
     this.controller,
     this.showCompass = true,
+    this.defaultZoom = 19,
     this.onPoiTap,
     this.signs = const [],
   });
 
   /// Route polyline to draw (latlong2 points).
   final List<ll.LatLng> routeGeometry;
+
+  /// Starting camera zoom (default 19 ≈ ~200 m view). The PiP window uses a
+  /// lower zoom (~17 ≈ ~1 km) since it can't be pinched.
+  final double defaultZoom;
 
   /// Route steps (maneuvers) — used for the traffic-colored route and the
   /// intersection (traffic-light) dots.
@@ -251,11 +283,7 @@ class _VectorNavMapState extends State<VectorNavMap>
   Line? _routeLine;
   final List<Line> _trafficLines = [];
   final List<Circle> _trafficLights = [];
-  final List<Circle> _poiCircles = [];
-  final List<Symbol> _poiSymbols = [];
   String? _lastPoiSig;
-  final List<Circle> _searchCircles = [];
-  final List<Symbol> _searchSymbols = [];
   String? _lastSearchSig;
   final List<Circle> _cameraCircles = [];
   String? _lastCameraSig;
@@ -264,12 +292,19 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// lights) projected to screen positions — rendered as Flutter overlays,
   /// refreshed with the camera.
   final List<({RoadSign sign, Offset pos})> _signOverlays = [];
+  DateTime? _lastSignProject; // throttle: reproject the sign layer ≤ ~4 Hz
+
+  /// POI / search-result markers projected to screen positions — rendered as
+  /// BIG EMOJI overlays (the offline font has no emoji glyphs, so native
+  /// MapLibre symbols can't show them). Refreshed with the camera.
+  final List<({PoiResult poi, Offset pos})> _poiOverlays = [];
+  final List<({PoiResult poi, Offset pos})> _searchOverlays = [];
   bool _hasPosition = false;
-  // Vietmap-style nav camera: start at max zoom with the car centered. The
-  // user can pinch to a different zoom — it's adopted (see [_onCamIdle]) so
-  // follow keeps the map at the zoom the user chose instead of snapping back
-  // to 19 (that's what made it feel "zoom in only").
-  double _zoom = 19;
+  // Vietmap-style nav camera: start at [widget.defaultZoom] (max for the full
+  // map, ~18 for the PiP window which can't be pinched). The user can pinch
+  // to a different zoom — it's adopted (see [_onCamIdle]) so follow keeps the
+  // map at the zoom the user chose instead of snapping back.
+  late double _zoom = widget.defaultZoom;
   String? _lastRouteSig;
 
   /// True when the nav-map tiles (PMTiles) are not on disk yet — either they
@@ -313,12 +348,13 @@ class _VectorNavMapState extends State<VectorNavMap>
   DateTime _lastCamStep = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastCamMove = DateTime.fromMillisecondsSinceEpoch(0);
 
-  /// Constant-velocity complementary (Kalman) filter: fuses the GPS fixes
-  /// into a smooth position + speed + heading, and dead-reckons between them
-  /// (~30 fps), so raw-fix jitter (rough-road vibration, GPS wander) never
-  /// makes the car arrow / map jump. The filtered position is snapped back
-  /// onto the route each frame so the puck rides the road.
-  final LocationKalman _lk = LocationKalman();
+  /// Constant-velocity complementary (low-pass) filter ([CarFilter]): fuses
+  /// the (already route-snapped) GPS fixes into a smooth position + speed +
+  /// heading, and dead-reckons between them (~30 fps), so raw-fix jitter
+  /// (rough-road vibration, GPS wander) never makes the car arrow / map jump.
+  /// The filtered position is snapped back onto the route each frame so the
+  /// puck rides the road.
+  final CarFilter _kf = CarFilter();
 
   /// 10 s idle → auto-center back on the car after the user pans away.
   Timer? _recenterTimer;
@@ -815,9 +851,13 @@ class _VectorNavMapState extends State<VectorNavMap>
   Future<void> _addRoute(int gen) async {
     final ctrl = _controller;
     if (ctrl == null || gen != _routeGen) return;
-    final pts = _drawnRoute()
-        .map((p) => LatLng(p.latitude, p.longitude))
-        .toList();
+    // DECIMATED for display: a long-distance route's full geometry (tens of
+    // thousands of vertices) uploaded to MapLibre on every redraw is what
+    // froze navigation. Projection/snapping still uses the FULL
+    // `widget.routeGeometry`; this is only the drawn line.
+    final pts = decimatePolyline(
+      _drawnRoute(),
+    ).map((p) => LatLng(p.latitude, p.longitude)).toList();
     if (pts.length < 2) return;
     // Bold Vietmap-style route: thick white casing under a solid blue line
     // (the navigation route is drawn large so it reads clearly at 320dpi).
@@ -883,61 +923,11 @@ class _VectorNavMapState extends State<VectorNavMap>
       pois.map((p) => '${p.type.key}:${p.lat},${p.lng}:${p.name}').join('|');
 
   Future<void> _updatePois() async {
-    final ctrl = _controller;
-    if (ctrl == null) return;
+    if (_controller == null) return;
     final sig = _poiSignature(widget.pois);
     if (sig == _lastPoiSig) return;
     _lastPoiSig = sig;
-    for (final c in _poiCircles) {
-      try {
-        ctrl.removeCircle(c);
-      } catch (_) {}
-    }
-    for (final s in _poiSymbols) {
-      try {
-        ctrl.removeSymbol(s);
-      } catch (_) {}
-    }
-    _poiCircles.clear();
-    _poiSymbols.clear();
-    for (final p in widget.pois) {
-      final col = switch (p.type) {
-        PoiType.fuel => '#F4B400',
-        PoiType.food => '#EA4335',
-        PoiType.cafeVong => '#B5651D',
-        PoiType.hotel => '#1A73E8',
-        PoiType.atm => '#9334E6',
-        PoiType.hospital => '#34A853',
-        PoiType.parking => '#5F6368',
-      };
-      final sel = identical(p, widget.selectedPoi);
-      try {
-        final c = await ctrl.addCircle(
-          CircleOptions(
-            geometry: LatLng(p.lat, p.lng),
-            circleColor: sel ? '#FF6F00' : col,
-            circleRadius: sel ? 16.0 : 9.0,
-            circleStrokeColor: sel ? '#202124' : '#FFFFFF',
-            circleStrokeWidth: sel ? 3.0 : 2.5,
-            circleOpacity: 0.95,
-          ),
-        );
-        _poiCircles.add(c);
-        final s = await ctrl.addSymbol(
-          SymbolOptions(
-            geometry: LatLng(p.lat, p.lng),
-            textField: p.name,
-            textSize: 12,
-            textColor: '#202124',
-            textHaloColor: '#FFFFFF',
-            textHaloWidth: 1.8,
-            textAnchor: 'bottom',
-            textOffset: const Offset(0, -0.4),
-          ),
-        );
-        _poiSymbols.add(s);
-      } catch (_) {}
-    }
+    unawaited(_projectPoiOverlays());
   }
 
   /// Search-bar place markers (blue dots + name) during navigation. Rebuilt
@@ -946,62 +936,136 @@ class _VectorNavMapState extends State<VectorNavMap>
       pois.map((p) => '${p.lat},${p.lng}:${p.name}').join('|');
 
   Future<void> _updateSearchPois() async {
-    final ctrl = _controller;
-    if (ctrl == null) return;
+    if (_controller == null) return;
     final sig = _searchSignature(widget.searchPois);
     if (sig == _lastSearchSig) return;
     _lastSearchSig = sig;
-    for (final c in _searchCircles) {
-      try {
-        ctrl.removeCircle(c);
-      } catch (_) {}
-    }
-    for (final s in _searchSymbols) {
-      try {
-        ctrl.removeSymbol(s);
-      } catch (_) {}
-    }
-    _searchCircles.clear();
-    _searchSymbols.clear();
-    for (final p in widget.searchPois) {
-      try {
-        final c = await ctrl.addCircle(
-          CircleOptions(
-            geometry: LatLng(p.lat, p.lng),
-            circleColor: '#1A73E8',
-            circleRadius: 10.0,
-            circleStrokeColor: '#FFFFFF',
-            circleStrokeWidth: 2.5,
-            circleOpacity: 0.95,
-          ),
-        );
-        _searchCircles.add(c);
-        final s = await ctrl.addSymbol(
-          SymbolOptions(
-            geometry: LatLng(p.lat, p.lng),
-            textField: p.name,
-            textSize: 12,
-            textColor: '#202124',
-            textHaloColor: '#FFFFFF',
-            textHaloWidth: 1.8,
-            textAnchor: 'bottom',
-            textOffset: const Offset(0, -0.4),
-          ),
-        );
-        _searchSymbols.add(s);
-      } catch (_) {}
-    }
+    unawaited(_projectSearchOverlays());
   }
 
-  /// Stable signature of the camera list (focus + position), so the layer is
-  /// rebuilt only when the set actually changes — not on every GPS fix.
-  String _cameraSignature(List<OfflineCamera> cams) => cams
-      .map(
-        (c) =>
-            '${c.focus}:${c.lat.toStringAsFixed(5)},'
-            '${c.lng.toStringAsFixed(5)}',
-      )
-      .join('|');
+  /// Project the POI markers (big emoji) to their on-screen spots so they
+  /// stay glued to the map while following/panning. Same device-px→logical
+  /// fix as the car arrow / sign icons.
+  Future<void> _projectPoiOverlays() async {
+    final ctrl = _controller;
+    if (ctrl == null) return;
+    final pois = widget.pois;
+    if (pois.isEmpty) {
+      if (_poiOverlays.isNotEmpty && mounted) {
+        setState(() => _poiOverlays.clear());
+      }
+      return;
+    }
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    try {
+      final pts = await ctrl.toScreenLocationBatch([
+        for (final p in pois) LatLng(p.lat, p.lng),
+      ]);
+      if (!mounted) return;
+      final list = <({PoiResult poi, Offset pos})>[];
+      for (var i = 0; i < pois.length; i++) {
+        list.add((
+          poi: pois[i],
+          pos: Offset(pts[i].x.toDouble() / dpr, pts[i].y.toDouble() / dpr),
+        ));
+      }
+      var changed = list.length != _poiOverlays.length;
+      if (!changed) {
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].poi != _poiOverlays[i].poi ||
+              list[i].pos != _poiOverlays[i].pos) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (changed) {
+        setState(() {
+          _poiOverlays
+            ..clear()
+            ..addAll(list);
+        });
+      }
+    } catch (_) {}
+  }
+
+  /// Project the search-bar result markers (📍) the same way.
+  Future<void> _projectSearchOverlays() async {
+    final ctrl = _controller;
+    if (ctrl == null) return;
+    final pois = widget.searchPois;
+    if (pois.isEmpty) {
+      if (_searchOverlays.isNotEmpty && mounted) {
+        setState(() => _searchOverlays.clear());
+      }
+      return;
+    }
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    try {
+      final pts = await ctrl.toScreenLocationBatch([
+        for (final p in pois) LatLng(p.lat, p.lng),
+      ]);
+      if (!mounted) return;
+      final list = <({PoiResult poi, Offset pos})>[];
+      for (var i = 0; i < pois.length; i++) {
+        list.add((
+          poi: pois[i],
+          pos: Offset(pts[i].x.toDouble() / dpr, pts[i].y.toDouble() / dpr),
+        ));
+      }
+      var changed = list.length != _searchOverlays.length;
+      if (!changed) {
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].poi != _searchOverlays[i].poi ||
+              list[i].pos != _searchOverlays[i].pos) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (changed) {
+        setState(() {
+          _searchOverlays
+            ..clear()
+            ..addAll(list);
+        });
+      }
+    } catch (_) {}
+  }
+
+  /// Stable signature of the camera list (focus + position) plus a coarse
+  /// ~1 km car-position bucket, so the nearest-N layer is rebuilt only when
+  /// the set actually changes — not on every GPS fix.
+  String _cameraSignature(List<OfflineCamera> cams, ll.LatLng? cur) {
+    final bx = cur == null ? 0 : (cur.latitude * 100).round();
+    final by = cur == null ? 0 : (cur.longitude * 100).round();
+    final core = cams
+        .map(
+          (c) =>
+              '${c.focus}:${c.lat.toStringAsFixed(5)},'
+              '${c.lng.toStringAsFixed(5)}',
+        )
+        .join('|');
+    return '$bx,$by|$core';
+  }
+
+  /// Cap [cams] to the [max] nearest to [cur] (perf: 4 native circles per
+  /// camera — hundreds of circle adds freeze the map on dense cities).
+  List<OfflineCamera> _nearestCameras(
+    List<OfflineCamera> cams,
+    int max,
+    ll.LatLng? cur,
+  ) {
+    if (cams.length <= max || cur == null) return cams;
+    final s = [...cams];
+    s.sort(
+      (a, b) => _distMeters(
+        cur,
+        ll.LatLng(a.lat, a.lng),
+      ).compareTo(_distMeters(cur, ll.LatLng(b.lat, b.lng))),
+    );
+    return s.take(max).toList();
+  }
 
   /// Camera markers (colored dot per focus) on the nav map. Mirrors
   /// [_updatePois]: clear-then-rebuild when the signature changes.
@@ -1013,8 +1077,11 @@ class _VectorNavMapState extends State<VectorNavMap>
   Future<void> _updateCameras() async {
     final ctrl = _controller;
     if (ctrl == null) return;
-    final cams = widget.cameras;
-    final sig = _cameraSignature(cams);
+    // Perf: 4 native circles per camera — cap to the ~60 nearest to the car
+    // (HCMC has ~700; far ones aren't useful while driving).
+    final cur = widget.current;
+    final cams = _nearestCameras(widget.cameras, 60, cur);
+    final sig = _cameraSignature(cams, cur);
     if (sig == _lastCameraSig) return;
     _lastCameraSig = sig;
     debugPrint('VECTORMAP: camera layer n=${cams.length}');
@@ -1030,6 +1097,14 @@ class _VectorNavMapState extends State<VectorNavMap>
         'red_light' => '#F9AB00', // amber — red-light camera
         _ => '#4285F4', // blue — general enforcement
       };
+      // Camera source shown as a thin ring around the body so the driver can
+      // trust the origin: waze=purple · police=teal · osm=green · ?=grey.
+      final srcCol = switch (c.source) {
+        'waze' => '#7B1FA2', // Waze community speed-camera tiles
+        'police' => '#00897B', // police phạt nguội fine lists
+        'osm' => '#34A853', // OSM Overpass
+        _ => '#5F6368',
+      };
       try {
         // Camera-lens look (cheap native circles that read as a camera at a
         // glance): soft coloured glow → coloured body with a white ring →
@@ -1044,6 +1119,17 @@ class _VectorNavMapState extends State<VectorNavMap>
             circleStrokeColor: '#202124',
             circleStrokeWidth: 3.0,
             circleOpacity: 0.30,
+          ),
+        );
+        // Source ring (transparent fill, coloured stroke) between glow+body.
+        final srcRing = await ctrl.addCircle(
+          CircleOptions(
+            geometry: LatLng(c.lat, c.lng),
+            circleColor: '#00000000',
+            circleRadius: 9.6,
+            circleStrokeColor: srcCol,
+            circleStrokeWidth: 1.8,
+            circleOpacity: 0.95,
           ),
         );
         final body = await ctrl.addCircle(
@@ -1076,6 +1162,7 @@ class _VectorNavMapState extends State<VectorNavMap>
           ),
         );
         _cameraCircles.add(glow);
+        _cameraCircles.add(srcRing);
         _cameraCircles.add(body);
         _cameraCircles.add(lens);
         _cameraCircles.add(pupil);
@@ -1107,6 +1194,14 @@ class _VectorNavMapState extends State<VectorNavMap>
       }
       return;
     }
+    // Throttle: the car-follow camera fires this every frame; reprojecting the
+    // real-image sign layer at most ~4 Hz keeps the low-end phone smooth.
+    final now = DateTime.now();
+    if (_lastSignProject != null &&
+        now.difference(_lastSignProject!) < const Duration(milliseconds: 250)) {
+      return;
+    }
+    _lastSignProject = now;
     final dpr = MediaQuery.of(context).devicePixelRatio;
     try {
       final pts = await ctrl.toScreenLocationBatch([
@@ -1276,7 +1371,10 @@ class _VectorNavMapState extends State<VectorNavMap>
     // Adopt the live camera zoom (whatever the user pinched to) so follow
     // never forces the zoom back to the initial max.
     final live = ctrl.cameraPosition;
-    if (live != null && live.zoom >= 3) _zoom = live.zoom.clamp(3.0, 19.0);
+    if (live != null && live.zoom >= 3) {
+      _zoom = live.zoom.clamp(3.0, 19.0);
+      widget.controller?.setZoom(_zoom);
+    }
     if (ctrl.isCameraMoving) return;
     final bearing = _bearing();
     final ahead = _followTarget(car, bearing > 0 ? bearing : 0, _zoom);
@@ -1337,12 +1435,13 @@ class _VectorNavMapState extends State<VectorNavMap>
     _lastCamStep = now;
     // Dead-reckon the complementary filter between fixes (~30 fps) so the
     // camera keeps gliding smoothly; snap the predicted position back onto
-    // the route so it never cuts a corner (Google-style "puck rides road").
+    // the route so it never cuts a corner (Google-style "puck rides road")
+    // and pin the filter to the road so the next glide starts from it.
     if (dtS > 0 && dtS < 1.0) {
-      final p = _lk.predict(dtS);
+      final p = _kf.predict(dtS);
       final snapped = _snapToRoute(p);
       _drPos = snapped;
-      _lk.snapTo(snapped);
+      _kf.snapTo(snapped);
     }
     // Parked + settled → stop ticking until the next GPS fix (saves battery).
     if (_drSpeedMps < 1.0 &&
@@ -1377,6 +1476,8 @@ class _VectorNavMapState extends State<VectorNavMap>
     if (last == null || !_hasPosition) return;
     final cam = ctrl.cameraPosition;
     if (cam == null) return;
+    // Report the settled zoom (incl. a user pinch while follow is paused).
+    widget.controller?.setZoom(cam.zoom.clamp(3.0, 19.0));
     final t = cam.target;
     final targetClose =
         _distMeters(
@@ -1412,6 +1513,8 @@ class _VectorNavMapState extends State<VectorNavMap>
     final c = _drPos ?? widget.current; // arrow follows the Kalman position
     if (ctrl == null || c == null) return;
     unawaited(_projectSignOverlays()); // keep real sign icons glued to map
+    unawaited(_projectPoiOverlays()); // POI emoji markers glued to map
+    unawaited(_projectSearchOverlays()); // search-result markers glued to map
     try {
       final size = MediaQuery.of(context).size;
       final dpr = MediaQuery.of(context).devicePixelRatio;
@@ -1571,20 +1674,19 @@ class _VectorNavMapState extends State<VectorNavMap>
     if (old.selectedPoi != widget.selectedPoi && widget.selectedPoi != null) {
       _focusPoi(widget.selectedPoi!);
     }
-    // Complementary (Kalman) filter: fuse the fix (trusted by its accuracy)
-    // + the receiver's speed into a smooth position/velocity, so vibration
-    // jitter in the raw fixes doesn't make the arrow/map jump. The filtered
-    // position is then projected onto the route so the puck rides the road.
+    // Complementary + low-pass filter: smooth the speed, follow the route
+    // bearing for the dead-reckon, and fuse each (already route-snapped) fix
+    // so vibration jitter never jumps the arrow/map. The fused position is
+    // then snapped back onto the route so the puck rides the road, and the
+    // filter is pinned there so it can't accumulate off-road error.
     final newCur = widget.current;
     if (newCur != null && newCur != old.current) {
       final now = DateTime.now();
-      _lk.update(
-        newCur,
-        accuracy: widget.gpsAccuracy,
-        speedMps: widget.speedMps,
-      );
-      _drPos = _snapToRoute(_lk.position ?? newCur);
-      _drSpeedMps = _lk.speedMps;
+      _kf.update(newCur, routeBearing: _routeBearing());
+      final fused = _snapToRoute(_kf.position);
+      _drPos = fused;
+      _kf.snapTo(fused);
+      _drSpeedMps = _kf.speedMps;
       _drLastFix = now;
     }
     _followPosition();
@@ -1599,11 +1701,21 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// handles are invalidated by `setStyle`, so clear them — the plugin's
   /// style-loaded callback re-creates the route + puck + POIs.
   Future<void> _reloadStyle(MapLibreMapController ctrl, String style) async {
+    final prev = ctrl.cameraPosition;
     _resetAnnotations();
     try {
       await ctrl.setStyle(style);
     } catch (e) {
       debugPrint('VECTORMAP: setStyle failed: $e');
+    }
+    // setStyle resets the camera to the style default — restore the previous
+    // view (zoom/center/bearing) so toggling radar / satellite / night /
+    // terrain does NOT jump the map zoom (the "zzooom" bug). Follow re-takes
+    // the wheel right after, keeping the user's chosen zoom.
+    if (prev != null && mounted) {
+      try {
+        ctrl.moveCamera(CameraUpdate.newCameraPosition(prev));
+      } catch (_) {}
     }
     if (mounted) _followPosition();
   }
@@ -1620,11 +1732,9 @@ class _VectorNavMapState extends State<VectorNavMap>
     _routeLine = null;
     _trafficLines.clear();
     _trafficLights.clear();
-    _poiCircles.clear();
-    _poiSymbols.clear();
-    _searchCircles.clear();
-    _searchSymbols.clear();
     _cameraCircles.clear();
+    _poiOverlays.clear();
+    _searchOverlays.clear();
   }
 
   /// Center the camera on the tapped POI and pause auto-follow so the user
@@ -1654,15 +1764,18 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// page can select it and offer navigation. No POI near the tap → nothing.
   Future<void> _maybeTapPoi(math.Point<double> point) async {
     final ctrl = _controller;
-    final pois = widget.pois;
-    if (ctrl == null || pois.isEmpty) return;
+    if (ctrl == null) return;
+    // Hit-test BOTH the POI markers (⛽/🍜/…) and the search-result markers
+    // (📍) — the emoji markers are big, so the tap radius is roomy.
+    final all = [...widget.pois, ...widget.searchPois];
+    if (all.isEmpty) return;
     try {
       // Convert to maplibre LatLng (the controller's screen-projection API
       // expects maplibre's LatLng, not latlong2's).
       final pts = await ctrl.toScreenLocationBatch([
-        for (final p in pois) LatLng(p.pos.latitude, p.pos.longitude),
+        for (final p in all) LatLng(p.pos.latitude, p.pos.longitude),
       ]);
-      var best = 42.0 * 42.0; // ~42 px tap radius
+      var best = 54.0 * 54.0; // bigger emoji markers → roomier tap radius
       var bestIdx = -1;
       for (var i = 0; i < pts.length; i++) {
         final s = pts[i];
@@ -1674,7 +1787,7 @@ class _VectorNavMapState extends State<VectorNavMap>
           bestIdx = i;
         }
       }
-      if (bestIdx >= 0) widget.onPoiTap?.call(pois[bestIdx]);
+      if (bestIdx >= 0) widget.onPoiTap?.call(all[bestIdx]);
     } catch (_) {
       // Hit-test is best-effort — a failure just means the tap did nothing.
     }
@@ -1807,7 +1920,50 @@ class _VectorNavMapState extends State<VectorNavMap>
               child: SignIcon(kind: o.sign.kind, value: o.sign.value, size: 40),
             ),
           ),
+        // POI emoji markers (⛽ 🍜 ☕ …) — big + always visible, projected like
+        // the car arrow. The tapped/selected POI renders larger. TAPPABLE:
+        // a tap selects the POI (follow pauses + the bottom card shows the
+        // "Đi đến" action).
+        for (final o in _poiOverlays)
+          Positioned(
+            left: o.pos.dx - 16,
+            top: o.pos.dy - 30,
+            child: _tapMarker(
+              widget.onPoiTap == null
+                  ? null
+                  : () => widget.onPoiTap!.call(o.poi),
+              _PoiEmojiMarker(
+                emoji: poiTypeEmoji(o.poi.type),
+                label: o.poi.name,
+                selected: identical(o.poi, widget.selectedPoi),
+              ),
+            ),
+          ),
+        // Search-bar result markers (📍) — same emoji treatment, tappable.
+        for (final o in _searchOverlays)
+          Positioned(
+            left: o.pos.dx - 16,
+            top: o.pos.dy - 30,
+            child: _tapMarker(
+              widget.onPoiTap == null
+                  ? null
+                  : () => widget.onPoiTap!.call(o.poi),
+              _PoiEmojiMarker(emoji: '📍', label: o.poi.name),
+            ),
+          ),
       ],
+    );
+  }
+
+  /// Small tappable wrapper for map markers: a tap fires [onTap]; no drag
+  /// recognizer, so dragging the map over a marker still pans. When [onTap]
+  /// is null it behaves like the old IgnorePointer (non-interactive).
+  Widget _tapMarker(VoidCallback? onTap, Widget child) {
+    if (onTap == null) return IgnorePointer(child: child);
+    return GestureDetector(
+      behavior: HitTestBehavior.deferToChild,
+      onTap: onTap,
+      child: child,
     );
   }
 
@@ -1868,6 +2024,63 @@ class _VectorNavMapState extends State<VectorNavMap>
 
 /// Numbered waypoint marker for a trip stop (Google-style "1", "2", …). The
 /// last stop (the destination) is drawn in red so it reads as the goal.
+/// A big emoji marker (with a small name label) for a POI / search result on
+/// the nav map — drawn as a Flutter overlay because the offline font has no
+/// emoji glyphs. The emoji bottom sits on the map point (like a pin).
+class _PoiEmojiMarker extends StatelessWidget {
+  final String emoji;
+  final String label;
+  final bool selected;
+  const _PoiEmojiMarker({
+    required this.emoji,
+    required this.label,
+    this.selected = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          emoji,
+          style: TextStyle(
+            fontSize: selected ? 42 : 30,
+            height: 1.0,
+            shadows: const [
+              Shadow(
+                color: Colors.black54,
+                blurRadius: 4,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+        ),
+        if (label.isNotEmpty)
+          Container(
+            margin: const EdgeInsets.only(top: 1),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            constraints: const BoxConstraints(maxWidth: 130),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.92),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: Colors.black,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _StopMarker extends StatelessWidget {
   const _StopMarker({required this.index, required this.isDest});
 

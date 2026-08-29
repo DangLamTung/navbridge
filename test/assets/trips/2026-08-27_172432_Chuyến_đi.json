@@ -1,0 +1,8939 @@
+{
+  "locations": [
+    {
+      "timestampMs": "1787826272562",
+      "latitudeE7": 108011397,
+      "longitudeE7": 1066406899,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 90,
+      "activity": [
+        {
+          "timestampMs": "1787826272562",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826273734",
+      "latitudeE7": 108011334,
+      "longitudeE7": 1066406740,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 90,
+      "activity": [
+        {
+          "timestampMs": "1787826273734",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826278804",
+      "latitudeE7": 108011330,
+      "longitudeE7": 1066406622,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 90,
+      "activity": [
+        {
+          "timestampMs": "1787826278804",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826285673",
+      "latitudeE7": 108011316,
+      "longitudeE7": 1066406541,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 90,
+      "activity": [
+        {
+          "timestampMs": "1787826285673",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826292532",
+      "latitudeE7": 108011386,
+      "longitudeE7": 1066406506,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 90,
+      "activity": [
+        {
+          "timestampMs": "1787826292532",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826300707",
+      "latitudeE7": 108011464,
+      "longitudeE7": 1066406517,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 90,
+      "activity": [
+        {
+          "timestampMs": "1787826300707",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826302489",
+      "latitudeE7": 108011460,
+      "longitudeE7": 1066406526,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826302489",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826303512",
+      "latitudeE7": 108011460,
+      "longitudeE7": 1066406527,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826303512",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826306024",
+      "latitudeE7": 108011459,
+      "longitudeE7": 1066406527,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826306024",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826308627",
+      "latitudeE7": 108011455,
+      "longitudeE7": 1066406527,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826308627",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826310824",
+      "latitudeE7": 108011399,
+      "longitudeE7": 1066406491,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826310824",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826313514",
+      "latitudeE7": 108011394,
+      "longitudeE7": 1066406489,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826313514",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826314526",
+      "latitudeE7": 108011390,
+      "longitudeE7": 1066406479,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 169,
+      "activity": [
+        {
+          "timestampMs": "1787826314526",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826321882",
+      "latitudeE7": 108008657,
+      "longitudeE7": 1066408694,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 141,
+      "activity": [
+        {
+          "timestampMs": "1787826321882",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826330165",
+      "latitudeE7": 108009650,
+      "longitudeE7": 1066412291,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 141,
+      "activity": [
+        {
+          "timestampMs": "1787826330165",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826338868",
+      "latitudeE7": 108008936,
+      "longitudeE7": 1066415495,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 103,
+      "activity": [
+        {
+          "timestampMs": "1787826338868",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826346271",
+      "latitudeE7": 108004132,
+      "longitudeE7": 1066414413,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 103,
+      "activity": [
+        {
+          "timestampMs": "1787826346271",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826354787",
+      "latitudeE7": 108011676,
+      "longitudeE7": 1066410599,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 103,
+      "activity": [
+        {
+          "timestampMs": "1787826354787",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826362330",
+      "latitudeE7": 108009637,
+      "longitudeE7": 1066411858,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 103,
+      "activity": [
+        {
+          "timestampMs": "1787826362330",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826371116",
+      "latitudeE7": 108009982,
+      "longitudeE7": 1066411837,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 103,
+      "activity": [
+        {
+          "timestampMs": "1787826371116",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826378910",
+      "latitudeE7": 108010561,
+      "longitudeE7": 1066413917,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 74,
+      "activity": [
+        {
+          "timestampMs": "1787826378910",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826385476",
+      "latitudeE7": 108008028,
+      "longitudeE7": 1066415198,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 74,
+      "activity": [
+        {
+          "timestampMs": "1787826385476",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826394386",
+      "latitudeE7": 108004019,
+      "longitudeE7": 1066414287,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 74,
+      "activity": [
+        {
+          "timestampMs": "1787826394386",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826396817",
+      "latitudeE7": 108003526,
+      "longitudeE7": 1066419072,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 96,
+      "activity": [
+        {
+          "timestampMs": "1787826396817",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826397760",
+      "latitudeE7": 108002467,
+      "longitudeE7": 1066416145,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 96,
+      "activity": [
+        {
+          "timestampMs": "1787826397760",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826398829",
+      "latitudeE7": 108002311,
+      "longitudeE7": 1066416078,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 96,
+      "activity": [
+        {
+          "timestampMs": "1787826398829",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826399745",
+      "latitudeE7": 108001952,
+      "longitudeE7": 1066416552,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 128,
+      "activity": [
+        {
+          "timestampMs": "1787826399745",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826400765",
+      "latitudeE7": 108001302,
+      "longitudeE7": 1066415991,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 128,
+      "activity": [
+        {
+          "timestampMs": "1787826400765",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826401760",
+      "latitudeE7": 108000876,
+      "longitudeE7": 1066415658,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 218,
+      "activity": [
+        {
+          "timestampMs": "1787826401760",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826402788",
+      "latitudeE7": 108000499,
+      "longitudeE7": 1066415488,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 204,
+      "activity": [
+        {
+          "timestampMs": "1787826402788",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826404766",
+      "latitudeE7": 107999823,
+      "longitudeE7": 1066415273,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 201,
+      "activity": [
+        {
+          "timestampMs": "1787826404766",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826405777",
+      "latitudeE7": 107999470,
+      "longitudeE7": 1066415193,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 193,
+      "activity": [
+        {
+          "timestampMs": "1787826405777",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826406799",
+      "latitudeE7": 107999217,
+      "longitudeE7": 1066414885,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 230,
+      "activity": [
+        {
+          "timestampMs": "1787826406799",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826407793",
+      "latitudeE7": 107998900,
+      "longitudeE7": 1066414425,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 235,
+      "activity": [
+        {
+          "timestampMs": "1787826407793",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826408765",
+      "latitudeE7": 107998589,
+      "longitudeE7": 1066414060,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 229,
+      "activity": [
+        {
+          "timestampMs": "1787826408765",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826409769",
+      "latitudeE7": 107998158,
+      "longitudeE7": 1066413758,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 215,
+      "activity": [
+        {
+          "timestampMs": "1787826409769",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826410796",
+      "latitudeE7": 107997841,
+      "longitudeE7": 1066413586,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 208,
+      "activity": [
+        {
+          "timestampMs": "1787826410796",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826411806",
+      "latitudeE7": 107997586,
+      "longitudeE7": 1066413435,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 210,
+      "activity": [
+        {
+          "timestampMs": "1787826411806",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826413783",
+      "latitudeE7": 107997120,
+      "longitudeE7": 1066413296,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 196,
+      "activity": [
+        {
+          "timestampMs": "1787826413783",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826415780",
+      "latitudeE7": 107996868,
+      "longitudeE7": 1066413196,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 225,
+      "activity": [
+        {
+          "timestampMs": "1787826415780",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826416802",
+      "latitudeE7": 107996834,
+      "longitudeE7": 1066413251,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 225,
+      "activity": [
+        {
+          "timestampMs": "1787826416802",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826418700",
+      "latitudeE7": 107996712,
+      "longitudeE7": 1066413271,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826418700",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826420576",
+      "latitudeE7": 107996680,
+      "longitudeE7": 1066413244,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826420576",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826423271",
+      "latitudeE7": 107996628,
+      "longitudeE7": 1066413243,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 225,
+      "activity": [
+        {
+          "timestampMs": "1787826423271",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826425246",
+      "latitudeE7": 107996599,
+      "longitudeE7": 1066413249,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826425246",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826426265",
+      "latitudeE7": 107996586,
+      "longitudeE7": 1066413249,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826426265",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826428292",
+      "latitudeE7": 107996568,
+      "longitudeE7": 1066413242,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826428292",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826430262",
+      "latitudeE7": 107996568,
+      "longitudeE7": 1066413242,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826430262",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826432256",
+      "latitudeE7": 107996568,
+      "longitudeE7": 1066413242,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826432256",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826433256",
+      "latitudeE7": 107996568,
+      "longitudeE7": 1066413242,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826433256",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826434258",
+      "latitudeE7": 107996568,
+      "longitudeE7": 1066413242,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826434258",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826435262",
+      "latitudeE7": 107996568,
+      "longitudeE7": 1066413242,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826435262",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826437252",
+      "latitudeE7": 107996568,
+      "longitudeE7": 1066413242,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 225,
+      "activity": [
+        {
+          "timestampMs": "1787826437252",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826438271",
+      "latitudeE7": 107996568,
+      "longitudeE7": 1066413242,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826438271",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826440266",
+      "latitudeE7": 107996530,
+      "longitudeE7": 1066413244,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826440266",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826442255",
+      "latitudeE7": 107996368,
+      "longitudeE7": 1066413103,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 208,
+      "activity": [
+        {
+          "timestampMs": "1787826442255",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826443268",
+      "latitudeE7": 107996200,
+      "longitudeE7": 1066413001,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 211,
+      "activity": [
+        {
+          "timestampMs": "1787826443268",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826445259",
+      "latitudeE7": 107995773,
+      "longitudeE7": 1066412749,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 211,
+      "activity": [
+        {
+          "timestampMs": "1787826445259",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826447251",
+      "latitudeE7": 107995382,
+      "longitudeE7": 1066412591,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 187,
+      "activity": [
+        {
+          "timestampMs": "1787826447251",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826448251",
+      "latitudeE7": 107995278,
+      "longitudeE7": 1066412543,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 199,
+      "activity": [
+        {
+          "timestampMs": "1787826448251",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826449259",
+      "latitudeE7": 107995161,
+      "longitudeE7": 1066412462,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 179,
+      "activity": [
+        {
+          "timestampMs": "1787826449259",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826451262",
+      "latitudeE7": 107994798,
+      "longitudeE7": 1066412444,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 177,
+      "activity": [
+        {
+          "timestampMs": "1787826451262",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826453272",
+      "latitudeE7": 107994321,
+      "longitudeE7": 1066412809,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 134,
+      "activity": [
+        {
+          "timestampMs": "1787826453272",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826454279",
+      "latitudeE7": 107994044,
+      "longitudeE7": 1066413190,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 127,
+      "activity": [
+        {
+          "timestampMs": "1787826454279",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826455262",
+      "latitudeE7": 107993704,
+      "longitudeE7": 1066413608,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 130,
+      "activity": [
+        {
+          "timestampMs": "1787826455262",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826456257",
+      "latitudeE7": 107993381,
+      "longitudeE7": 1066414018,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 129,
+      "activity": [
+        {
+          "timestampMs": "1787826456257",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826457293",
+      "latitudeE7": 107993127,
+      "longitudeE7": 1066414423,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 123,
+      "activity": [
+        {
+          "timestampMs": "1787826457293",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826458303",
+      "latitudeE7": 107992872,
+      "longitudeE7": 1066414798,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 125,
+      "activity": [
+        {
+          "timestampMs": "1787826458303",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826459293",
+      "latitudeE7": 107992598,
+      "longitudeE7": 1066415251,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 122,
+      "activity": [
+        {
+          "timestampMs": "1787826459293",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826460264",
+      "latitudeE7": 107992299,
+      "longitudeE7": 1066415750,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 121,
+      "activity": [
+        {
+          "timestampMs": "1787826460264",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826461248",
+      "latitudeE7": 107992038,
+      "longitudeE7": 1066416287,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 116,
+      "activity": [
+        {
+          "timestampMs": "1787826461248",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826462258",
+      "latitudeE7": 107991836,
+      "longitudeE7": 1066416847,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 110,
+      "activity": [
+        {
+          "timestampMs": "1787826462258",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826463258",
+      "latitudeE7": 107991547,
+      "longitudeE7": 1066417250,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 126,
+      "activity": [
+        {
+          "timestampMs": "1787826463258",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826464271",
+      "latitudeE7": 107991223,
+      "longitudeE7": 1066417619,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 132,
+      "activity": [
+        {
+          "timestampMs": "1787826464271",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826465276",
+      "latitudeE7": 107991041,
+      "longitudeE7": 1066417968,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 118,
+      "activity": [
+        {
+          "timestampMs": "1787826465276",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826467270",
+      "latitudeE7": 107990740,
+      "longitudeE7": 1066418708,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 114,
+      "activity": [
+        {
+          "timestampMs": "1787826467270",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826468276",
+      "latitudeE7": 107990484,
+      "longitudeE7": 1066419028,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 129,
+      "activity": [
+        {
+          "timestampMs": "1787826468276",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826469266",
+      "latitudeE7": 107990083,
+      "longitudeE7": 1066419250,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 151,
+      "activity": [
+        {
+          "timestampMs": "1787826469266",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826470278",
+      "latitudeE7": 107989639,
+      "longitudeE7": 1066419327,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 170,
+      "activity": [
+        {
+          "timestampMs": "1787826470278",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826472273",
+      "latitudeE7": 107988906,
+      "longitudeE7": 1066419262,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 183,
+      "activity": [
+        {
+          "timestampMs": "1787826472273",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826474263",
+      "latitudeE7": 107988202,
+      "longitudeE7": 1066419238,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 190,
+      "activity": [
+        {
+          "timestampMs": "1787826474263",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826475265",
+      "latitudeE7": 107987806,
+      "longitudeE7": 1066419218,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 183,
+      "activity": [
+        {
+          "timestampMs": "1787826475265",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826476262",
+      "latitudeE7": 107987358,
+      "longitudeE7": 1066419104,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 194,
+      "activity": [
+        {
+          "timestampMs": "1787826476262",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826477269",
+      "latitudeE7": 107986915,
+      "longitudeE7": 1066418969,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826477269",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826478254",
+      "latitudeE7": 107986381,
+      "longitudeE7": 1066418841,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 193,
+      "activity": [
+        {
+          "timestampMs": "1787826478254",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826479254",
+      "latitudeE7": 107985828,
+      "longitudeE7": 1066418718,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 192,
+      "activity": [
+        {
+          "timestampMs": "1787826479254",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826480257",
+      "latitudeE7": 107985294,
+      "longitudeE7": 1066418638,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 188,
+      "activity": [
+        {
+          "timestampMs": "1787826480257",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826481264",
+      "latitudeE7": 107984734,
+      "longitudeE7": 1066418493,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 194,
+      "activity": [
+        {
+          "timestampMs": "1787826481264",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826482259",
+      "latitudeE7": 107984153,
+      "longitudeE7": 1066418353,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 193,
+      "activity": [
+        {
+          "timestampMs": "1787826482259",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826483258",
+      "latitudeE7": 107983572,
+      "longitudeE7": 1066418204,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 194,
+      "activity": [
+        {
+          "timestampMs": "1787826483258",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826484254",
+      "latitudeE7": 107983003,
+      "longitudeE7": 1066418032,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826484254",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826485273",
+      "latitudeE7": 107982467,
+      "longitudeE7": 1066417918,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 192,
+      "activity": [
+        {
+          "timestampMs": "1787826485273",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826486280",
+      "latitudeE7": 107982060,
+      "longitudeE7": 1066417861,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 188,
+      "activity": [
+        {
+          "timestampMs": "1787826486280",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826487287",
+      "latitudeE7": 107981652,
+      "longitudeE7": 1066417821,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 186,
+      "activity": [
+        {
+          "timestampMs": "1787826487287",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826489257",
+      "latitudeE7": 107980831,
+      "longitudeE7": 1066417563,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 202,
+      "activity": [
+        {
+          "timestampMs": "1787826489257",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826490285",
+      "latitudeE7": 107980370,
+      "longitudeE7": 1066417319,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 207,
+      "activity": [
+        {
+          "timestampMs": "1787826490285",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826491265",
+      "latitudeE7": 107979810,
+      "longitudeE7": 1066417131,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 198,
+      "activity": [
+        {
+          "timestampMs": "1787826491265",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826492251",
+      "latitudeE7": 107979207,
+      "longitudeE7": 1066416964,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 195,
+      "activity": [
+        {
+          "timestampMs": "1787826492251",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826493293",
+      "latitudeE7": 107978637,
+      "longitudeE7": 1066416774,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 198,
+      "activity": [
+        {
+          "timestampMs": "1787826493293",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826494265",
+      "latitudeE7": 107978086,
+      "longitudeE7": 1066416519,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 204,
+      "activity": [
+        {
+          "timestampMs": "1787826494265",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826495262",
+      "latitudeE7": 107977544,
+      "longitudeE7": 1066416271,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 204,
+      "activity": [
+        {
+          "timestampMs": "1787826495262",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826496255",
+      "latitudeE7": 107976981,
+      "longitudeE7": 1066415964,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 208,
+      "activity": [
+        {
+          "timestampMs": "1787826496255",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826497259",
+      "latitudeE7": 107976404,
+      "longitudeE7": 1066415697,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 204,
+      "activity": [
+        {
+          "timestampMs": "1787826497259",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826498249",
+      "latitudeE7": 107975799,
+      "longitudeE7": 1066415446,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 202,
+      "activity": [
+        {
+          "timestampMs": "1787826498249",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826499270",
+      "latitudeE7": 107975185,
+      "longitudeE7": 1066415243,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 198,
+      "activity": [
+        {
+          "timestampMs": "1787826499270",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826500257",
+      "latitudeE7": 107974596,
+      "longitudeE7": 1066415127,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 191,
+      "activity": [
+        {
+          "timestampMs": "1787826500257",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826501254",
+      "latitudeE7": 107974049,
+      "longitudeE7": 1066414964,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 196,
+      "activity": [
+        {
+          "timestampMs": "1787826501254",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826502268",
+      "latitudeE7": 107973481,
+      "longitudeE7": 1066414844,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 192,
+      "activity": [
+        {
+          "timestampMs": "1787826502268",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826503261",
+      "latitudeE7": 107972895,
+      "longitudeE7": 1066414677,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 196,
+      "activity": [
+        {
+          "timestampMs": "1787826503261",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826504270",
+      "latitudeE7": 107972256,
+      "longitudeE7": 1066414474,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826504270",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826505268",
+      "latitudeE7": 107971621,
+      "longitudeE7": 1066414218,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 202,
+      "activity": [
+        {
+          "timestampMs": "1787826505268",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826506259",
+      "latitudeE7": 107970946,
+      "longitudeE7": 1066414026,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 196,
+      "activity": [
+        {
+          "timestampMs": "1787826506259",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826507287",
+      "latitudeE7": 107970249,
+      "longitudeE7": 1066413875,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 192,
+      "activity": [
+        {
+          "timestampMs": "1787826507287",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826508261",
+      "latitudeE7": 107969595,
+      "longitudeE7": 1066413698,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 195,
+      "activity": [
+        {
+          "timestampMs": "1787826508261",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826509270",
+      "latitudeE7": 107969067,
+      "longitudeE7": 1066413563,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 194,
+      "activity": [
+        {
+          "timestampMs": "1787826509270",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826510289",
+      "latitudeE7": 107968620,
+      "longitudeE7": 1066413450,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 194,
+      "activity": [
+        {
+          "timestampMs": "1787826510289",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826511289",
+      "latitudeE7": 107968186,
+      "longitudeE7": 1066413315,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826511289",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826512266",
+      "latitudeE7": 107967682,
+      "longitudeE7": 1066413199,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 193,
+      "activity": [
+        {
+          "timestampMs": "1787826512266",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826513267",
+      "latitudeE7": 107967113,
+      "longitudeE7": 1066412960,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 202,
+      "activity": [
+        {
+          "timestampMs": "1787826513267",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826514265",
+      "latitudeE7": 107966515,
+      "longitudeE7": 1066412771,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826514265",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826515265",
+      "latitudeE7": 107965994,
+      "longitudeE7": 1066412599,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 198,
+      "activity": [
+        {
+          "timestampMs": "1787826515265",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826516272",
+      "latitudeE7": 107965605,
+      "longitudeE7": 1066412437,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 202,
+      "activity": [
+        {
+          "timestampMs": "1787826516272",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826518285",
+      "latitudeE7": 107964890,
+      "longitudeE7": 1066412280,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 190,
+      "activity": [
+        {
+          "timestampMs": "1787826518285",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826519288",
+      "latitudeE7": 107964521,
+      "longitudeE7": 1066412151,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 199,
+      "activity": [
+        {
+          "timestampMs": "1787826519288",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826520299",
+      "latitudeE7": 107964111,
+      "longitudeE7": 1066412041,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 195,
+      "activity": [
+        {
+          "timestampMs": "1787826520299",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826521300",
+      "latitudeE7": 107963657,
+      "longitudeE7": 1066411950,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 191,
+      "activity": [
+        {
+          "timestampMs": "1787826521300",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826522297",
+      "latitudeE7": 107963221,
+      "longitudeE7": 1066411793,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 199,
+      "activity": [
+        {
+          "timestampMs": "1787826522297",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826523320",
+      "latitudeE7": 107962844,
+      "longitudeE7": 1066411641,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 202,
+      "activity": [
+        {
+          "timestampMs": "1787826523320",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826525276",
+      "latitudeE7": 107962201,
+      "longitudeE7": 1066411490,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 196,
+      "activity": [
+        {
+          "timestampMs": "1787826525276",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826526278",
+      "latitudeE7": 107961869,
+      "longitudeE7": 1066411465,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 184,
+      "activity": [
+        {
+          "timestampMs": "1787826526278",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826527286",
+      "latitudeE7": 107961592,
+      "longitudeE7": 1066411315,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 208,
+      "activity": [
+        {
+          "timestampMs": "1787826527286",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826528298",
+      "latitudeE7": 107961277,
+      "longitudeE7": 1066411281,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 186,
+      "activity": [
+        {
+          "timestampMs": "1787826528298",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826530304",
+      "latitudeE7": 107960732,
+      "longitudeE7": 1066411230,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 185,
+      "activity": [
+        {
+          "timestampMs": "1787826530304",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826532282",
+      "latitudeE7": 107960472,
+      "longitudeE7": 1066411168,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 193,
+      "activity": [
+        {
+          "timestampMs": "1787826532282",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826533287",
+      "latitudeE7": 107960328,
+      "longitudeE7": 1066411134,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 193,
+      "activity": [
+        {
+          "timestampMs": "1787826533287",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826534304",
+      "latitudeE7": 107960163,
+      "longitudeE7": 1066411081,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 206,
+      "activity": [
+        {
+          "timestampMs": "1787826534304",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826536302",
+      "latitudeE7": 107959780,
+      "longitudeE7": 1066410911,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 199,
+      "activity": [
+        {
+          "timestampMs": "1787826536302",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826538286",
+      "latitudeE7": 107959466,
+      "longitudeE7": 1066410832,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 205,
+      "activity": [
+        {
+          "timestampMs": "1787826538286",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826539301",
+      "latitudeE7": 107959359,
+      "longitudeE7": 1066410798,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 181,
+      "activity": [
+        {
+          "timestampMs": "1787826539301",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826541280",
+      "latitudeE7": 107959180,
+      "longitudeE7": 1066410813,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 217,
+      "activity": [
+        {
+          "timestampMs": "1787826541280",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826542284",
+      "latitudeE7": 107959121,
+      "longitudeE7": 1066410770,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 186,
+      "activity": [
+        {
+          "timestampMs": "1787826542284",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826543296",
+      "latitudeE7": 107958995,
+      "longitudeE7": 1066410729,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 208,
+      "activity": [
+        {
+          "timestampMs": "1787826543296",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826545318",
+      "latitudeE7": 107958686,
+      "longitudeE7": 1066410509,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 216,
+      "activity": [
+        {
+          "timestampMs": "1787826545318",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826547280",
+      "latitudeE7": 107958310,
+      "longitudeE7": 1066410247,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 215,
+      "activity": [
+        {
+          "timestampMs": "1787826547280",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826548282",
+      "latitudeE7": 107958096,
+      "longitudeE7": 1066410099,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 214,
+      "activity": [
+        {
+          "timestampMs": "1787826548282",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826549297",
+      "latitudeE7": 107957882,
+      "longitudeE7": 1066410008,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 203,
+      "activity": [
+        {
+          "timestampMs": "1787826549297",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826551293",
+      "latitudeE7": 107957646,
+      "longitudeE7": 1066409865,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826551293",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826552323",
+      "latitudeE7": 107957649,
+      "longitudeE7": 1066409865,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826552323",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826554310",
+      "latitudeE7": 107957420,
+      "longitudeE7": 1066409792,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 212,
+      "activity": [
+        {
+          "timestampMs": "1787826554310",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826556303",
+      "latitudeE7": 107957085,
+      "longitudeE7": 1066409519,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 229,
+      "activity": [
+        {
+          "timestampMs": "1787826556303",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826558294",
+      "latitudeE7": 107957022,
+      "longitudeE7": 1066409397,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 236,
+      "activity": [
+        {
+          "timestampMs": "1787826558294",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826559307",
+      "latitudeE7": 107957012,
+      "longitudeE7": 1066409275,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 299,
+      "activity": [
+        {
+          "timestampMs": "1787826559307",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826561274",
+      "latitudeE7": 107957111,
+      "longitudeE7": 1066408970,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 295,
+      "activity": [
+        {
+          "timestampMs": "1787826561274",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826562309",
+      "latitudeE7": 107957153,
+      "longitudeE7": 1066408796,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 298,
+      "activity": [
+        {
+          "timestampMs": "1787826562309",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826564283",
+      "latitudeE7": 107957368,
+      "longitudeE7": 1066408264,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 295,
+      "activity": [
+        {
+          "timestampMs": "1787826564283",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826565283",
+      "latitudeE7": 107957467,
+      "longitudeE7": 1066407933,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 287,
+      "activity": [
+        {
+          "timestampMs": "1787826565283",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826567281",
+      "latitudeE7": 107957441,
+      "longitudeE7": 1066407077,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 271,
+      "activity": [
+        {
+          "timestampMs": "1787826567281",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826568251",
+      "latitudeE7": 107957484,
+      "longitudeE7": 1066406558,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 275,
+      "activity": [
+        {
+          "timestampMs": "1787826568251",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826569255",
+      "latitudeE7": 107957558,
+      "longitudeE7": 1066406093,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 279,
+      "activity": [
+        {
+          "timestampMs": "1787826569255",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826570259",
+      "latitudeE7": 107957688,
+      "longitudeE7": 1066405540,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 283,
+      "activity": [
+        {
+          "timestampMs": "1787826570259",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826571258",
+      "latitudeE7": 107957922,
+      "longitudeE7": 1066405022,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 295,
+      "activity": [
+        {
+          "timestampMs": "1787826571258",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826572267",
+      "latitudeE7": 107958075,
+      "longitudeE7": 1066404461,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 286,
+      "activity": [
+        {
+          "timestampMs": "1787826572267",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826573249",
+      "latitudeE7": 107958254,
+      "longitudeE7": 1066403848,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 287,
+      "activity": [
+        {
+          "timestampMs": "1787826573249",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826574269",
+      "latitudeE7": 107958388,
+      "longitudeE7": 1066403180,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 282,
+      "activity": [
+        {
+          "timestampMs": "1787826574269",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826575265",
+      "latitudeE7": 107958594,
+      "longitudeE7": 1066402387,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 285,
+      "activity": [
+        {
+          "timestampMs": "1787826575265",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826576272",
+      "latitudeE7": 107958859,
+      "longitudeE7": 1066401570,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 288,
+      "activity": [
+        {
+          "timestampMs": "1787826576272",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826577260",
+      "latitudeE7": 107959106,
+      "longitudeE7": 1066400717,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 286,
+      "activity": [
+        {
+          "timestampMs": "1787826577260",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826578265",
+      "latitudeE7": 107959371,
+      "longitudeE7": 1066399937,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 289,
+      "activity": [
+        {
+          "timestampMs": "1787826578265",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826579273",
+      "latitudeE7": 107959597,
+      "longitudeE7": 1066399270,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 289,
+      "activity": [
+        {
+          "timestampMs": "1787826579273",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826580264",
+      "latitudeE7": 107959834,
+      "longitudeE7": 1066398615,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 290,
+      "activity": [
+        {
+          "timestampMs": "1787826580264",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826581257",
+      "latitudeE7": 107960076,
+      "longitudeE7": 1066397979,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 291,
+      "activity": [
+        {
+          "timestampMs": "1787826581257",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826582270",
+      "latitudeE7": 107960284,
+      "longitudeE7": 1066397538,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 296,
+      "activity": [
+        {
+          "timestampMs": "1787826582270",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826583326",
+      "latitudeE7": 107960502,
+      "longitudeE7": 1066397173,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 301,
+      "activity": [
+        {
+          "timestampMs": "1787826583326",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826584273",
+      "latitudeE7": 107960656,
+      "longitudeE7": 1066396719,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 289,
+      "activity": [
+        {
+          "timestampMs": "1787826584273",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826585268",
+      "latitudeE7": 107960814,
+      "longitudeE7": 1066396276,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 290,
+      "activity": [
+        {
+          "timestampMs": "1787826585268",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826587272",
+      "latitudeE7": 107960950,
+      "longitudeE7": 1066395755,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 283,
+      "activity": [
+        {
+          "timestampMs": "1787826587272",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826589271",
+      "latitudeE7": 107961047,
+      "longitudeE7": 1066395177,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 271,
+      "activity": [
+        {
+          "timestampMs": "1787826589271",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826590273",
+      "latitudeE7": 107960981,
+      "longitudeE7": 1066394737,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 261,
+      "activity": [
+        {
+          "timestampMs": "1787826590273",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826591272",
+      "latitudeE7": 107960991,
+      "longitudeE7": 1066394206,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 271,
+      "activity": [
+        {
+          "timestampMs": "1787826591272",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826592279",
+      "latitudeE7": 107960954,
+      "longitudeE7": 1066393763,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 265,
+      "activity": [
+        {
+          "timestampMs": "1787826592279",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826594274",
+      "latitudeE7": 107960580,
+      "longitudeE7": 1066393045,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 241,
+      "activity": [
+        {
+          "timestampMs": "1787826594274",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826596271",
+      "latitudeE7": 107960429,
+      "longitudeE7": 1066392727,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 225,
+      "activity": [
+        {
+          "timestampMs": "1787826596271",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826598279",
+      "latitudeE7": 107960414,
+      "longitudeE7": 1066392706,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 257,
+      "activity": [
+        {
+          "timestampMs": "1787826598279",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826600278",
+      "latitudeE7": 107960414,
+      "longitudeE7": 1066392673,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 257,
+      "activity": [
+        {
+          "timestampMs": "1787826600278",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826602284",
+      "latitudeE7": 107960389,
+      "longitudeE7": 1066392639,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 257,
+      "activity": [
+        {
+          "timestampMs": "1787826602284",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826604273",
+      "latitudeE7": 107960364,
+      "longitudeE7": 1066392545,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 257,
+      "activity": [
+        {
+          "timestampMs": "1787826604273",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826605280",
+      "latitudeE7": 107960340,
+      "longitudeE7": 1066392504,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 257,
+      "activity": [
+        {
+          "timestampMs": "1787826605280",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826606286",
+      "latitudeE7": 107960355,
+      "longitudeE7": 1066392498,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 257,
+      "activity": [
+        {
+          "timestampMs": "1787826606286",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826608279",
+      "latitudeE7": 107960379,
+      "longitudeE7": 1066392525,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826608279",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826609293",
+      "latitudeE7": 107960386,
+      "longitudeE7": 1066392545,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 250,
+      "activity": [
+        {
+          "timestampMs": "1787826609293",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826611274",
+      "latitudeE7": 107960372,
+      "longitudeE7": 1066392446,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 250,
+      "activity": [
+        {
+          "timestampMs": "1787826611274",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826613293",
+      "latitudeE7": 107960339,
+      "longitudeE7": 1066392301,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 257,
+      "activity": [
+        {
+          "timestampMs": "1787826613293",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826615271",
+      "latitudeE7": 107960323,
+      "longitudeE7": 1066392126,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 257,
+      "activity": [
+        {
+          "timestampMs": "1787826615271",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826616292",
+      "latitudeE7": 107960311,
+      "longitudeE7": 1066392065,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826616292",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826618286",
+      "latitudeE7": 107960291,
+      "longitudeE7": 1066391960,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826618286",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826620284",
+      "latitudeE7": 107960293,
+      "longitudeE7": 1066391909,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826620284",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826621290",
+      "latitudeE7": 107960296,
+      "longitudeE7": 1066391890,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826621290",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826622299",
+      "latitudeE7": 107960294,
+      "longitudeE7": 1066391861,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826622299",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826624294",
+      "latitudeE7": 107960281,
+      "longitudeE7": 1066391811,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826624294",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826626304",
+      "latitudeE7": 107960270,
+      "longitudeE7": 1066391801,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 251,
+      "activity": [
+        {
+          "timestampMs": "1787826626304",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826628290",
+      "latitudeE7": 107960266,
+      "longitudeE7": 1066391685,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 252,
+      "activity": [
+        {
+          "timestampMs": "1787826628290",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826629290",
+      "latitudeE7": 107960264,
+      "longitudeE7": 1066391619,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 219,
+      "activity": [
+        {
+          "timestampMs": "1787826629290",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826630291",
+      "latitudeE7": 107960196,
+      "longitudeE7": 1066391587,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 218,
+      "activity": [
+        {
+          "timestampMs": "1787826630291",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826632277",
+      "latitudeE7": 107959898,
+      "longitudeE7": 1066391371,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 223,
+      "activity": [
+        {
+          "timestampMs": "1787826632277",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826634274",
+      "latitudeE7": 107959613,
+      "longitudeE7": 1066390813,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 243,
+      "activity": [
+        {
+          "timestampMs": "1787826634274",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826636272",
+      "latitudeE7": 107959314,
+      "longitudeE7": 1066390397,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 231,
+      "activity": [
+        {
+          "timestampMs": "1787826636272",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826637296",
+      "latitudeE7": 107959171,
+      "longitudeE7": 1066390175,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 237,
+      "activity": [
+        {
+          "timestampMs": "1787826637296",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826639302",
+      "latitudeE7": 107958905,
+      "longitudeE7": 1066389828,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 232,
+      "activity": [
+        {
+          "timestampMs": "1787826639302",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826640307",
+      "latitudeE7": 107958828,
+      "longitudeE7": 1066389710,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 237,
+      "activity": [
+        {
+          "timestampMs": "1787826640307",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826642298",
+      "latitudeE7": 107958596,
+      "longitudeE7": 1066389410,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 228,
+      "activity": [
+        {
+          "timestampMs": "1787826642298",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826643310",
+      "latitudeE7": 107958455,
+      "longitudeE7": 1066389303,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 228,
+      "activity": [
+        {
+          "timestampMs": "1787826643310",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826645286",
+      "latitudeE7": 107958270,
+      "longitudeE7": 1066389121,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 251,
+      "activity": [
+        {
+          "timestampMs": "1787826645286",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826647361",
+      "latitudeE7": 107958080,
+      "longitudeE7": 1066388927,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 217,
+      "activity": [
+        {
+          "timestampMs": "1787826647361",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826649272",
+      "latitudeE7": 107957832,
+      "longitudeE7": 1066388796,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 247,
+      "activity": [
+        {
+          "timestampMs": "1787826649272",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826650316",
+      "latitudeE7": 107957750,
+      "longitudeE7": 1066388674,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 215,
+      "activity": [
+        {
+          "timestampMs": "1787826650316",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826652280",
+      "latitudeE7": 107957548,
+      "longitudeE7": 1066388473,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 233,
+      "activity": [
+        {
+          "timestampMs": "1787826652280",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826654272",
+      "latitudeE7": 107957578,
+      "longitudeE7": 1066388208,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 261,
+      "activity": [
+        {
+          "timestampMs": "1787826654272",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826655273",
+      "latitudeE7": 107957506,
+      "longitudeE7": 1066387987,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 252,
+      "activity": [
+        {
+          "timestampMs": "1787826655273",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826656296",
+      "latitudeE7": 107957482,
+      "longitudeE7": 1066387638,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 266,
+      "activity": [
+        {
+          "timestampMs": "1787826656296",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826658276",
+      "latitudeE7": 107957139,
+      "longitudeE7": 1066386674,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 246,
+      "activity": [
+        {
+          "timestampMs": "1787826658276",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826659270",
+      "latitudeE7": 107956864,
+      "longitudeE7": 1066386231,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 238,
+      "activity": [
+        {
+          "timestampMs": "1787826659270",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826660285",
+      "latitudeE7": 107956651,
+      "longitudeE7": 1066385746,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 246,
+      "activity": [
+        {
+          "timestampMs": "1787826660285",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826662282",
+      "latitudeE7": 107956563,
+      "longitudeE7": 1066385295,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 259,
+      "activity": [
+        {
+          "timestampMs": "1787826662282",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826664274",
+      "latitudeE7": 107956407,
+      "longitudeE7": 1066384624,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 255,
+      "activity": [
+        {
+          "timestampMs": "1787826664274",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826666271",
+      "latitudeE7": 107955916,
+      "longitudeE7": 1066383874,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 233,
+      "activity": [
+        {
+          "timestampMs": "1787826666271",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826668279",
+      "latitudeE7": 107955517,
+      "longitudeE7": 1066383364,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 230,
+      "activity": [
+        {
+          "timestampMs": "1787826668279",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826669273",
+      "latitudeE7": 107955149,
+      "longitudeE7": 1066383092,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 216,
+      "activity": [
+        {
+          "timestampMs": "1787826669273",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826670290",
+      "latitudeE7": 107954785,
+      "longitudeE7": 1066382944,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 202,
+      "activity": [
+        {
+          "timestampMs": "1787826670290",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826672285",
+      "latitudeE7": 107954166,
+      "longitudeE7": 1066382766,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 200,
+      "activity": [
+        {
+          "timestampMs": "1787826672285",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826674287",
+      "latitudeE7": 107953662,
+      "longitudeE7": 1066382687,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 185,
+      "activity": [
+        {
+          "timestampMs": "1787826674287",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826676275",
+      "latitudeE7": 107952996,
+      "longitudeE7": 1066382671,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 178,
+      "activity": [
+        {
+          "timestampMs": "1787826676275",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826678268",
+      "latitudeE7": 107952380,
+      "longitudeE7": 1066382622,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 184,
+      "activity": [
+        {
+          "timestampMs": "1787826678268",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826680264",
+      "latitudeE7": 107951975,
+      "longitudeE7": 1066382668,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 174,
+      "activity": [
+        {
+          "timestampMs": "1787826680264",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826681270",
+      "latitudeE7": 107951692,
+      "longitudeE7": 1066382700,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 174,
+      "activity": [
+        {
+          "timestampMs": "1787826681270",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826683264",
+      "latitudeE7": 107951023,
+      "longitudeE7": 1066382580,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 188,
+      "activity": [
+        {
+          "timestampMs": "1787826683264",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826684279",
+      "latitudeE7": 107950522,
+      "longitudeE7": 1066382467,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 192,
+      "activity": [
+        {
+          "timestampMs": "1787826684279",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826685256",
+      "latitudeE7": 107949877,
+      "longitudeE7": 1066382283,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 196,
+      "activity": [
+        {
+          "timestampMs": "1787826685256",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826686256",
+      "latitudeE7": 107949156,
+      "longitudeE7": 1066382117,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 193,
+      "activity": [
+        {
+          "timestampMs": "1787826686256",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826687270",
+      "latitudeE7": 107948421,
+      "longitudeE7": 1066382003,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 189,
+      "activity": [
+        {
+          "timestampMs": "1787826687270",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826688264",
+      "latitudeE7": 107947692,
+      "longitudeE7": 1066381875,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 190,
+      "activity": [
+        {
+          "timestampMs": "1787826688264",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826689256",
+      "latitudeE7": 107947008,
+      "longitudeE7": 1066381809,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 185,
+      "activity": [
+        {
+          "timestampMs": "1787826689256",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826690263",
+      "latitudeE7": 107946320,
+      "longitudeE7": 1066381742,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 185,
+      "activity": [
+        {
+          "timestampMs": "1787826690263",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826691247",
+      "latitudeE7": 107945614,
+      "longitudeE7": 1066381717,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 182,
+      "activity": [
+        {
+          "timestampMs": "1787826691247",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826692256",
+      "latitudeE7": 107944859,
+      "longitudeE7": 1066381599,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 189,
+      "activity": [
+        {
+          "timestampMs": "1787826692256",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826693259",
+      "latitudeE7": 107944069,
+      "longitudeE7": 1066381459,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 190,
+      "activity": [
+        {
+          "timestampMs": "1787826693259",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826694245",
+      "latitudeE7": 107943224,
+      "longitudeE7": 1066381290,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 191,
+      "activity": [
+        {
+          "timestampMs": "1787826694245",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826695261",
+      "latitudeE7": 107942418,
+      "longitudeE7": 1066381140,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 190,
+      "activity": [
+        {
+          "timestampMs": "1787826695261",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826696257",
+      "latitudeE7": 107941584,
+      "longitudeE7": 1066380894,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 196,
+      "activity": [
+        {
+          "timestampMs": "1787826696257",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826697251",
+      "latitudeE7": 107940733,
+      "longitudeE7": 1066380603,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 199,
+      "activity": [
+        {
+          "timestampMs": "1787826697251",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826698240",
+      "latitudeE7": 107939870,
+      "longitudeE7": 1066380385,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 194,
+      "activity": [
+        {
+          "timestampMs": "1787826698240",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826699237",
+      "latitudeE7": 107939041,
+      "longitudeE7": 1066380188,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 193,
+      "activity": [
+        {
+          "timestampMs": "1787826699237",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826700245",
+      "latitudeE7": 107938228,
+      "longitudeE7": 1066379972,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 195,
+      "activity": [
+        {
+          "timestampMs": "1787826700245",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826702245",
+      "latitudeE7": 107936776,
+      "longitudeE7": 1066379673,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 189,
+      "activity": [
+        {
+          "timestampMs": "1787826702245",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826703254",
+      "latitudeE7": 107936128,
+      "longitudeE7": 1066379589,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 187,
+      "activity": [
+        {
+          "timestampMs": "1787826703254",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826704256",
+      "latitudeE7": 107935538,
+      "longitudeE7": 1066379562,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 183,
+      "activity": [
+        {
+          "timestampMs": "1787826704256",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826706270",
+      "latitudeE7": 107934673,
+      "longitudeE7": 1066379465,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 191,
+      "activity": [
+        {
+          "timestampMs": "1787826706270",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826708262",
+      "latitudeE7": 107934059,
+      "longitudeE7": 1066379503,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 178,
+      "activity": [
+        {
+          "timestampMs": "1787826708262",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826710264",
+      "latitudeE7": 107934059,
+      "longitudeE7": 1066379503,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 202,
+      "activity": [
+        {
+          "timestampMs": "1787826710264",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826711274",
+      "latitudeE7": 107933758,
+      "longitudeE7": 1066379475,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 185,
+      "activity": [
+        {
+          "timestampMs": "1787826711274",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826713264",
+      "latitudeE7": 107933331,
+      "longitudeE7": 1066379441,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 184,
+      "activity": [
+        {
+          "timestampMs": "1787826713264",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826714275",
+      "latitudeE7": 107933009,
+      "longitudeE7": 1066379446,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 179,
+      "activity": [
+        {
+          "timestampMs": "1787826714275",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826716270",
+      "latitudeE7": 107932392,
+      "longitudeE7": 1066379307,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 192,
+      "activity": [
+        {
+          "timestampMs": "1787826716270",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826717277",
+      "latitudeE7": 107932141,
+      "longitudeE7": 1066379139,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 213,
+      "activity": [
+        {
+          "timestampMs": "1787826717277",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826718262",
+      "latitudeE7": 107932139,
+      "longitudeE7": 1066378675,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 213,
+      "activity": [
+        {
+          "timestampMs": "1787826718262",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826719276",
+      "latitudeE7": 107932150,
+      "longitudeE7": 1066378240,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 271,
+      "activity": [
+        {
+          "timestampMs": "1787826719276",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826721272",
+      "latitudeE7": 107932176,
+      "longitudeE7": 1066377551,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 266,
+      "activity": [
+        {
+          "timestampMs": "1787826721272",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826722277",
+      "latitudeE7": 107932163,
+      "longitudeE7": 1066377315,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 267,
+      "activity": [
+        {
+          "timestampMs": "1787826722277",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826723287",
+      "latitudeE7": 107932128,
+      "longitudeE7": 1066377091,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 261,
+      "activity": [
+        {
+          "timestampMs": "1787826723287",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826724294",
+      "latitudeE7": 107932118,
+      "longitudeE7": 1066376777,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 268,
+      "activity": [
+        {
+          "timestampMs": "1787826724294",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826726293",
+      "latitudeE7": 107932199,
+      "longitudeE7": 1066376048,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 278,
+      "activity": [
+        {
+          "timestampMs": "1787826726293",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826728278",
+      "latitudeE7": 107932198,
+      "longitudeE7": 1066375206,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 276,
+      "activity": [
+        {
+          "timestampMs": "1787826728278",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826729279",
+      "latitudeE7": 107932218,
+      "longitudeE7": 1066374667,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 272,
+      "activity": [
+        {
+          "timestampMs": "1787826729279",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826730274",
+      "latitudeE7": 107932266,
+      "longitudeE7": 1066374197,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 276,
+      "activity": [
+        {
+          "timestampMs": "1787826730274",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826731294",
+      "latitudeE7": 107932338,
+      "longitudeE7": 1066373702,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 278,
+      "activity": [
+        {
+          "timestampMs": "1787826731294",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826732252",
+      "latitudeE7": 107932456,
+      "longitudeE7": 1066373205,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 284,
+      "activity": [
+        {
+          "timestampMs": "1787826732252",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826734279",
+      "latitudeE7": 107932696,
+      "longitudeE7": 1066371796,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 279,
+      "activity": [
+        {
+          "timestampMs": "1787826734279",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826735268",
+      "latitudeE7": 107932816,
+      "longitudeE7": 1066371083,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 280,
+      "activity": [
+        {
+          "timestampMs": "1787826735268",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826736268",
+      "latitudeE7": 107932922,
+      "longitudeE7": 1066370414,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 279,
+      "activity": [
+        {
+          "timestampMs": "1787826736268",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826737303",
+      "latitudeE7": 107932987,
+      "longitudeE7": 1066369767,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 276,
+      "activity": [
+        {
+          "timestampMs": "1787826737303",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826738261",
+      "latitudeE7": 107933035,
+      "longitudeE7": 1066369115,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 274,
+      "activity": [
+        {
+          "timestampMs": "1787826738261",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826739264",
+      "latitudeE7": 107933047,
+      "longitudeE7": 1066368419,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 271,
+      "activity": [
+        {
+          "timestampMs": "1787826739264",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826740273",
+      "latitudeE7": 107933169,
+      "longitudeE7": 1066367682,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 280,
+      "activity": [
+        {
+          "timestampMs": "1787826740273",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826741253",
+      "latitudeE7": 107933255,
+      "longitudeE7": 1066366985,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 277,
+      "activity": [
+        {
+          "timestampMs": "1787826741253",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826743270",
+      "latitudeE7": 107933375,
+      "longitudeE7": 1066365642,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 276,
+      "activity": [
+        {
+          "timestampMs": "1787826743270",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826744257",
+      "latitudeE7": 107933464,
+      "longitudeE7": 1066365006,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 278,
+      "activity": [
+        {
+          "timestampMs": "1787826744257",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826745272",
+      "latitudeE7": 107933497,
+      "longitudeE7": 1066364373,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 273,
+      "activity": [
+        {
+          "timestampMs": "1787826745272",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826746268",
+      "latitudeE7": 107933529,
+      "longitudeE7": 1066363800,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 273,
+      "activity": [
+        {
+          "timestampMs": "1787826746268",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826748325",
+      "latitudeE7": 107933740,
+      "longitudeE7": 1066362660,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 283,
+      "activity": [
+        {
+          "timestampMs": "1787826748325",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826749265",
+      "latitudeE7": 107933777,
+      "longitudeE7": 1066362128,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 274,
+      "activity": [
+        {
+          "timestampMs": "1787826749265",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826750264",
+      "latitudeE7": 107933874,
+      "longitudeE7": 1066361635,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826750264",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826751281",
+      "latitudeE7": 107933995,
+      "longitudeE7": 1066361159,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 285,
+      "activity": [
+        {
+          "timestampMs": "1787826751281",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826752310",
+      "latitudeE7": 107934127,
+      "longitudeE7": 1066360750,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 288,
+      "activity": [
+        {
+          "timestampMs": "1787826752310",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826754272",
+      "latitudeE7": 107934386,
+      "longitudeE7": 1066359991,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 285,
+      "activity": [
+        {
+          "timestampMs": "1787826754272",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826756273",
+      "latitudeE7": 107934545,
+      "longitudeE7": 1066359112,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 280,
+      "activity": [
+        {
+          "timestampMs": "1787826756273",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826758274",
+      "latitudeE7": 107934743,
+      "longitudeE7": 1066358182,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 284,
+      "activity": [
+        {
+          "timestampMs": "1787826758274",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826759278",
+      "latitudeE7": 107934844,
+      "longitudeE7": 1066357706,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 282,
+      "activity": [
+        {
+          "timestampMs": "1787826759278",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826760254",
+      "latitudeE7": 107934957,
+      "longitudeE7": 1066357237,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 284,
+      "activity": [
+        {
+          "timestampMs": "1787826760254",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826761259",
+      "latitudeE7": 107935077,
+      "longitudeE7": 1066356767,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 285,
+      "activity": [
+        {
+          "timestampMs": "1787826761259",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826762263",
+      "latitudeE7": 107935157,
+      "longitudeE7": 1066356229,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 279,
+      "activity": [
+        {
+          "timestampMs": "1787826762263",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826763276",
+      "latitudeE7": 107935239,
+      "longitudeE7": 1066355660,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 278,
+      "activity": [
+        {
+          "timestampMs": "1787826763276",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826765280",
+      "latitudeE7": 107935372,
+      "longitudeE7": 1066354796,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 274,
+      "activity": [
+        {
+          "timestampMs": "1787826765280",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826766273",
+      "latitudeE7": 107935382,
+      "longitudeE7": 1066354325,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 271,
+      "activity": [
+        {
+          "timestampMs": "1787826766273",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826767290",
+      "latitudeE7": 107935456,
+      "longitudeE7": 1066353941,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826767290",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826769286",
+      "latitudeE7": 107935523,
+      "longitudeE7": 1066353080,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 276,
+      "activity": [
+        {
+          "timestampMs": "1787826769286",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826770265",
+      "latitudeE7": 107935566,
+      "longitudeE7": 1066352533,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 275,
+      "activity": [
+        {
+          "timestampMs": "1787826770265",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826771266",
+      "latitudeE7": 107935683,
+      "longitudeE7": 1066351869,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 280,
+      "activity": [
+        {
+          "timestampMs": "1787826771266",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826773290",
+      "latitudeE7": 107935806,
+      "longitudeE7": 1066350758,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 278,
+      "activity": [
+        {
+          "timestampMs": "1787826773290",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826774292",
+      "latitudeE7": 107935854,
+      "longitudeE7": 1066350330,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 277,
+      "activity": [
+        {
+          "timestampMs": "1787826774292",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826776266",
+      "latitudeE7": 107935950,
+      "longitudeE7": 1066349575,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 282,
+      "activity": [
+        {
+          "timestampMs": "1787826776266",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826778265",
+      "latitudeE7": 107935959,
+      "longitudeE7": 1066349267,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 272,
+      "activity": [
+        {
+          "timestampMs": "1787826778265",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826779276",
+      "latitudeE7": 107935958,
+      "longitudeE7": 1066349249,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826779276",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826780289",
+      "latitudeE7": 107935958,
+      "longitudeE7": 1066349249,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826780289",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826782265",
+      "latitudeE7": 107935947,
+      "longitudeE7": 1066349139,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826782265",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826783279",
+      "latitudeE7": 107935932,
+      "longitudeE7": 1066349057,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826783279",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826784281",
+      "latitudeE7": 107935932,
+      "longitudeE7": 1066349057,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826784281",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826786276",
+      "latitudeE7": 107935928,
+      "longitudeE7": 1066349055,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826786276",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826788286",
+      "latitudeE7": 107935926,
+      "longitudeE7": 1066349051,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826788286",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826790278",
+      "latitudeE7": 107935949,
+      "longitudeE7": 1066348937,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826790278",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826791288",
+      "latitudeE7": 107935928,
+      "longitudeE7": 1066348864,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826791288",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826793270",
+      "latitudeE7": 107935926,
+      "longitudeE7": 1066348686,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 281,
+      "activity": [
+        {
+          "timestampMs": "1787826793270",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826795274",
+      "latitudeE7": 107935893,
+      "longitudeE7": 1066348692,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826795274",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826797259",
+      "latitudeE7": 107935906,
+      "longitudeE7": 1066348639,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 330,
+      "activity": [
+        {
+          "timestampMs": "1787826797259",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826798271",
+      "latitudeE7": 107935931,
+      "longitudeE7": 1066348586,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 315,
+      "activity": [
+        {
+          "timestampMs": "1787826798271",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826799286",
+      "latitudeE7": 107935952,
+      "longitudeE7": 1066348500,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 312,
+      "activity": [
+        {
+          "timestampMs": "1787826799286",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826801281",
+      "latitudeE7": 107935961,
+      "longitudeE7": 1066348501,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 327,
+      "activity": [
+        {
+          "timestampMs": "1787826801281",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826803272",
+      "latitudeE7": 107936007,
+      "longitudeE7": 1066348383,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 259,
+      "activity": [
+        {
+          "timestampMs": "1787826803272",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826805268",
+      "latitudeE7": 107935976,
+      "longitudeE7": 1066348254,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 255,
+      "activity": [
+        {
+          "timestampMs": "1787826805268",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826807268",
+      "latitudeE7": 107935884,
+      "longitudeE7": 1066348116,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 255,
+      "activity": [
+        {
+          "timestampMs": "1787826807268",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826809258",
+      "latitudeE7": 107935731,
+      "longitudeE7": 1066348125,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 143,
+      "activity": [
+        {
+          "timestampMs": "1787826809258",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826810263",
+      "latitudeE7": 107935674,
+      "longitudeE7": 1066348114,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 130,
+      "activity": [
+        {
+          "timestampMs": "1787826810263",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826812242",
+      "latitudeE7": 107935674,
+      "longitudeE7": 1066348114,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 130,
+      "activity": [
+        {
+          "timestampMs": "1787826812242",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826813245",
+      "latitudeE7": 107935644,
+      "longitudeE7": 1066348085,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 151,
+      "activity": [
+        {
+          "timestampMs": "1787826813245",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826815238",
+      "latitudeE7": 107935543,
+      "longitudeE7": 1066348111,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 177,
+      "activity": [
+        {
+          "timestampMs": "1787826815238",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826816250",
+      "latitudeE7": 107935525,
+      "longitudeE7": 1066348007,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 173,
+      "activity": [
+        {
+          "timestampMs": "1787826816250",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826818254",
+      "latitudeE7": 107935376,
+      "longitudeE7": 1066347985,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 182,
+      "activity": [
+        {
+          "timestampMs": "1787826818254",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826819262",
+      "latitudeE7": 107935309,
+      "longitudeE7": 1066347981,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 186,
+      "activity": [
+        {
+          "timestampMs": "1787826819262",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826821258",
+      "latitudeE7": 107935225,
+      "longitudeE7": 1066347826,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 176,
+      "activity": [
+        {
+          "timestampMs": "1787826821258",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826823246",
+      "latitudeE7": 107934964,
+      "longitudeE7": 1066347853,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 175,
+      "activity": [
+        {
+          "timestampMs": "1787826823246",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826824248",
+      "latitudeE7": 107934777,
+      "longitudeE7": 1066347863,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 177,
+      "activity": [
+        {
+          "timestampMs": "1787826824248",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826826246",
+      "latitudeE7": 107934680,
+      "longitudeE7": 1066347837,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 124,
+      "activity": [
+        {
+          "timestampMs": "1787826826246",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826828224",
+      "latitudeE7": 107934622,
+      "longitudeE7": 1066347903,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 97,
+      "activity": [
+        {
+          "timestampMs": "1787826828224",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826830250",
+      "latitudeE7": 107934541,
+      "longitudeE7": 1066348060,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 98,
+      "activity": [
+        {
+          "timestampMs": "1787826830250",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826832221",
+      "latitudeE7": 107934502,
+      "longitudeE7": 1066348264,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 122,
+      "activity": [
+        {
+          "timestampMs": "1787826832221",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826834223",
+      "latitudeE7": 107934503,
+      "longitudeE7": 1066348328,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 128,
+      "activity": [
+        {
+          "timestampMs": "1787826834223",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826835233",
+      "latitudeE7": 107934435,
+      "longitudeE7": 1066348409,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 139,
+      "activity": [
+        {
+          "timestampMs": "1787826835233",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826837229",
+      "latitudeE7": 107934338,
+      "longitudeE7": 1066348494,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 163,
+      "activity": [
+        {
+          "timestampMs": "1787826837229",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826839224",
+      "latitudeE7": 107934382,
+      "longitudeE7": 1066348497,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 187,
+      "activity": [
+        {
+          "timestampMs": "1787826839224",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826840230",
+      "latitudeE7": 107934326,
+      "longitudeE7": 1066348517,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 187,
+      "activity": [
+        {
+          "timestampMs": "1787826840230",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826842222",
+      "latitudeE7": 107934425,
+      "longitudeE7": 1066348451,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 268,
+      "activity": [
+        {
+          "timestampMs": "1787826842222",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826844216",
+      "latitudeE7": 107934569,
+      "longitudeE7": 1066348272,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 266,
+      "activity": [
+        {
+          "timestampMs": "1787826844216",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826845226",
+      "latitudeE7": 107934737,
+      "longitudeE7": 1066348164,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 328,
+      "activity": [
+        {
+          "timestampMs": "1787826845226",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826846236",
+      "latitudeE7": 107934737,
+      "longitudeE7": 1066348164,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 332,
+      "activity": [
+        {
+          "timestampMs": "1787826846236",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826848217",
+      "latitudeE7": 107934763,
+      "longitudeE7": 1066348155,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 0,
+      "activity": [
+        {
+          "timestampMs": "1787826848217",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826849220",
+      "latitudeE7": 107934832,
+      "longitudeE7": 1066348126,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 136,
+      "activity": [
+        {
+          "timestampMs": "1787826849220",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826851210",
+      "latitudeE7": 107934817,
+      "longitudeE7": 1066348194,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 128,
+      "activity": [
+        {
+          "timestampMs": "1787826851210",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826852217",
+      "latitudeE7": 107934733,
+      "longitudeE7": 1066348323,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 132,
+      "activity": [
+        {
+          "timestampMs": "1787826852217",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826854212",
+      "latitudeE7": 107934509,
+      "longitudeE7": 1066348607,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 132,
+      "activity": [
+        {
+          "timestampMs": "1787826854212",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826855221",
+      "latitudeE7": 107934357,
+      "longitudeE7": 1066348746,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 138,
+      "activity": [
+        {
+          "timestampMs": "1787826855221",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826857217",
+      "latitudeE7": 107933995,
+      "longitudeE7": 1066349026,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 146,
+      "activity": [
+        {
+          "timestampMs": "1787826857217",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826859218",
+      "latitudeE7": 107933723,
+      "longitudeE7": 1066349303,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 136,
+      "activity": [
+        {
+          "timestampMs": "1787826859218",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826861247",
+      "latitudeE7": 107933605,
+      "longitudeE7": 1066349388,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 134,
+      "activity": [
+        {
+          "timestampMs": "1787826861247",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826863220",
+      "latitudeE7": 107933514,
+      "longitudeE7": 1066349499,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 137,
+      "activity": [
+        {
+          "timestampMs": "1787826863220",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826864222",
+      "latitudeE7": 107933471,
+      "longitudeE7": 1066349501,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 146,
+      "activity": [
+        {
+          "timestampMs": "1787826864222",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826865228",
+      "latitudeE7": 107933418,
+      "longitudeE7": 1066349542,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 146,
+      "activity": [
+        {
+          "timestampMs": "1787826865228",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826866246",
+      "latitudeE7": 107933391,
+      "longitudeE7": 1066349528,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 146,
+      "activity": [
+        {
+          "timestampMs": "1787826866246",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826868228",
+      "latitudeE7": 107933411,
+      "longitudeE7": 1066349457,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 264,
+      "activity": [
+        {
+          "timestampMs": "1787826868228",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826870237",
+      "latitudeE7": 107933411,
+      "longitudeE7": 1066349457,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 264,
+      "activity": [
+        {
+          "timestampMs": "1787826870237",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826872210",
+      "latitudeE7": 107933411,
+      "longitudeE7": 1066349457,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 264,
+      "activity": [
+        {
+          "timestampMs": "1787826872210",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826873214",
+      "latitudeE7": 107933411,
+      "longitudeE7": 1066349457,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 264,
+      "activity": [
+        {
+          "timestampMs": "1787826873214",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826875211",
+      "latitudeE7": 107933371,
+      "longitudeE7": 1066349341,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 223,
+      "activity": [
+        {
+          "timestampMs": "1787826875211",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826876220",
+      "latitudeE7": 107933334,
+      "longitudeE7": 1066349233,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 230,
+      "activity": [
+        {
+          "timestampMs": "1787826876220",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826877226",
+      "latitudeE7": 107933260,
+      "longitudeE7": 1066349137,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 219,
+      "activity": [
+        {
+          "timestampMs": "1787826877226",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826878231",
+      "latitudeE7": 107933168,
+      "longitudeE7": 1066349042,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 221,
+      "activity": [
+        {
+          "timestampMs": "1787826878231",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826880209",
+      "latitudeE7": 107933041,
+      "longitudeE7": 1066348952,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 208,
+      "activity": [
+        {
+          "timestampMs": "1787826880209",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826881219",
+      "latitudeE7": 107932961,
+      "longitudeE7": 1066348921,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 208,
+      "activity": [
+        {
+          "timestampMs": "1787826881219",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826882249",
+      "latitudeE7": 107932944,
+      "longitudeE7": 1066348904,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 208,
+      "activity": [
+        {
+          "timestampMs": "1787826882249",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826884210",
+      "latitudeE7": 107932932,
+      "longitudeE7": 1066348945,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 208,
+      "activity": [
+        {
+          "timestampMs": "1787826884210",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826886216",
+      "latitudeE7": 107932777,
+      "longitudeE7": 1066349041,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 173,
+      "activity": [
+        {
+          "timestampMs": "1787826886216",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826887221",
+      "latitudeE7": 107932634,
+      "longitudeE7": 1066349091,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 170,
+      "activity": [
+        {
+          "timestampMs": "1787826887221",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826888230",
+      "latitudeE7": 107932484,
+      "longitudeE7": 1066349167,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 154,
+      "activity": [
+        {
+          "timestampMs": "1787826888230",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826890222",
+      "latitudeE7": 107932174,
+      "longitudeE7": 1066349409,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 142,
+      "activity": [
+        {
+          "timestampMs": "1787826890222",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826892251",
+      "latitudeE7": 107931762,
+      "longitudeE7": 1066349722,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 139,
+      "activity": [
+        {
+          "timestampMs": "1787826892251",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826894231",
+      "latitudeE7": 107931360,
+      "longitudeE7": 1066350052,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 142,
+      "activity": [
+        {
+          "timestampMs": "1787826894231",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826896224",
+      "latitudeE7": 107931044,
+      "longitudeE7": 1066350383,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 127,
+      "activity": [
+        {
+          "timestampMs": "1787826896224",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826897247",
+      "latitudeE7": 107930918,
+      "longitudeE7": 1066350506,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 142,
+      "activity": [
+        {
+          "timestampMs": "1787826897247",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826899254",
+      "latitudeE7": 107931597,
+      "longitudeE7": 1066350008,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 136,
+      "activity": [
+        {
+          "timestampMs": "1787826899254",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826901246",
+      "latitudeE7": 107931597,
+      "longitudeE7": 1066350008,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 145,
+      "activity": [
+        {
+          "timestampMs": "1787826901246",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826903213",
+      "latitudeE7": 107931464,
+      "longitudeE7": 1066350082,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 153,
+      "activity": [
+        {
+          "timestampMs": "1787826903213",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826904219",
+      "latitudeE7": 107931389,
+      "longitudeE7": 1066350167,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 158,
+      "activity": [
+        {
+          "timestampMs": "1787826904219",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826905224",
+      "latitudeE7": 107931098,
+      "longitudeE7": 1066350332,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 151,
+      "activity": [
+        {
+          "timestampMs": "1787826905224",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826907222",
+      "latitudeE7": 107930515,
+      "longitudeE7": 1066350529,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 167,
+      "activity": [
+        {
+          "timestampMs": "1787826907222",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826908223",
+      "latitudeE7": 107930256,
+      "longitudeE7": 1066350681,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 150,
+      "activity": [
+        {
+          "timestampMs": "1787826908223",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826910206",
+      "latitudeE7": 107929793,
+      "longitudeE7": 1066350852,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 148,
+      "activity": [
+        {
+          "timestampMs": "1787826910206",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826911220",
+      "latitudeE7": 107929648,
+      "longitudeE7": 1066350773,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 244,
+      "activity": [
+        {
+          "timestampMs": "1787826911220",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826913218",
+      "latitudeE7": 107929209,
+      "longitudeE7": 1066350614,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 196,
+      "activity": [
+        {
+          "timestampMs": "1787826913218",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826915210",
+      "latitudeE7": 107929101,
+      "longitudeE7": 1066350631,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 100,
+      "activity": [
+        {
+          "timestampMs": "1787826915210",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826916215",
+      "latitudeE7": 107929059,
+      "longitudeE7": 1066350742,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 112,
+      "activity": [
+        {
+          "timestampMs": "1787826916215",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826917219",
+      "latitudeE7": 107929059,
+      "longitudeE7": 1066350742,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 123,
+      "activity": [
+        {
+          "timestampMs": "1787826917219",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826919216",
+      "latitudeE7": 107928970,
+      "longitudeE7": 1066350803,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 142,
+      "activity": [
+        {
+          "timestampMs": "1787826919216",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826920223",
+      "latitudeE7": 107928862,
+      "longitudeE7": 1066350868,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 141,
+      "activity": [
+        {
+          "timestampMs": "1787826920223",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826922234",
+      "latitudeE7": 107928426,
+      "longitudeE7": 1066351136,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 144,
+      "activity": [
+        {
+          "timestampMs": "1787826922234",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826923241",
+      "latitudeE7": 107928765,
+      "longitudeE7": 1066350903,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 144,
+      "activity": [
+        {
+          "timestampMs": "1787826923241",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826925219",
+      "latitudeE7": 107928556,
+      "longitudeE7": 1066350976,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 161,
+      "activity": [
+        {
+          "timestampMs": "1787826925219",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826926222",
+      "latitudeE7": 107929188,
+      "longitudeE7": 1066350708,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 161,
+      "activity": [
+        {
+          "timestampMs": "1787826926222",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826928223",
+      "latitudeE7": 107929188,
+      "longitudeE7": 1066350708,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 134,
+      "activity": [
+        {
+          "timestampMs": "1787826928223",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826929226",
+      "latitudeE7": 107929981,
+      "longitudeE7": 1066350369,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 134,
+      "activity": [
+        {
+          "timestampMs": "1787826929226",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826930229",
+      "latitudeE7": 107929942,
+      "longitudeE7": 1066350334,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 136,
+      "activity": [
+        {
+          "timestampMs": "1787826930229",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826931234",
+      "latitudeE7": 107929803,
+      "longitudeE7": 1066350393,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 148,
+      "activity": [
+        {
+          "timestampMs": "1787826931234",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826932231",
+      "latitudeE7": 107930880,
+      "longitudeE7": 1066349992,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 148,
+      "activity": [
+        {
+          "timestampMs": "1787826932231",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826934220",
+      "latitudeE7": 107930790,
+      "longitudeE7": 1066349959,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 156,
+      "activity": [
+        {
+          "timestampMs": "1787826934220",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826935224",
+      "latitudeE7": 107930696,
+      "longitudeE7": 1066349963,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 166,
+      "activity": [
+        {
+          "timestampMs": "1787826935224",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826937231",
+      "latitudeE7": 107930968,
+      "longitudeE7": 1066349684,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 163,
+      "activity": [
+        {
+          "timestampMs": "1787826937231",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826939227",
+      "latitudeE7": 107931218,
+      "longitudeE7": 1066349443,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 317,
+      "activity": [
+        {
+          "timestampMs": "1787826939227",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826940227",
+      "latitudeE7": 107931218,
+      "longitudeE7": 1066349443,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 151,
+      "activity": [
+        {
+          "timestampMs": "1787826940227",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826942244",
+      "latitudeE7": 107931660,
+      "longitudeE7": 1066349326,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 151,
+      "activity": [
+        {
+          "timestampMs": "1787826942244",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826944232",
+      "latitudeE7": 107931952,
+      "longitudeE7": 1066349156,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 151,
+      "activity": [
+        {
+          "timestampMs": "1787826944232",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826945233",
+      "latitudeE7": 107931964,
+      "longitudeE7": 1066349118,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 120,
+      "activity": [
+        {
+          "timestampMs": "1787826945233",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826947231",
+      "latitudeE7": 107932003,
+      "longitudeE7": 1066349244,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 132,
+      "activity": [
+        {
+          "timestampMs": "1787826947231",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826948236",
+      "latitudeE7": 107931927,
+      "longitudeE7": 1066349255,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 137,
+      "activity": [
+        {
+          "timestampMs": "1787826948236",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826950221",
+      "latitudeE7": 107931777,
+      "longitudeE7": 1066349332,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 132,
+      "activity": [
+        {
+          "timestampMs": "1787826950221",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826952217",
+      "latitudeE7": 107931790,
+      "longitudeE7": 1066349468,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 134,
+      "activity": [
+        {
+          "timestampMs": "1787826952217",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826953221",
+      "latitudeE7": 107931731,
+      "longitudeE7": 1066349537,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 143,
+      "activity": [
+        {
+          "timestampMs": "1787826953221",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826954236",
+      "latitudeE7": 107931865,
+      "longitudeE7": 1066349604,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 151,
+      "activity": [
+        {
+          "timestampMs": "1787826954236",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826956215",
+      "latitudeE7": 107931684,
+      "longitudeE7": 1066349565,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 159,
+      "activity": [
+        {
+          "timestampMs": "1787826956215",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826958221",
+      "latitudeE7": 107931623,
+      "longitudeE7": 1066349561,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 156,
+      "activity": [
+        {
+          "timestampMs": "1787826958221",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826959227",
+      "latitudeE7": 107931555,
+      "longitudeE7": 1066349535,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 141,
+      "activity": [
+        {
+          "timestampMs": "1787826959227",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826961235",
+      "latitudeE7": 107931445,
+      "longitudeE7": 1066349597,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 139,
+      "activity": [
+        {
+          "timestampMs": "1787826961235",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826963228",
+      "latitudeE7": 107931352,
+      "longitudeE7": 1066349469,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 191,
+      "activity": [
+        {
+          "timestampMs": "1787826963228",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826965228",
+      "latitudeE7": 107931355,
+      "longitudeE7": 1066349367,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 171,
+      "activity": [
+        {
+          "timestampMs": "1787826965228",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826966237",
+      "latitudeE7": 107931350,
+      "longitudeE7": 1066349393,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 168,
+      "activity": [
+        {
+          "timestampMs": "1787826966237",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826968218",
+      "latitudeE7": 107931350,
+      "longitudeE7": 1066349393,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 168,
+      "activity": [
+        {
+          "timestampMs": "1787826968218",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826969235",
+      "latitudeE7": 107931322,
+      "longitudeE7": 1066349446,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 168,
+      "activity": [
+        {
+          "timestampMs": "1787826969235",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826971227",
+      "latitudeE7": 107931300,
+      "longitudeE7": 1066349483,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 115,
+      "activity": [
+        {
+          "timestampMs": "1787826971227",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826973211",
+      "latitudeE7": 107931202,
+      "longitudeE7": 1066349681,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 106,
+      "activity": [
+        {
+          "timestampMs": "1787826973211",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826974225",
+      "latitudeE7": 107931440,
+      "longitudeE7": 1066349694,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 106,
+      "activity": [
+        {
+          "timestampMs": "1787826974225",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826976222",
+      "latitudeE7": 107932337,
+      "longitudeE7": 1066349467,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 82,
+      "activity": [
+        {
+          "timestampMs": "1787826976222",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826977229",
+      "latitudeE7": 107932337,
+      "longitudeE7": 1066349467,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 82,
+      "activity": [
+        {
+          "timestampMs": "1787826977229",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826979218",
+      "latitudeE7": 107932687,
+      "longitudeE7": 1066349550,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 109,
+      "activity": [
+        {
+          "timestampMs": "1787826979218",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826980207",
+      "latitudeE7": 107933238,
+      "longitudeE7": 1066349476,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 352,
+      "activity": [
+        {
+          "timestampMs": "1787826980207",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826981223",
+      "latitudeE7": 107933744,
+      "longitudeE7": 1066349400,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 352,
+      "activity": [
+        {
+          "timestampMs": "1787826981223",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826983220",
+      "latitudeE7": 107933718,
+      "longitudeE7": 1066349473,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 114,
+      "activity": [
+        {
+          "timestampMs": "1787826983220",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826985247",
+      "latitudeE7": 107933718,
+      "longitudeE7": 1066349473,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 114,
+      "activity": [
+        {
+          "timestampMs": "1787826985247",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826987216",
+      "latitudeE7": 107933718,
+      "longitudeE7": 1066349473,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 114,
+      "activity": [
+        {
+          "timestampMs": "1787826987216",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826989221",
+      "latitudeE7": 107933737,
+      "longitudeE7": 1066349431,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826989221",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826991219",
+      "latitudeE7": 107933737,
+      "longitudeE7": 1066349431,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826991219",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826992221",
+      "latitudeE7": 107933737,
+      "longitudeE7": 1066349431,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826992221",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826994207",
+      "latitudeE7": 107933737,
+      "longitudeE7": 1066349431,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826994207",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826995226",
+      "latitudeE7": 107933737,
+      "longitudeE7": 1066349431,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 197,
+      "activity": [
+        {
+          "timestampMs": "1787826995226",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826997215",
+      "latitudeE7": 107933858,
+      "longitudeE7": 1066349361,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 189,
+      "activity": [
+        {
+          "timestampMs": "1787826997215",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826998218",
+      "latitudeE7": 107933858,
+      "longitudeE7": 1066349361,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 189,
+      "activity": [
+        {
+          "timestampMs": "1787826998218",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787826999224",
+      "latitudeE7": 107933858,
+      "longitudeE7": 1066349361,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 189,
+      "activity": [
+        {
+          "timestampMs": "1787826999224",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827001218",
+      "latitudeE7": 107933776,
+      "longitudeE7": 1066349382,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 177,
+      "activity": [
+        {
+          "timestampMs": "1787827001218",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827002220",
+      "latitudeE7": 107933680,
+      "longitudeE7": 1066349433,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 166,
+      "activity": [
+        {
+          "timestampMs": "1787827002220",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827004221",
+      "latitudeE7": 107933503,
+      "longitudeE7": 1066349612,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 166,
+      "activity": [
+        {
+          "timestampMs": "1787827004221",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827006217",
+      "latitudeE7": 107933315,
+      "longitudeE7": 1066349643,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 162,
+      "activity": [
+        {
+          "timestampMs": "1787827006217",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827007219",
+      "latitudeE7": 107933295,
+      "longitudeE7": 1066349516,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 162,
+      "activity": [
+        {
+          "timestampMs": "1787827007219",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827009225",
+      "latitudeE7": 107933205,
+      "longitudeE7": 1066349299,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 168,
+      "activity": [
+        {
+          "timestampMs": "1787827009225",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827011213",
+      "latitudeE7": 107933032,
+      "longitudeE7": 1066349277,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 162,
+      "activity": [
+        {
+          "timestampMs": "1787827011213",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827012225",
+      "latitudeE7": 107932964,
+      "longitudeE7": 1066349299,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 162,
+      "activity": [
+        {
+          "timestampMs": "1787827012225",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827014210",
+      "latitudeE7": 107932809,
+      "longitudeE7": 1066349334,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 157,
+      "activity": [
+        {
+          "timestampMs": "1787827014210",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827015228",
+      "latitudeE7": 107932713,
+      "longitudeE7": 1066349407,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 157,
+      "activity": [
+        {
+          "timestampMs": "1787827015228",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827016232",
+      "latitudeE7": 107932612,
+      "longitudeE7": 1066349289,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 231,
+      "activity": [
+        {
+          "timestampMs": "1787827016232",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827018204",
+      "latitudeE7": 107932558,
+      "longitudeE7": 1066348955,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 271,
+      "activity": [
+        {
+          "timestampMs": "1787827018204",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827019216",
+      "latitudeE7": 107932403,
+      "longitudeE7": 1066348720,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 236,
+      "activity": [
+        {
+          "timestampMs": "1787827019216",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827021219",
+      "latitudeE7": 107932169,
+      "longitudeE7": 1066348672,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 248,
+      "activity": [
+        {
+          "timestampMs": "1787827021219",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827023214",
+      "latitudeE7": 107931991,
+      "longitudeE7": 1066348481,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 260,
+      "activity": [
+        {
+          "timestampMs": "1787827023214",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827024216",
+      "latitudeE7": 107931942,
+      "longitudeE7": 1066348391,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 284,
+      "activity": [
+        {
+          "timestampMs": "1787827024216",
+          "activity": [
+            {
+              "type": "STILL",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827026216",
+      "latitudeE7": 107932018,
+      "longitudeE7": 1066348344,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 285,
+      "activity": [
+        {
+          "timestampMs": "1787827026216",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827027399",
+      "latitudeE7": 107932027,
+      "longitudeE7": 1066348231,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 274,
+      "activity": [
+        {
+          "timestampMs": "1787827027399",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestampMs": "1787827029222",
+      "latitudeE7": 107931996,
+      "longitudeE7": 1066347932,
+      "accuracy": 10,
+      "source": "GPS",
+      "heading": 264,
+      "activity": [
+        {
+          "timestampMs": "1787827029222",
+          "activity": [
+            {
+              "type": "IN_VEHICLE",
+              "confidence": 100
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "endLocationDetails": [
+    {
+      "endTime": "2026-08-27T17:37:09.222901"
+    }
+  ]
+}

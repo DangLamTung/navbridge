@@ -137,10 +137,32 @@ Future<http.Response?> _fetchTile(
   // Try servers in rotation until one serves this tile.
   var tried = 0;
   while (tried < _serverList.length) {
-    while (_blockedTileServers.contains(_serverList[_serverIndex])) {
+    // Rotate to the next non-blocked server, BOUNDED to the list length.
+    // The rotation must never busy-spin: if every server in the list is
+    // blocked (e.g. a concurrent _fetchTile blocked the last free one right
+    // after the containsAll guard above), cycling the index forever never
+    // exits — the old code hit this and pegged the main thread at 100% CPU
+    // ("app isn't responding" ANR) whenever the tile servers blocked the
+    // phone (403/429, common on bulk/low-zoom loading).
+    var guard = 0;
+    while (_blockedTileServers.contains(_serverList[_serverIndex]) &&
+        guard < _serverList.length) {
       _serverIndex = (_serverIndex + 1) % _serverList.length;
+      guard++;
     }
     final template = _serverList[_serverIndex];
+    // Bounded rotation exhausted every server and all are still blocked →
+    // pause the session and restart clean (never spin, never crash).
+    if (_blockedTileServers.contains(template)) {
+      _tileBlockedUntil = DateTime.now().add(_blockBackoff);
+      _blockedTileServers.clear();
+      _serverIndex = 0;
+      debugPrint(
+        'TILE: all servers blocked mid-fetch — pausing '
+        '${_blockBackoff.inMinutes} min',
+      );
+      return null;
+    }
 
     // Wait for a concurrency slot.
     while (_tileInFlight >= _maxTileConcurrency) {
@@ -283,6 +305,10 @@ bool smoothCamera = true;
 /// read by the speech recognizer.
 bool ridingMode = false;
 
+/// Spoken guidance volume (0.0–1.0, default 1.0). Shared global so the nav
+/// voice + the settings pages read/write the same source of truth.
+double voiceVolume = 1.0;
+
 /// Always-on voice assistant wake word (default "dậy đi"). Customizable in
 /// Settings because cheap phones' recognizers transcribe it differently — the
 /// user sets whatever word their device actually hears. Read by the wake-word
@@ -301,6 +327,19 @@ bool simpleMode = false;
 /// page-local state, so saving any setting from the settings screens reset
 /// it back to the default `true`.
 bool cameraAlerts = true;
+
+/// Camera VOICE warning while navigating — a SEPARATE toggle from the on-map
+/// camera display ([cameraAlerts]): the voice stays ON by default even when
+/// the camera icons / PiP chip on the map are switched off.
+bool cameraVoice = true;
+
+/// GPS outlier filter (innovation gate): reject fixes that are too inaccurate
+/// or jump inconsistently with the recent smoothed speed before they reach
+/// the map / complementary filter / speed chip. Off → raw fixes pass through
+/// unfiltered (position/speed may jump). Shared global (same pattern as
+/// [cameraAlerts]/[radarOn]) so the nav page AND settings read/write the same
+/// source of truth.
+bool gpsFilter = true;
 
 /// Rain-radar overlay on the map (RainViewer, free/no key). Shared global
 /// (same pattern as [cameraAlerts]) so the nav-page toggles AND settings
@@ -430,7 +469,7 @@ Future<Directory> tileStoreDir({String? source}) async {
   await _ensureTileCacheVersion();
   final sup = await getApplicationSupportDirectory();
   final d = Directory('${sup.path}/offline_tiles/${_sourceDir(source)}');
-  if (!d.existsSync()) d.createSync(recursive: true);
+  if (!await d.exists()) await d.create(recursive: true);
   return d;
 }
 
@@ -447,7 +486,7 @@ Future<void> _ensureTileCacheVersion() async {
     final vf = File('${sup.path}/tile_cache_version');
     var v = 0;
     try {
-      v = int.tryParse(vf.readAsStringSync().trim()) ?? 0;
+      v = int.tryParse((await vf.readAsString()).trim()) ?? 0;
     } catch (_) {}
     if (v != tileCacheVersion) {
       await clearTileCache();
@@ -476,11 +515,11 @@ Future<int> tileCacheBytes() async {
 Future<void> clearTileCache() async {
   final root = await tileStoreDir();
   try {
-    for (final e in root.listSync()) {
+    for (final e in await root.list().toList()) {
       if (e is Directory) {
-        e.deleteSync(recursive: true);
+        await e.delete(recursive: true);
       } else if (e is File) {
-        e.deleteSync();
+        await e.delete();
       }
     }
   } catch (_) {}
@@ -553,9 +592,9 @@ class OfflineRegion {
 Future<List<OfflineRegion>> loadRegions() async {
   final sup = await getApplicationSupportDirectory();
   final f = File('${sup.path}/offline_regions.json');
-  if (!f.existsSync()) return [];
+  if (!await f.exists()) return [];
   try {
-    final data = jsonDecode(f.readAsStringSync()) as List;
+    final data = jsonDecode(await f.readAsString()) as List;
     return data
         .map((e) => OfflineRegion.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -620,7 +659,7 @@ class RegionDownloader {
         for (var y = y0; y <= y1; y++) {
           if (_cancel) return;
           final f = await tileFile(z, x, y, source: source);
-          if (f.existsSync()) {
+          if (await f.exists()) {
             done++;
             continue;
           }
@@ -646,8 +685,8 @@ class RegionDownloader {
             if (res.statusCode == 200 &&
                 res.bodyBytes.isNotEmpty &&
                 _isPng(res.bodyBytes)) {
-              f.createSync(recursive: true);
-              f.writeAsBytesSync(res.bodyBytes);
+              await f.create(recursive: true);
+              await f.writeAsBytes(res.bodyBytes);
             } else {
               failed++;
             }
@@ -686,7 +725,7 @@ Future<void> deleteRegion(OfflineRegion r) async {
       for (var y = y0; y <= y1; y++) {
         try {
           final f = File('${root.path}/$z/$x/$y.png');
-          if (f.existsSync()) f.deleteSync();
+          if (await f.exists()) await f.delete();
         } catch (_) {}
       }
     }
@@ -732,12 +771,12 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
 
   Future<ImageInfo> _load(ImageDecoderCallback decode) async {
     final file = await tileFile(z, x, y, source: source);
-    if (file.existsSync()) {
+    if (await file.exists()) {
       try {
         // await so a decode failure is caught here (falls through to
         // re-download) instead of escaping the try block as an unhandled
         // future error.
-        return await _decode(decode, file.readAsBytesSync());
+        return await _decode(decode, await file.readAsBytes());
       } catch (_) {
         // corrupt tile — fall through to re-download
       }
@@ -749,8 +788,8 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
       // blocks us (403/429 — e.g. an IP ban).
       final res = await _fetchTile(z, x, y, options.urlTemplate ?? '', source);
       if (res != null && res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
-        file.createSync(recursive: true);
-        file.writeAsBytesSync(res.bodyBytes);
+        await file.create(recursive: true);
+        await file.writeAsBytes(res.bodyBytes);
         return _decode(decode, res.bodyBytes);
       }
       // fall through to transparent tile

@@ -1,0 +1,97 @@
+# Release — build the signed release APK and publish it as a GitHub Release.
+#
+# Triggers:
+#   * push a tag matching v*   (e.g. `git tag v1.0.0 && git push origin v1.0.0`)
+#   * manual run (Actions → Release → Run workflow)
+#
+# Required repo Secrets (Settings → Secrets and variables → Actions):
+#   VIETMAP_API_KEY, VIETMAP_TILE_KEY, GOOGLEMAPS_API_KEY, DEEPSEEK_API_KEY,
+#   TAVILY_API_KEY, WINDY_API_KEY   (the app's build-time keys, from your .env)
+# Optional (proper release signing; without them the APK is debug-signed):
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
+#   ANDROID_KEY_PASSWORD
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build release APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+          # Matches the local toolchain (Flutter 3.44 default NDK).
+          ndk: 28.2.13676358
+
+      # The app's keys come from a gitignored .env locally; recreate it in CI
+      # from repo Secrets so tool/build.sh's --dart-define pipeline is reused
+      # verbatim. Unset secrets become empty lines, which env.sh skips.
+      - name: Create .env from secrets
+        run: |
+          cat > .env <<'EOF'
+          VIETMAP_API_KEY=${{ secrets.VIETMAP_API_KEY }}
+          VIETMAP_TILE_KEY=${{ secrets.VIETMAP_TILE_KEY }}
+          GOOGLEMAPS_API_KEY=${{ secrets.GOOGLEMAPS_API_KEY }}
+          DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
+          WINDY_API_KEY=${{ secrets.WINDY_API_KEY }}
+          EOF
+
+      # Optional real signing: decode the keystore secret + write key.properties.
+      # Without these secrets the build still succeeds (debug-signed).
+      - name: Configure release signing (optional)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            mkdir -p android/app
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+            printf 'storeFile=app/upload-keystore.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "$ANDROID_KEYSTORE_PASSWORD" "$ANDROID_KEY_ALIAS" "$ANDROID_KEY_PASSWORD" \
+              > android/key.properties
+            echo "Release signing configured (keystore + key.properties)."
+          else
+            echo "No keystore secrets — building debug-signed (add the ANDROID_* secrets to sign properly)."
+          fi
+
+      - name: Build release APK
+        run: |
+          chmod +x tool/build.sh
+          ./tool/build.sh --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: navbridge-release
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: navbridge-release
+          path: apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apk/app-release.apk
+          generate_release_notes: true

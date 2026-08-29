@@ -27,6 +27,7 @@ List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
   (LatLng, List<LatLng>, List<T>, double) args,
 ) {
   final (current, geometry, items, maxAheadMeters) = args;
+  if (geometry.length < 2 || items.isEmpty) return const [];
   const Distance d = Distance();
   final out = <(int, double)>[];
   for (var i = 0; i < items.length; i++) {
@@ -56,6 +57,7 @@ List<int> pointsNearRoute<T extends OfflinePoint>(
   (List<LatLng>, List<T>, double) args,
 ) {
   final (geometry, items, corridorMeters) = args;
+  if (geometry.length < 2 || items.isEmpty) return const [];
   // Bounding box of the route + corridor padding.
   var minLat = geometry.first.latitude;
   var maxLat = geometry.first.latitude;

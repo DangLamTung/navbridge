@@ -14,10 +14,16 @@ class RoadInfoChip extends StatelessWidget {
     this.loading = false,
     this.speedMps,
     this.limitOverride,
+    this.fromEsp = false,
   });
 
   final RoadInfo? info;
   final bool loading;
+
+  /// True when the fix is coming from the ESP32 GPS bridge (green "ESP" tag),
+  /// false = phone GPS (grey "ĐT"). Rendered as a tiny tag inside the chip so
+  /// it can never overlap the nav controls column.
+  final bool fromEsp;
 
   /// Current speed in m/s (from GPS) — shown as a Google-style speed pill
   /// that turns red when exceeding the speed limit.
@@ -34,6 +40,11 @@ class RoadInfoChip extends StatelessWidget {
     final limit = limitOverride ?? i?.speedLimit;
     final kmh = speedMps == null ? null : (speedMps! * 3.6).round();
     final speeding = limit != null && kmh != null && kmh > limit;
+    // GPS-source tag colours (inside the chip — never overlaps the controls).
+    final srcColor = fromEsp
+        ? const Color(0xFF1A7F37)
+        : const Color(0xFF9AA0A6);
+    final srcTxt = fromEsp ? 'ESP' : 'ĐT';
     return Material(
       elevation: 6,
       shadowColor: Colors.black26,
@@ -122,6 +133,25 @@ class RoadInfoChip extends StatelessWidget {
                   style: TextStyle(fontSize: 10.5, color: Colors.grey[700]),
                 ),
               ],
+            ),
+            const SizedBox(width: 4),
+            // Tiny "which GPS" dot + tag — green ESP / grey phone.
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: srcColor,
+              ),
+            ),
+            const SizedBox(width: 3),
+            Text(
+              srcTxt,
+              style: TextStyle(
+                fontSize: 8,
+                fontWeight: FontWeight.w700,
+                color: srcColor,
+              ),
             ),
           ],
         ),

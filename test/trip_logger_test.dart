@@ -37,8 +37,8 @@ void main() {
     test('skips fixes that are too soon and too close', () {
       final t = TripLogger(name: 'x');
       t.addFix(const LatLng(10, 106));
-      // Same instant, ~15 m away → under the 5 s / 20 m thresholds.
-      t.addFix(const LatLng(10.0001, 106.0001));
+      // Same instant, ~3 m away → under the 250 ms / 5 m debug thresholds.
+      t.addFix(const LatLng(10.00002, 106.00002));
       expect(t.fixCount, 1);
     });
 

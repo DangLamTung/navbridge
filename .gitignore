@@ -67,6 +67,13 @@ assets/trips/
 # tool/env.sh -> --dart-define at build time.
 .env
 
+# Local release signing — never commit.
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
+*.jks
+*.keystore
+
 # Offline POI build intermediates (regenerate with tools/poi/build_pois.py).
 tools/poi/*.osm.pbf
 tools/poi/*.geojson

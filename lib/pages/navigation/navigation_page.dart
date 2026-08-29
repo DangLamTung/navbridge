@@ -13,7 +13,8 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' show max;
+import 'dart:typed_data';
+import 'dart:math' show max, sin, cos, atan2;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -21,31 +22,39 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'package:navbridge/services/ble_clock.dart';
 import 'package:navbridge/services/ble_map_clock.dart';
+import 'package:navbridge/services/ble_auto_connect.dart';
 import 'package:navbridge/ui/device_picker.dart';
 import 'package:navbridge/services/elevation.dart';
 import 'package:navbridge/services/nav_engine.dart';
 import 'package:navbridge/services/offline_cameras.dart';
 import 'package:navbridge/core/nav_protocol.dart';
 import 'package:navbridge/core/map_protocol.dart';
+import 'package:navbridge/core/nmea_parser.dart';
 import 'package:navbridge/pages/settings_screen.dart';
+import 'package:navbridge/services/offline_geo.dart';
 import 'package:navbridge/services/offline_poi.dart';
 import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/offline_speed_limits.dart';
 import 'package:navbridge/services/offline_router.dart';
 import 'package:navbridge/services/offline_tiles.dart';
 import 'package:navbridge/services/poi_search.dart';
+import 'package:navbridge/services/google_places.dart';
 import 'package:navbridge/core/gps_noise_simulator.dart';
+import 'package:navbridge/core/heading_filter.dart';
 import 'package:navbridge/core/location_kalman.dart';
+import 'package:navbridge/core/outlier_gate.dart';
 import 'package:navbridge/core/route_profile.dart';
 import 'package:navbridge/core/settings.dart';
 import 'package:navbridge/services/quick_places.dart';
 import 'package:navbridge/services/osm_api.dart';
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/overpass.dart';
+import 'package:navbridge/services/overlay_visibility.dart';
 import 'package:navbridge/services/radar.dart';
 import 'package:navbridge/services/route_export.dart';
 import 'package:navbridge/services/trip_logger.dart';
@@ -119,6 +128,9 @@ class _NavigationPageState extends State<NavigationPage>
   /// BLE client for the ESP32 2.8" navigation display (NAV-OSM board).
   final BleMapClock _mapClock = BleMapClock();
 
+  /// Automatic Bluetooth connection service for external displays.
+  late final BleAutoConnectService _autoConnect;
+
   /// setState wrapper exposed to the navigation `part` extensions (nav_*.dart),
   /// which are not State subclasses and so can't call the protected
   /// [State.setState] directly. This keeps a single rebuild path for the page.
@@ -163,12 +175,49 @@ class _NavigationPageState extends State<NavigationPage>
   LatLng? _origin;
   LatLng? _destination;
 
+  /// Identity-keyed cache of DECIMATED route geometry for the browse map —
+  /// a long-distance route's full polyline is reduced once (not on every
+  /// 1 Hz rebuild), keeping the map fast right after routing.
+  final Map<Object, List<LatLng>> _routeDisplayCache = {};
+
+  /// 1 Hz gate for [_syncOverlayVisibility] — it's also hooked to map camera
+  /// events (pan/zoom), which fire far faster than GPS. Without this gate the
+  /// camera/speed lookups would hammer the main thread and ANR the app.
+  DateTime? _lastOverlaySync;
+
   /// Index into the route polyline where the DRAWN route starts — the driven
   /// part is "consumed" (not drawn), Google-Maps style. Updated on every nav
   /// fix from `engine.snappedSegmentIndex`.
   int _routeStartIndex = 0;
   LatLng? _current;
-  double? _heading;
+
+  /// Strict GPS-heading filter ([StrictHeading]): holds the heading while the
+  /// car is stationary and only applies a big change after two agreeing fixes,
+  /// so the car arrow never spins in place. Exposes the filtered value via
+  /// [_heading] (read by the map + trip logger).
+  final StrictHeading _headingFilter = StrictHeading();
+  double? get _heading => _headingFilter.heading;
+
+  /// GPS outlier gate ([OutlierGate]): rejects inaccurate fixes and position
+  /// jumps inconsistent with the recent smoothed speed before they reach the
+  /// map / filter / speed chip (a single 130 km/h burst must never move the
+  /// arrow or flash the speed).
+  final OutlierGate _outlierGate = OutlierGate();
+
+  /// ESP32 GPS bridge (ESP-first, phone fallback): the board's on-UART0
+  /// receiver broadcasts a compact AA55 GPS frame (type 0x0A) over BLE; we
+  /// parse it and use it FIRST (real antenna), falling back to the phone's GPS
+  /// only when the ESP has no fresh fix. State lives here; parsing/feeding
+  /// lives in nav_gps.dart.
+  final NmeaParser _nmea = NmeaParser(); // legacy raw-NMEA path (kept)
+  bool _espValid = false; // latest ESP frame has a fix (either protocol)
+  DateTime? _espFixAt; // when the last ESP frame/line arrived
+  DateTime? _espLastFeed; // throttle so pairs don't double-feed
+  // The compact binary frame carries no speed/heading — derive from movement.
+  LatLng? _espPrevPos;
+  DateTime? _espPrevAt;
+  double? _espSpeedMps;
+  double? _espHeading;
 
   /// True once the browse map has been panned to the first real GPS fix, so
   /// the "you are here" dot is on screen (the map starts at the default HCMC
@@ -189,6 +238,8 @@ class _NavigationPageState extends State<NavigationPage>
   StreamSubscription<Position>? _gpsSub;
   StreamSubscription<ClockLink>? _clockSub;
   StreamSubscription<ClockLink>? _mapClockSub;
+  StreamSubscription<String>? _mapGpsSub;
+  StreamSubscription<Uint8List>? _mapGpsFrameSub;
   bool _navigating = false;
 
   /// True while the OS Picture-in-Picture window is on screen (nav only). When
@@ -258,17 +309,11 @@ class _NavigationPageState extends State<NavigationPage>
   /// the first build, not at boot).
   bool _camerasRequested = false;
 
-  /// Cameras along the ROUTE — during navigation the map layer shows the
-  /// cameras within [kNavMapCameraCorridor] of the whole route polyline, so
-  /// the driver sees the cameras on the road they're taking for the entire
-  /// trip (the car-centric 1.5 km window was often empty and made the nav
-  /// map look like it had no cameras at all). The VOICE alert
-  /// (`_checkCameraAhead`) stays car-centric. Refreshed whenever the route is
-  /// set / re-planned / cleared and when camera alerts toggle on.
+  /// Cameras shown on the nav map — bounded to NEAR-THE-CAR while navigating
+  /// (see [_refreshRouteCameras]: a whole-route layer of 100+ cameras × 4
+  /// native circles each crushed the low-end phone at large zoom). The VOICE
+  /// alert (`_checkCameraAhead`) is a separate per-second ahead check.
   List<OfflineCamera> _routeCameras = [];
-
-  /// Half-width (metres) of the band around the route shown on the nav map.
-  static const double kNavMapCameraCorridor = 500;
 
   // --- simulated drive (testing without GPS — walks the route) ------------
   /// True while the simulated-drive timer is advancing the car along the
@@ -285,23 +330,55 @@ class _NavigationPageState extends State<NavigationPage>
   /// the route, not a whole-route corridor. Called when the route is planned
   /// / re-planned / cleared and when camera alerts toggle on (during nav
   /// `_cameraAheadAsync` keeps it fresh each second).
-  /// Recompute [_routeCameras] for the current route — all cameras within
-  /// [kNavMapCameraCorridor] of the route polyline (background isolate, so a
-  /// long route never blocks the UI). Called when the route is planned /
-  /// re-planned / cleared and when camera alerts toggle on.
+  ///
+  /// Refresh the nav-map camera + sign marker layers. WHILE NAVIGATING these
+  /// are bounded to NEAR-THE-CAR only (a handful of markers, refreshed ~5 s) —
+  /// a whole long route's route-wide layer is 100+ cameras (each drawn as 4
+  /// native maplibre circles) + 2,000+ signs as icon overlays, all held even
+  /// off-screen, which crushed the low-end phone at large zoom. During route
+  /// PREVIEW / browsing (not navigating) the layers are NOT loaded at all —
+  /// that stage is country-zoom and the markers are useless there.
+  DateTime? _lastNearbyLayers;
   Future<void> _refreshRouteCameras() async {
     final r = _route;
-    final near = (r == null || r.geometry.length < 2)
-        ? const <OfflineCamera>[]
-        : await camerasNearRoute(
-            r.geometry,
-            corridorMeters: kNavMapCameraCorridor,
-          );
+    if (r == null || r.geometry.length < 2) {
+      if (mounted && (_routeCameras.isNotEmpty || _routeSigns.isNotEmpty)) {
+        setNavState(() {
+          _routeCameras = const [];
+          _routeSigns = const [];
+        });
+      }
+      return;
+    }
+    final pos = _navigating ? _current : null;
+    if (pos == null) {
+      // Preview/browse: DON'T load the route-wide marker layers (see doc).
+      if (mounted && (_routeCameras.isNotEmpty || _routeSigns.isNotEmpty)) {
+        setNavState(() {
+          _routeCameras = const [];
+          _routeSigns = const [];
+        });
+      }
+      return;
+    }
+    // Markers near the car — BOUNDED so the low-end phone stays smooth: the
+    // 1.5 km / 80-sign map layer (and the 5 km uncapped camera layer, each
+    // camera drawn as 4 native circles) froze navigation. Now signs are
+    // 800 m / 20 and cameras 3 km / 40 (nearest first).
+    const Distance d = Distance();
+    var cams = await camerasNearPoint(pos, maxDistM: 3000);
+    cams.sort(
+      (a, b) => d
+          .as(LengthUnit.Meter, pos, a.pos)
+          .compareTo(d.as(LengthUnit.Meter, pos, b.pos)),
+    );
+    if (cams.length > 40) cams = cams.sublist(0, 40);
+    final signs = await signsNearPoint(pos, maxDistM: 800, max: 20);
     if (!mounted) return;
-    setNavState(() => _routeCameras = near);
-    // Road signs ride the same lifecycle as cameras: refreshed/cleared
-    // wherever the route or the toggle changes.
-    unawaited(_refreshRouteSigns());
+    setNavState(() {
+      _routeCameras = cams;
+      _routeSigns = signs;
+    });
   }
 
   /// Load the on-device GraphHopper routing graph — kicked off in the
@@ -489,6 +566,117 @@ class _NavigationPageState extends State<NavigationPage>
     _lastLimitSpoke = null;
   }
 
+  /// Push the floating widget's state to the overlay engine: the next-maneuver
+  /// snippet (Vietmap-Live style), the speed limit and the next camera — all
+  /// computed HERE, so the overlay engine loads NO offline layers (that was
+  /// the freeze). The widget is NEVER auto-hidden (removed the old
+  /// zoom/radar-based hide — it made the traffic sign vanish while driving).
+  ///
+  /// While NOT navigating (e.g. the user runs Google Maps underneath), it
+  /// still computes the CURRENT STREET's posted limit + nearest camera from
+  /// the live GPS fix, so the floating widget works standalone: speed + limit
+  /// + camera on top of any app. Cheap: deduped, ~1/s.
+  Future<void> _syncOverlayVisibility() async {
+    // HARD 1 Hz gate (see field doc) — this is called from onPositionChanged
+    // + the nav-map controller at far above 1 Hz during gestures.
+    final now = DateTime.now();
+    if (_lastOverlaySync != null &&
+        now.difference(_lastOverlaySync!) < const Duration(seconds: 1)) {
+      return;
+    }
+    _lastOverlaySync = now;
+    double zoom = 19.0;
+    try {
+      zoom = _navigating ? _vmFollow.zoom : _map.camera.zoom;
+    } catch (_) {
+      zoom = 19.0;
+    }
+    final nav = _navigating ? _progress : null;
+    // Limit: the effective limit while navigating; otherwise the street's
+    // posted limit at the current GPS position (standalone widget).
+    var limit = _effectiveSpeedLimit;
+    if (limit <= 0) {
+      final cur = _current ?? _origin;
+      if (cur != null) {
+        try {
+          limit = await speedLimitAt(cur) ?? 0;
+        } catch (_) {
+          limit = 0;
+        }
+      }
+    }
+    // Every camera within 600 m of the car (the user: "camera should also
+    // show all in range 600m").
+    final cameraMeters = await _standaloneCameraMeters();
+
+    final signChips = await _standaloneSignAhead();
+    final speedMps = _simulating ? 16.0 : _lastSpeedMps;
+    final speedKmh = speedMps * 3.6;
+
+    syncOverlayState(
+      zoom: zoom,
+      radarOn: radarOn,
+      satelliteOn: _satelliteOn,
+      // Auto-hide ONLY while actively navigating in NavBridge — over Google
+      // Maps / browsing the bubble must stay visible (see syncOverlayState).
+      navigating: _navigating,
+      maneuver: nav == null
+          ? null
+          : OverlayManeuver(nav.iconCode, nav.meter, nav.nextText),
+      limit: limit > 0 ? limit : null,
+      // Always send the list (even empty) so the overlay CLEARS a stale
+      // camera chip once the car is out of range — not just when there's one.
+      cameras: cameraMeters,
+      speedKmh: speedKmh,
+      signs: signChips.isEmpty ? null : signChips,
+    );
+  }
+
+  /// The SINGLE sign the floating widget shows — the sign NEAREST ON THE
+  /// ROUTE ahead while navigating (cấm rẽ / quay đầu / vượt prioritized), or
+  /// the most important sign near the car when standalone over another app.
+  Future<List<OverlaySign>> _standaloneSignAhead() async {
+    final cur = _current ?? _origin;
+    if (cur == null) return const [];
+    try {
+      final geometry = _route?.geometry ?? const [];
+      if (_navigating && geometry.length >= 2) {
+        final ahead = await signsAheadOnRoute(
+          cur,
+          geometry,
+          maxAheadMeters: 800,
+        );
+        final best = bestSignAhead(ahead);
+        if (best == null) return const [];
+        return [
+          OverlaySign(
+            best.sign.kind.key,
+            best.sign.value,
+            best.sign.name,
+            best.routeMeters.round(),
+          ),
+        ];
+      }
+      final chips = await signsForWidgetChips(cur, maxDistM: 800, max: 1);
+      return [
+        for (final (s, m) in chips) OverlaySign(s.kind.key, s.value, s.name, m),
+      ];
+    } catch (_) {}
+    return const [];
+  }
+
+  /// ALL camera distances (metres) within 600 m of the live position (the
+  /// floating widget shows every camera it approaches). Bbox pre-filter so a
+  /// dense nationwide DB only scans nearby cameras.
+  Future<List<int>> _standaloneCameraMeters() async {
+    final cur = _current ?? _origin;
+    if (cur == null) return const [];
+    try {
+      return await camerasForWidgetChips(cur, maxDistM: 600);
+    } catch (_) {}
+    return const [];
+  }
+
   double _lastGpsAccuracy = 0; // latest GPS fix accuracy (m) → Kalman noise
   bool _gpsWeakSpoken = false; // low-GPS alert announced (episode)
   DateTime? _lastGpsWeakAt; // last low-GPS voice alert (60 s cooldown)
@@ -547,6 +735,27 @@ class _NavigationPageState extends State<NavigationPage>
     // swap to the compact layout whenever the OS PiP window appears.
     PipService.instance.init();
     PipService.instance.isPipMode.addListener(_onPipChanged);
+
+    _autoConnect = BleAutoConnectService(
+      clock: _clock,
+      mapClock: _mapClock,
+      onDeviceConnected: (device) {
+        if (!mounted) return;
+        final isMap = _isMapDisplay(device);
+        setState(() {
+          if (isMap) {
+            _mapStatus = 'connected';
+            _sendMapRoute();
+            final nav = _progress;
+            if (nav != null) _sendToMap(nav);
+          } else {
+            _clockStatus = 'connected';
+          }
+        });
+      },
+    );
+    _autoConnect.init();
+
     _clockSub = _clock.linkStream.listen((l) {
       if (!mounted) return;
       setState(() {
@@ -567,6 +776,15 @@ class _NavigationPageState extends State<NavigationPage>
         };
       });
     });
+    // ESP32 GPS bridge: subscribe to the board's GPS broadcast — the compact
+    // AA55 binary frame (current protocol) + legacy raw NMEA. Fixes flow
+    // through the same pipeline as the phone GPS (ESP-first).
+    _mapGpsSub = _mapClock.gpsNmeaStream.listen(_onEspNmea);
+    _mapGpsFrameSub = _mapClock.gpsFrameStream.listen(_onEspGpsFrame);
+    // Nav vector-map zoom → floating-widget auto-hide. The nav map reports
+    // its zoom through this controller; a ChangeNotifier listener here means
+    // a zoom-out hides the widget even while following (no GPS fix needed).
+    _vmFollow.addListener(_syncOverlayVisibility);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       debugPrint(
         'STARTUP: first frame at t+'
@@ -600,18 +818,27 @@ class _NavigationPageState extends State<NavigationPage>
       smoothCamera = s.smoothCamera;
       simpleMode = s.simpleMode;
       cameraAlerts = s.cameraAlerts;
+      gpsFilter = s.gpsFilter;
+      voiceVolume = s.voiceVolume;
       radarOn = s.radar;
       wakeWord = s.wakeWord;
+      overlayLayout = s.overlayLayout;
+      overlayScale = s.overlayScale;
+      bleAutoConnect = s.bleAutoConnect;
+      lastBleMac = s.lastBleMac;
+      lastBleName = s.lastBleName;
+      lastBleType = s.lastBleType;
       debugPrint(
         'SETTINGS: cameraAlerts=$cameraAlerts radar=$radarOn '
-        '(persisted=$s.cameraAlerts)',
+        '(persisted=$s.cameraAlerts) bleAuto=$bleAutoConnect',
       );
       setState(() => _offline = _offline || forceOffline);
       _flashOfflineBanner();
-      // The camera index loads lazily when the user toggles camera alerts on
-      // or a route is set (not at boot). The GraphHopper graph is already
-      // being loaded in the background from initState (idempotent — no-op
-      // here if the preload beat us to it).
+      // If Bluetooth auto-connect is enabled, start the auto-connect hunt.
+      if (bleAutoConnect) {
+        _autoConnect.rearm();
+        unawaited(_autoConnect.autoConnect());
+      }
     });
     // Voice: spoken turn-by-turn (→ Bluetooth speaker) + mic commands.
     // TTS + speech-recognition init is deferred OFF the boot path: binding
@@ -627,12 +854,11 @@ class _NavigationPageState extends State<NavigationPage>
         _voice.init();
         _commands.init(
           onStatus: (s) {
-            // Speech session ended (final result / silence / error) → release
-            // mic.
-            if (s == 'done' || s == 'notListening') {
-              _listening = false;
-              if (mounted) setState(() {});
-            }
+            // NOTE: do NOT clear [_listening] on 'done'/'notListening' — those
+            // fire when each ~1 s recognizer session ends, and the one-shot
+            // listen loop restarts it (up to the 60 s budget). Clearing here
+            // hid the "Đang nghe…" banner and cancelled the "Không nghe rõ"
+            // fallback after the first session.
           },
         );
       });
@@ -649,6 +875,10 @@ class _NavigationPageState extends State<NavigationPage>
     Future(() async {
       if (await _requestPermission()) _startGps();
     });
+    if (bleAutoConnect && !_clock.isConnected && !_mapClock.isConnected) {
+      _autoConnect.rearm();
+      unawaited(_autoConnect.autoConnect());
+    }
   }
 
   /// OS PiP window appeared/disappeared → swap between the compact PiP layout
@@ -664,6 +894,7 @@ class _NavigationPageState extends State<NavigationPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     PipService.instance.isPipMode.removeListener(_onPipChanged);
+    _vmFollow.removeListener(_syncOverlayVisibility);
     _debounce?.cancel();
     _offlineBannerTimer?.cancel();
     _offlineDebounce?.cancel();
@@ -676,6 +907,7 @@ class _NavigationPageState extends State<NavigationPage>
     _connSub?.cancel();
     _voice.stop();
     _commands.stop();
+    _autoConnect.dispose();
     // If a trip is still recording when the page is closed, save it.
     final t = _trip;
     if (t != null && t.hasEnoughData) {
@@ -683,6 +915,8 @@ class _NavigationPageState extends State<NavigationPage>
     }
     _clockSub?.cancel();
     _mapClockSub?.cancel();
+    _mapGpsSub?.cancel();
+    _mapGpsFrameSub?.cancel();
     _clock.dispose();
     _mapClock.dispose();
     _map.dispose();

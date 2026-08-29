@@ -71,6 +71,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
   int _graphTotal = 1;
   int _graphBytes = 0;
   int _cacheBytes = 0;
+  StreamSubscription<bool>? _connSub;
 
   @override
   void initState() {
@@ -79,11 +80,19 @@ class _OfflineScreenState extends State<OfflineScreen> {
     _refreshGraph();
     _refreshNavMap();
     _refreshTerrain();
-    onlineStream().listen((o) => setState(() => _online = o));
-    isOnline().then((o) => setState(() => _online = o));
-    setState(() {
-      _forceOffline = forceOffline;
+    _forceOffline = forceOffline;
+    _connSub = onlineStream().listen((o) {
+      if (mounted) setState(() => _online = o);
     });
+    isOnline().then((o) {
+      if (mounted) setState(() => _online = o);
+    });
+  }
+
+  @override
+  void dispose() {
+    _connSub?.cancel();
+    super.dispose();
   }
 
   /// Snapshot the current globals into a persisted [AppSettings] — keeps ALL

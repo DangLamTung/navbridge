@@ -127,8 +127,8 @@ class _NavigationCardState extends State<NavigationCard> {
                     nav == null
                         ? 'Đang khởi động…'
                         : a == null
-                            ? _durationText(Duration(minutes: 0))
-                            : _durationText(remaining),
+                        ? _durationText(Duration(minutes: 0))
+                        : _durationText(remaining),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -142,7 +142,9 @@ class _NavigationCardState extends State<NavigationCard> {
                     nav == null
                         ? '--'
                         : [
-                            formatDistance(nav.meter),
+                            // Distance to the FINAL destination, not the next
+                            // maneuver ("6.6 km • 12:15").
+                            formatDistance(nav.remainingMeters),
                             a == null ? '--' : _etaText(a),
                             if (widget.stopLabel.isNotEmpty) widget.stopLabel,
                           ].join(' • '),

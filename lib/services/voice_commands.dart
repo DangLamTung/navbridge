@@ -232,8 +232,14 @@ class VoiceCommands {
     try {
       _available = await _speech.initialize(
         onStatus: (s) {
-          // A session ends (silence / final result / error) → free the mic.
-          if (s == 'done' || s == 'notListening' || s == 'error') {
+          // IMPORTANT: 'done' / 'notListening' fire when EACH short recognizer
+          // session ends — on the itel that's ~1 s of silence. They must NOT
+          // clear [_listening]: the one-shot [listen] loop bridges those gaps
+          // by restarting the session, and clearing the flag here would kill
+          // that loop after the first ~1 s → "it doesn't listen anything".
+          // Only a hard 'error' frees the mic (the loop would just churn on a
+          // broken recognizer). [stop] / a delivered result end the loop.
+          if (s == 'error') {
             _listening = false;
           }
           onStatus?.call(s);

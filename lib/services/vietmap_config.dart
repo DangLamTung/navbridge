@@ -3,12 +3,31 @@
 library;
 
 class VietmapConfig {
-  /// Vietmap API key — autocomplete / place / routing.
+  /// Vietmap API key(s) — autocomplete / place / routing.
   ///
   /// Provided at BUILD TIME via --dart-define. NEVER put a real key in this
   /// file (the original committed key was exposed via git history and must be
-  /// rotated in the Vietmap console).
+  /// rotated in the Vietmap console). Multiple keys can be given as a
+  /// comma-separated list (`VIETMAP_API_KEY=key1,key2`) — the app round-robins
+  /// through them per request so quota is spread and one key hitting its daily
+  /// limit doesn't kill search/routing.
   static const String apiKey = String.fromEnvironment('VIETMAP_API_KEY');
+
+  static final List<String> _keys = apiKey
+      .split(',')
+      .map((k) => k.trim())
+      .where((k) => k.isNotEmpty)
+      .toList();
+  static int _keyIdx = 0;
+
+  /// Next Vietmap key (round-robin across the comma-separated list). Empty
+  /// when no key was provided.
+  static String nextKey() {
+    if (_keys.isEmpty) return '';
+    final k = _keys[_keyIdx % _keys.length];
+    _keyIdx++;
+    return k;
+  }
 
   /// Vietmap TILE key — map tiles / style (also --dart-define only).
   static const String tileKey = String.fromEnvironment('VIETMAP_TILE_KEY');

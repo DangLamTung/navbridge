@@ -10,12 +10,12 @@ library;
 
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
 import 'offline_loader.dart';
 import 'offline_scan.dart';
+import 'offline_scan_isolate.dart';
 
 /// The kind of road sign — drives the map icon and the spoken warning.
 /// Uses Việt Nam standard signage (QCVN 41:2019/BGTVT) codes where relevant
@@ -134,22 +134,20 @@ Future<List<RoadSign>> _fetchSigns() async {
 /// Find the first sign AHEAD of [current] along [geometry], ordered by
 /// distance along the route, limited to [maxAheadMeters] ahead.
 ///
-/// Runs in a BACKGROUND ISOLATE so the per-second nav check never blocks the
-/// UI thread on a long route (same approach as [camerasAheadOnRoute]).
+/// Runs in the PERSISTENT BACKGROUND ISOLATE ([OfflineScanIsolate]) that
+/// keeps the sign DB resident — a fresh `compute()` per call would deep-copy
+/// the whole ~11k-sign list onto the main thread EVERY second (same freeze
+/// mechanism as the cameras on long routes).
 Future<List<SignAhead>> signsAheadOnRoute(
   LatLng current,
   List<LatLng> geometry, {
   double maxAheadMeters = 1500,
 }) async {
-  final signs = await loadOfflineRoadSigns();
-  if (signs.isEmpty || geometry.length < 2) return const [];
-  final res = await compute(pointsAheadOnRoute<RoadSign>, (
+  return OfflineScanIsolate.instance.signsAhead(
     current,
     geometry,
-    signs,
-    maxAheadMeters,
-  ));
-  return [for (final (i, m) in res) SignAhead(sign: signs[i], routeMeters: m)];
+    maxAheadMeters: maxAheadMeters,
+  );
 }
 
 // The isolate workers (`pointsAheadOnRoute` / `pointsNearRoute`) live in
@@ -162,14 +160,131 @@ Future<List<RoadSign>> signsNearRoute(
   List<LatLng> geometry, {
   double corridorMeters = 200,
 }) async {
-  final signs = await loadOfflineRoadSigns();
-  if (signs.isEmpty || geometry.length < 2) return const [];
-  final idxs = await compute(pointsNearRoute<RoadSign>, (
+  return OfflineScanIsolate.instance.signsNear(
     geometry,
-    signs,
-    corridorMeters,
-  ));
-  return [for (final i in idxs) signs[i]];
+    corridorMeters: corridorMeters,
+  );
+}
+
+/// Signs within [maxDistM] of a POINT — the nav-map layer WHILE DRIVING only
+/// needs the handful near the car. A whole long route can hold 2,000+ signs
+/// as native icon overlays (crushing the low-end phone at large zoom), so the
+/// driving layer is bounded to near-car signs, refreshed every few seconds.
+/// Cheap bbox pre-filter over the ~11k DB (not a route-wide isolate scan).
+/// Most important signs first (cấm rẽ / quay đầu / vượt / khu dân cư → STOP /
+/// nhường đường → traffic lights), then distance; deduped + capped at [max].
+Future<List<RoadSign>> signsNearPoint(
+  LatLng pos, {
+  double maxDistM = 4000,
+  int max = 40,
+}) async {
+  final signs = await loadOfflineRoadSigns();
+  if (signs.isEmpty) return const [];
+  const Distance d = Distance();
+  final span = maxDistM / 111320.0;
+  final out = <(RoadSign, double)>[];
+  for (final s in signs) {
+    if (s.lat < pos.latitude - span ||
+        s.lat > pos.latitude + span ||
+        s.lng < pos.longitude - span ||
+        s.lng > pos.longitude + span) {
+      continue;
+    }
+    final m = d.as(LengthUnit.Meter, pos, s.pos);
+    if (m <= maxDistM) out.add((s, m));
+  }
+  out.sort((a, b) {
+    final pa = _signPriority(a.$1.kind);
+    final pb = _signPriority(b.$1.kind);
+    return pa != pb ? pa.compareTo(pb) : a.$2.compareTo(b.$2);
+  });
+  final speedBuckets = <String>{};
+  final signalBuckets = <String>{};
+  final kept = <RoadSign>[];
+  for (final (s, _) in out) {
+    if (kept.length >= max) break;
+    if (s.kind == RoadSignKind.speed) {
+      final bucket =
+          '${s.value}/${(s.lat / 0.003).round()},${(s.lng / 0.003).round()}';
+      if (!speedBuckets.add(bucket)) continue;
+    } else if (s.kind == RoadSignKind.signal) {
+      final bucket = '${(s.lat / 0.0012).round()},${(s.lng / 0.0012).round()}';
+      if (!signalBuckets.add(bucket)) continue;
+    }
+    kept.add(s);
+  }
+  return kept;
+}
+
+/// Driving-importance rank for the sign chips / map layer: cấm rẽ / quay đầu /
+/// cấm vượt AND khu dân cư boundaries FIRST (the driver must see them), then
+/// STOP / nhường đường, then the rest. Two signs at the same rank sort by
+/// distance.
+int _signPriority(RoadSignKind k) => switch (k) {
+  RoadSignKind.noLeftTurn ||
+  RoadSignKind.noRightTurn ||
+  RoadSignKind.noUTurn ||
+  RoadSignKind.noLeftUTurn ||
+  RoadSignKind.noRightUTurn ||
+  RoadSignKind.noPassing ||
+  RoadSignKind.noPassingEnd ||
+  RoadSignKind.populated ||
+  RoadSignKind.populatedEnd => 0, // cấm rẽ / quay đầu / vượt + khu dân cư
+  RoadSignKind.stop || RoadSignKind.giveWay => 1,
+  _ => 2,
+};
+
+/// Pick the SINGLE most important sign from route-ahead signs (cấm rẽ / quay
+/// đầu / vượt / khu dân cư first, then STOP / nhường đường) — the widget shows
+/// only this one nearest-on-route sign. Speed signs (already on the R.301
+/// badge) and traffic lights (map-only) are skipped.
+SignAhead? bestSignAhead(List<SignAhead> ahead) {
+  if (ahead.isEmpty) return null;
+  SignAhead? best;
+  var bestP = 99;
+  for (final a in ahead) {
+    if (a.sign.kind == RoadSignKind.speed ||
+        a.sign.kind == RoadSignKind.signal) {
+      continue;
+    }
+    final p = _signPriority(a.sign.kind);
+    if (p < bestP) {
+      bestP = p;
+      best = a;
+    }
+  }
+  return best;
+}
+
+/// Ordered list of road-sign chips for the floating widget (sign + metres):
+/// every non-speed / non-signal sign within [maxDistM] (800 m), sorted by
+/// DRIVING IMPORTANCE first (cấm rẽ / quay đầu / cấm vượt / khu dân cư → STOP
+/// / nhường đường → rest), then distance — so cấm rẽ trái/phải, cấm quay đầu
+/// and khu dân cư always appear ahead of a nearer but less critical sign.
+/// Speed signs are already shown by the R.301 badge and traffic lights are
+/// map-only, so both are excluded. Capped at [max] chips.
+Future<List<(RoadSign, int)>> signsForWidgetChips(
+  LatLng pos, {
+  double maxDistM = 800,
+  int max = 6,
+}) async {
+  final near = await signsNearPoint(pos, maxDistM: maxDistM);
+  if (near.isEmpty) return const [];
+  const Distance d = Distance();
+  final all = <(RoadSign, int)>[];
+  for (final s in near) {
+    if (s.kind == RoadSignKind.speed || s.kind == RoadSignKind.signal) {
+      continue;
+    }
+    final m = d.as(LengthUnit.Meter, pos, s.pos).round();
+    all.add((s, m));
+  }
+  all.sort((a, b) {
+    final pa = _signPriority(a.$1.kind);
+    final pb = _signPriority(b.$1.kind);
+    return pa != pb ? pa.compareTo(pb) : a.$2.compareTo(b.$2);
+  });
+  return all.length > max ? all.sublist(0, max) : all;
 }
 
 // Route scanning (`pointsAheadOnRoute` / `pointsNearRoute`) lives in

@@ -54,8 +54,8 @@ class CarFilter {
 
   /// Feed a GPS fix (already snapped to the route). [dt] = seconds since the
   /// last fix (falls back to the wall clock). [routeBearing] = the engine's
-  /// smoothed route-ahead bearing (0 = unknown) — the dead-reckon direction.
-  void update(LatLng fix, {double? dt, double routeBearing = 0}) {
+  /// smoothed route-ahead bearing (null = unknown) — the dead-reckon direction.
+  void update(LatLng fix, {double? dt, double? routeBearing}) {
     final now = DateTime.now();
     final d =
         dt ??
@@ -76,9 +76,9 @@ class CarFilter {
     // Heading: follow the route bearing when available, otherwise the fix-
     // to-fix travel bearing; low-passed so it never snaps.
     double newBearing;
-    if (routeBearing > 0) {
-      newBearing = routeBearing;
-    } else if (prev != null) {
+    if (routeBearing != null) {
+      newBearing = (routeBearing % 360 + 360) % 360;
+    } else if (prev != null && _distMeters(prev, fix) > 0.5) {
       newBearing = _bearingBetween(prev, fix);
     } else {
       newBearing = _hasBearing ? _bearingDeg : 0;
@@ -115,6 +115,11 @@ class CarFilter {
     _pos = next;
     return next;
   }
+
+  /// Pin the filter's position to [p] (e.g. the route-snapped point) WITHOUT
+  /// touching the smoothed speed/heading — the next dead-reckon then starts
+  /// FROM the road, so a corner-cutting glide is corrected immediately.
+  void snapTo(LatLng p) => _pos = p;
 
   static LatLng _advance(LatLng from, double bearingDeg, double distM) {
     final rad = bearingDeg * math.pi / 180;

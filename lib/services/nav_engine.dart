@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'package:latlong2/latlong.dart';
 
 import 'package:navbridge/core/nav_protocol.dart';
+import 'package:navbridge/services/offline_geo.dart';
 import 'package:navbridge/services/osrm.dart';
 
 /// Everything needed to build a nav frame for the clock.
@@ -41,6 +42,11 @@ class NavProgress {
   /// Google-style trip progress bar at the top of the nav screen.
   final double progress;
 
+  /// Distance REMAINING to the FINAL destination (not the next maneuver),
+  /// metres. The ETA card shows this — "6.6 km • 12:15" — while [meter]
+  /// stays the distance to the next turn.
+  final double remainingMeters;
+
   NavProgress({
     required this.meter,
     required this.iconCode,
@@ -57,6 +63,7 @@ class NavProgress {
     this.totalStops = 0,
     this.stopName = '',
     this.progress = 0,
+    this.remainingMeters = 0,
   });
 }
 
@@ -104,10 +111,13 @@ class TurnByTurnEngine {
   TurnByTurnEngine(this.route, {List<String>? stopNames})
     : stopNames = stopNames ?? const [],
       _stopCum = List.of(route.stopCumulative) {
+    // Fast approximate metres per segment — this loop runs the WHOLE route
+    // synchronously on the main thread right after routing; haversine over
+    // tens of thousands of vertices is what froze long-distance routes.
     var c = 0.0;
     _cum.add(0);
     for (var i = 1; i < route.geometry.length; i++) {
-      c += distanceMeters(route.geometry[i - 1], route.geometry[i]);
+      c += fastDistanceMeters(route.geometry[i - 1], route.geometry[i]);
       _cum.add(c);
     }
     var sc = 0.0;
@@ -227,12 +237,12 @@ class TurnByTurnEngine {
       _hasSmBearing = true;
       return raw;
     }
-    // Shortest-path difference, then low-pass.
+    // Shortest-path difference, then low-pass (smoothly transition without abrupt 180 flips).
     var d = (raw - _smBearing + 540) % 360 - 180;
     if (d.abs() < 0.5) {
       d = 0;
-    } else if (d.abs() < 20) {
-      d *= 0.3;
+    } else {
+      d = (d * 0.35).clamp(-20.0, 20.0);
     }
     _smBearing = (_smBearing + d + 360) % 360;
     return _smBearing;
@@ -309,25 +319,36 @@ class TurnByTurnEngine {
   }
 
   /// Interpolate a point at [d] meters along the route polyline.
-  /// Used by the simulated-drive mode.
+  /// Used by the simulated-drive mode and the route-ahead bearing.
+  ///
+  /// [_cum] is monotonically increasing, so a binary search (O(log n)) finds
+  /// the segment instead of the old linear scan from index 1 on every call —
+  /// which was O(route length) per GPS fix (routeBearing → positionAtDistance)
+  /// and scaled with route size, adding to the long-route freeze.
   LatLng positionAtDistance(double d) {
     final pts = route.geometry;
     if (pts.isEmpty) return const LatLng(0, 0);
     if (d <= 0) return pts.first;
     if (d >= _cum.last) return pts.last;
-    for (var i = 1; i < _cum.length; i++) {
-      if (_cum[i] >= d) {
-        final seg = _cum[i] - _cum[i - 1];
-        final t = seg == 0 ? 0.0 : (d - _cum[i - 1]) / seg;
-        final a = pts[i - 1];
-        final b = pts[i];
-        return LatLng(
-          a.latitude + (b.latitude - a.latitude) * t,
-          a.longitude + (b.longitude - a.longitude) * t,
-        );
+    var lo = 1;
+    var hi = _cum.length - 1;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (_cum[mid] >= d) {
+        hi = mid;
+      } else {
+        lo = mid + 1;
       }
     }
-    return pts.last;
+    final i = lo;
+    final seg = _cum[i] - _cum[i - 1];
+    final t = seg == 0 ? 0.0 : (d - _cum[i - 1]) / seg;
+    final a = pts[i - 1];
+    final b = pts[i];
+    return LatLng(
+      a.latitude + (b.latitude - a.latitude) * t,
+      a.longitude + (b.longitude - a.longitude) * t,
+    );
   }
 
   /// Feed a GPS fix; returns the current nav progress.
@@ -419,18 +440,30 @@ class TurnByTurnEngine {
       progress: route.distance <= 0
           ? 0
           : (cum / route.distance).clamp(0.0, 1.0),
+      // Distance to the FINAL point (not the next maneuver).
+      remainingMeters: route.distance <= 0
+          ? 0
+          : (route.distance - cum).clamp(0.0, route.distance),
     );
   }
 
   /// Nearest polyline index to `pos`, searching around the last snap first.
+  ///
+  /// IMPORTANT: the ±[win] window is searched first and the O(n) full scan is
+  /// ONLY a fallback when the window finds nothing close (car genuinely far
+  /// from this part of the route — fresh route / big detour). The old code
+  /// always fell through to the full scan on every GPS fix, which made the
+  /// per-fix cost O(route length) — a long route (tens of thousands of
+  /// vertices) kept the low-end phone's main thread busy for ~20 ms+ every
+  /// fix (2 full scans per fix: offRouteDistance + update), the sustained
+  /// CPU that shows up as the "not responding" ANR on long routes.
   int _nearestIndex(LatLng pos) {
     final n = route.geometry.length;
     if (n <= 1) return 0;
 
     var best = _curIdx.clamp(0, n - 1);
     var bestD = distanceMeters(pos, route.geometry[best]);
-    // Search a window around the previous position, then fall back to full.
-    const win = 60;
+    const win = 120;
     final lo = (best - win).clamp(0, n - 1);
     final hi = (best + win).clamp(0, n - 1);
     for (var i = lo; i <= hi; i++) {
@@ -440,7 +473,9 @@ class TurnByTurnEngine {
         best = i;
       }
     }
-    if (lo > 0 || hi < n - 1) {
+    // Car is on/near the route → the window is enough. Only scan everything
+    // when the car is far off this stretch (fresh route, big reroute).
+    if (bestD > 25) {
       for (var i = 0; i < n; i++) {
         if (i >= lo && i <= hi) continue;
         final d = distanceMeters(pos, route.geometry[i]);

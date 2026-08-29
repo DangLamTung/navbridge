@@ -53,6 +53,15 @@ extension _NavNavigation on _NavigationPageState {
     // Road signs: announce the next STOP / give-way sign ahead (traffic
     // lights are map-only). Offline index, ~1 Hz throttle inside.
     _checkSignAhead(snapped, _route?.geometry ?? const []);
+    // Keep the nav-map camera/sign layer near the car (~5 s) so it stays a
+    // handful of markers instead of a whole route's worth (see
+    // `_refreshRouteCameras`).
+    final nlNow = DateTime.now();
+    if (_lastNearbyLayers == null ||
+        nlNow.difference(_lastNearbyLayers!) >= const Duration(seconds: 5)) {
+      _lastNearbyLayers = nlNow;
+      unawaited(_refreshRouteCameras());
+    }
     _refreshRoad(snapped);
     // Speak when the posted limit changes (crossing a new segment / zone).
     _maybeSpeakLimitChange();
@@ -650,6 +659,7 @@ extension _NavNavigation on _NavigationPageState {
   /// client.
   Future<void> _toggleDisplays() async {
     if (_clock.isConnected || _mapClock.isConnected) {
+      _autoConnect.notifyUserDisconnected();
       await _clock.disconnect();
       await _mapClock.disconnect();
       if (mounted) {
@@ -660,6 +670,7 @@ extension _NavNavigation on _NavigationPageState {
       }
       return;
     }
+    _autoConnect.rearm();
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -679,6 +690,7 @@ extension _NavNavigation on _NavigationPageState {
   Future<void> _connectTo(ScannedClockDevice device) async {
     if (!mounted) return;
     final isMap = _isMapDisplay(device);
+    _autoConnect.rearm();
     setNavState(() {
       if (isMap) {
         _mapStatus = 'connecting';
@@ -699,6 +711,32 @@ extension _NavNavigation on _NavigationPageState {
         await _clock.connect(mac: device.id);
         if (mounted) setNavState(() => _clockStatus = 'connected');
       }
+      lastBleMac = device.id;
+      lastBleName = device.name;
+      lastBleType = isMap ? 'map' : 'clock';
+      final s = await loadSettings();
+      await saveSettings(
+        AppSettings(
+          forceOffline: s.forceOffline,
+          dataSource: s.dataSource,
+          vehicleType: s.vehicleType,
+          geocodingProvider: s.geocodingProvider,
+          routingEngine: s.routingEngine,
+          smoothCamera: s.smoothCamera,
+          cameraAlerts: s.cameraAlerts,
+          radar: s.radar,
+          pipAspect: s.pipAspect,
+          ridingMode: s.ridingMode,
+          simpleMode: s.simpleMode,
+          wakeWord: s.wakeWord,
+          overlayLayout: s.overlayLayout,
+          overlayScale: s.overlayScale,
+          bleAutoConnect: s.bleAutoConnect,
+          lastBleMac: device.id,
+          lastBleName: device.name,
+          lastBleType: isMap ? 'map' : 'clock',
+        ),
+      );
     } catch (e) {
       if (mounted) {
         setNavState(() {

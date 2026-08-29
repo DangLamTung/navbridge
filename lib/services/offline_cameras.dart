@@ -9,12 +9,12 @@ library;
 
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
 import 'offline_loader.dart';
 import 'offline_scan.dart';
+import 'offline_scan_isolate.dart';
 
 /// One offline camera / traffic-sign point.
 class OfflineCamera implements OfflinePoint {
@@ -38,6 +38,12 @@ class OfflineCamera implements OfflinePoint {
   /// Optional district / province label.
   final String? district;
 
+  /// Data source that produced this point: `waze` | `police` | `osm`.
+  /// (Waze = community speed-camera tiles, police = phạt nguội fine lists,
+  /// osm = OSM Overpass.) Shown on the map icon so the driver can trust a
+  /// camera's origin.
+  final String source;
+
   const OfflineCamera({
     required this.name,
     required this.lat,
@@ -47,6 +53,7 @@ class OfflineCamera implements OfflinePoint {
     this.speedLimit,
     this.devices,
     this.district,
+    this.source = 'osm',
   });
 
   @override
@@ -64,6 +71,7 @@ class OfflineCamera implements OfflinePoint {
     speedLimit: (j['speed_limit'] as num?)?.toInt(),
     devices: (j['devices'] as num?)?.toInt(),
     district: j['district'] as String?,
+    source: (j['source'] ?? 'osm') as String,
   );
 }
 
@@ -102,24 +110,21 @@ Future<List<OfflineCamera>> _fetchCameras() async {
 /// for each camera, project it onto the polyline (nearest point) and compute
 /// the along-route distance. Cameras behind the car are skipped.
 ///
-/// Runs in a BACKGROUND ISOLATE so the per-second nav check never blocks the
-/// UI thread on a long route.
+/// Runs in a PERSISTENT BACKGROUND ISOLATE ([OfflineScanIsolate]) that keeps
+/// the camera DB resident — a fresh `compute()` per call would deep-copy the
+/// whole 8.6k-camera list onto the main thread EVERY second (~90 ms desktop /
+/// several hundred ms on a low-end phone), which is exactly what froze the
+/// app on long routes ("not responding").
 Future<List<CameraAhead>> camerasAheadOnRoute(
   LatLng current,
   List<LatLng> geometry, {
   double maxAheadMeters = 1500,
 }) async {
-  final cams = await loadOfflineCameras();
-  if (cams.isEmpty || geometry.length < 2) return const [];
-  final res = await compute(pointsAheadOnRoute<OfflineCamera>, (
+  return OfflineScanIsolate.instance.camerasAhead(
     current,
     geometry,
-    cams,
-    maxAheadMeters,
-  ));
-  return [
-    for (final (i, m) in res) CameraAhead(camera: cams[i], routeMeters: m),
-  ];
+    maxAheadMeters: maxAheadMeters,
+  );
 }
 
 // The isolate workers (`pointsAheadOnRoute` / `pointsNearRoute`) live in
@@ -138,14 +143,64 @@ Future<List<OfflineCamera>> camerasNearRoute(
   List<LatLng> geometry, {
   double corridorMeters = 200,
 }) async {
-  final cams = await loadOfflineCameras();
-  if (cams.isEmpty || geometry.length < 2) return const [];
-  final idxs = await compute(pointsNearRoute<OfflineCamera>, (
+  return OfflineScanIsolate.instance.camerasNear(
     geometry,
-    cams,
-    corridorMeters,
-  ));
-  return [for (final i in idxs) cams[i]];
+    corridorMeters: corridorMeters,
+  );
+}
+
+/// Cameras within [maxDistM] of a POINT — the nav-map camera layer WHILE
+/// DRIVING only needs the handful near the car. A long route's route-wide
+/// layer can be 100+ cameras, and each is drawn as 4 native maplibre circles
+/// (glow/body/lens/pupil) — 400+ platform-channel annotations held even
+/// off-screen crushed the low-end phone at large zoom. Bounded near-car set,
+/// refreshed every few seconds. Cheap bbox pre-filter, main-thread safe.
+Future<List<OfflineCamera>> camerasNearPoint(
+  LatLng pos, {
+  double maxDistM = 6000,
+}) async {
+  final cams = await loadOfflineCameras();
+  if (cams.isEmpty) return const [];
+  const Distance d = Distance();
+  final span = maxDistM / 111320.0;
+  final out = <OfflineCamera>[];
+  for (final c in cams) {
+    if (c.lat < pos.latitude - span ||
+        c.lat > pos.latitude + span ||
+        c.lng < pos.longitude - span ||
+        c.lng > pos.longitude + span) {
+      continue;
+    }
+    if (d.as(LengthUnit.Meter, pos, c.pos) <= maxDistM) out.add(c);
+  }
+  return out;
+}
+
+/// Camera distances (metres) for the floating widget: EVERY camera within
+/// [maxDistM] (600 m), sorted nearest first; if none is that close yet, the
+/// SINGLE nearest camera up to 1 km is still surfaced (so an approaching
+/// camera keeps alerting ahead — the old widget showed the nearest ≤1 km, so
+/// a camera at 700 m must not disappear). Capped at [max].
+Future<List<int>> camerasForWidgetChips(
+  LatLng pos, {
+  double maxDistM = 600,
+  int max = 4,
+}) async {
+  final cams = await camerasNearPoint(pos, maxDistM: 1000);
+  if (cams.isEmpty) return const [];
+  const Distance d = Distance();
+  final all = <(int, double)>[];
+  for (final c in cams) {
+    final m = d.as(LengthUnit.Meter, pos, c.pos);
+    all.add((m.round(), m));
+  }
+  all.sort((a, b) => a.$2.compareTo(b.$2));
+  final within = [
+    for (final (m, _) in all)
+      if (m <= maxDistM) m,
+  ];
+  final out = within.isEmpty ? [all.first.$1] : within;
+  return out.length > max ? out.sublist(0, max) : out;
 }
 
 // Route scanning (`pointsAheadOnRoute` / `pointsNearRoute`) lives in

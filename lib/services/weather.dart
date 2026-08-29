@@ -8,8 +8,13 @@
 library;
 
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
+
+/// Windy Point Forecast API key — from `--dart-define=WINDY_API_KEY` (.env).
+/// Empty = Windy disabled (the app falls back to the free sources).
+const String windyApiKey = String.fromEnvironment('WINDY_API_KEY');
 
 /// Current weather at a location. Nullable fields are null when the feed
 /// doesn't include them (or the call failed).
@@ -23,6 +28,7 @@ class WeatherInfo {
     this.precipMm,
     this.weatherCode,
     this.rainProb,
+    this.source,
   });
 
   /// Air temperature (°C).
@@ -50,6 +56,9 @@ class WeatherInfo {
   /// Hourly rain probability (%) for the next few hours (Open-Meteo
   /// `precipitation_probability`, null when unavailable).
   final List<int>? rainProb;
+
+  /// Source tag (e.g. 'Windy') for attribution; null = Open-Meteo.
+  final String? source;
 
   /// Best-guess rain probability (%) within the next ~2 h — the max of the
   /// current + next hour entries (null when the feed has no probability).
@@ -190,4 +199,237 @@ Future<WeatherInfo?> fetchWeather(double lat, double lng) async {
   } catch (_) {
     return null;
   }
+}
+
+/// Vietnamese airports that report METAR observations (ICAO, lat, lng) — the
+/// nearest one gives REAL observed weather (free, no key) via aviationweather.
+const List<(String, double, double)> _vnAirports = [
+  ('VVTS', 10.818, 106.652), // Tân Sơn Nhất (TP.HCM)
+  ('VVNB', 21.221, 105.807), // Nội Bài (Hà Nội)
+  ('VVDN', 16.044, 108.199), // Đà Nẵng
+  ('VVCR', 11.998, 109.219), // Cam Ranh (Khánh Hòa)
+  ('VVCT', 10.085, 105.712), // Cần Thơ
+  ('VVPQ', 10.169, 103.995), // Phú Quốc
+  ('VVTH', 16.401, 107.703), // Phú Bài (Huế)
+  ('VVPB', 17.515, 106.590), // Đồng Hới
+  ('VVPC', 15.403, 108.706), // Chu Lai (Quảng Nam)
+  ('VVDL', 11.751, 108.374), // Liên Khương (Đà Lạt)
+  ('VVPK', 14.004, 108.017), // Pleiku
+  ('VVCI', 20.818, 106.725), // Cát Bi (Hải Phòng)
+  ('VVDH', 21.398, 103.008), // Điện Biên
+];
+
+List<Map<String, dynamic>>? _metarCache;
+DateTime? _metarCacheAt;
+const _metarCacheTtl = Duration(minutes: 5);
+
+/// Fetch ALL Vietnamese airport METARs in one call (cached ~5 min; METARs
+/// update every 30–60 min anyway). Empty on failure.
+Future<List<Map<String, dynamic>>> _fetchMetarBatch() async {
+  final now = DateTime.now();
+  if (_metarCache != null && now.difference(_metarCacheAt!) < _metarCacheTtl) {
+    return _metarCache!;
+  }
+  try {
+    final ids = _vnAirports.map((a) => a.$1).join(',');
+    final res = await http
+        .get(
+          Uri.parse(
+            'https://aviationweather.gov/api/data/metar'
+            '?format=json&ids=$ids',
+          ),
+          headers: const {'User-Agent': 'navbridge/1.0 (weather metar)'},
+        )
+        .timeout(const Duration(seconds: 10));
+    if (res.statusCode != 200) return const [];
+    final d = jsonDecode(utf8.decode(res.bodyBytes));
+    _metarCache = (d as List).cast<Map<String, dynamic>>();
+    _metarCacheAt = now;
+    return _metarCache!;
+  } catch (_) {
+    return const [];
+  }
+}
+
+/// Real observed weather from the NEAREST reporting Vietnamese airport
+/// (METAR — measured, not a forecast model): actual temperature / wind /
+/// conditions. Free + keyless. Null when no station is reporting.
+Future<WeatherInfo?> fetchMetarWeather(double lat, double lng) async {
+  final batch = await _fetchMetarBatch();
+  if (batch.isEmpty) return null;
+  Map<String, dynamic>? best;
+  var bestD = double.infinity;
+  for (final m in batch) {
+    final slat = (m['lat'] as num?)?.toDouble();
+    final slon = (m['lon'] as num?)?.toDouble();
+    if (slat == null || slon == null || m['temp'] is! num) continue;
+    final dLat = (slat - lat) * 111320.0;
+    final dLng = (slon - lng) * 111320.0 * math.cos(lat * math.pi / 180);
+    final dd = math.sqrt(dLat * dLat + dLng * dLng);
+    if (dd < bestD) {
+      bestD = dd;
+      best = m;
+    }
+  }
+  if (best == null) return null;
+  final temp = (best['temp'] as num).toDouble();
+  final wdir = best['wdir'] is num ? (best['wdir'] as num).toDouble() : null;
+  final wspdKt = best['wspd'] is num ? (best['wspd'] as num).toDouble() : null;
+  return WeatherInfo(
+    tempC: temp,
+    feelsLikeC: temp, // METAR has no feels-like — use the measured temp
+    windKmh: wspdKt == null ? null : wspdKt * 1.852, // knots → km/h
+    windDir: wdir,
+    weatherCode: _metarWeatherCode(best),
+  );
+}
+
+int _cloudRank(String c) => switch (c) {
+  'OVC' => 4,
+  'BKN' => 3,
+  'SCT' => 2,
+  'FEW' => 1,
+  _ => 0,
+};
+
+/// Map a METAR observation to an Open-Meteo-style WMO code (for the emoji).
+int? _metarWeatherCode(Map<String, dynamic> m) {
+  final wxcodes = (m['wxcodes'] as List?) ?? const [];
+  final wx = wxcodes.join(' ').toUpperCase();
+  if (wx.contains('TS') || wx.contains('VCTS')) return 95; // thunder
+  if (wx.contains('SH')) return 80; // showers
+  if (wx.contains('RA')) return 61; // rain
+  if (wx.contains('DZ')) return 51; // drizzle
+  if (wx.contains('SN')) return 71; // snow
+  if (wx.contains('FG')) return 45; // fog
+  if (wx.contains('BR') || wx.contains('HZ')) return 45; // mist / haze
+  if (wx.isNotEmpty) return 61; // some other precipitation
+  // No precipitation → derive from the highest cloud cover.
+  var cover = '';
+  for (final c in (m['clouds'] as List?) ?? const []) {
+    final cv = (c as Map?)?['cover'] as String?;
+    if (cv != null && _cloudRank(cv) > _cloudRank(cover)) cover = cv;
+  }
+  switch (cover) {
+    case 'OVC':
+    case 'BKN':
+      return 3; // overcast
+    case 'SCT':
+      return 2; // partly cloudy
+    case 'FEW':
+      return 1;
+    default:
+      return 0; // clear
+  }
+}
+
+/// Current weather from Windy (GFS point forecast) when a key is configured.
+/// Returns null when there's no key or the call fails (callers fall back to
+/// the free sources). Wind is u/v components (m/s) → km/h + meteorological
+/// direction; the WMO [weatherWarnings] code feeds the existing emoji.
+Future<WeatherInfo?> fetchWindyWeather(double lat, double lng) async {
+  if (windyApiKey.isEmpty) return null;
+  try {
+    final res = await http
+        .post(
+          Uri.parse('https://api.windy.com/api/point-forecast/v2'),
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'lat': lat,
+            'lon': lng,
+            'model': 'gfs',
+            'parameters': [
+              'temp',
+              'wind',
+              'rh',
+              'ptype',
+              'lclouds',
+              'mclouds',
+              'hclouds',
+              'weatherWarnings',
+              'precip',
+            ],
+            'levels': ['surface'],
+            'key': windyApiKey,
+          }),
+        )
+        .timeout(const Duration(seconds: 12));
+    if (res.statusCode != 200) return null;
+    final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final ts = (d['ts'] as List?)?.cast<num>();
+    if (ts == null || ts.isEmpty) return null;
+    // Index of the forecast point closest to now.
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var idx = 0;
+    var bestD = double.infinity;
+    for (var i = 0; i < ts.length; i++) {
+      final dd = (ts[i].toDouble() - now).abs();
+      if (dd < bestD) {
+        bestD = dd;
+        idx = i;
+      }
+    }
+    double? at(String key) {
+      final arr = d[key] as List?;
+      if (arr == null || idx >= arr.length) return null;
+      final v = arr[idx];
+      return v is num ? v.toDouble() : null;
+    }
+
+    final u = at('wind_u-surface');
+    final v = at('wind_v-surface');
+    double? windKmh;
+    double? windDir;
+    if (u != null && v != null) {
+      windKmh = math.sqrt(u * u + v * v) * 3.6; // m/s → km/h
+      // Meteorological direction the wind comes FROM (0 = N).
+      windDir = (math.atan2(u, v) * 180 / math.pi + 180) % 360;
+    }
+    final wx = at('weatherwarnings-surface');
+    final ptype = at('ptype-surface');
+    final code = wx != null
+        ? wx.round()
+        : (ptype != null && ptype > 0)
+        ? (ptype >= 5 ? 71 : 61)
+        : null;
+    return WeatherInfo(
+      tempC: at('temp-surface'),
+      feelsLikeC: at('temp-surface'),
+      humidityPct: at('rh-surface'),
+      windKmh: windKmh,
+      windDir: windDir,
+      precipMm: at('past3hprecip-surface'),
+      weatherCode: code,
+      source: 'Windy',
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Best current weather: Windy (if a key is set) → real observed METAR
+/// (nearest VN airport) → Open-Meteo. Open-Meteo fills the fields Windy/METAR
+/// lack (humidity, rain probability, forecast).
+Future<WeatherInfo?> fetchBestWeather(double lat, double lng) async {
+  final results = await Future.wait([
+    fetchWeather(lat, lng),
+    fetchMetarWeather(lat, lng),
+    fetchWindyWeather(lat, lng),
+  ]);
+  final om = results[0];
+  final metar = results[1];
+  final windy = results[2];
+  final primary = windy ?? metar ?? om;
+  if (primary == null) return null;
+  return WeatherInfo(
+    tempC: primary.tempC ?? om?.tempC,
+    feelsLikeC: om?.feelsLikeC ?? primary.feelsLikeC,
+    humidityPct: primary.humidityPct ?? om?.humidityPct,
+    windKmh: primary.windKmh ?? om?.windKmh,
+    windDir: primary.windDir ?? om?.windDir,
+    precipMm: primary.precipMm ?? om?.precipMm,
+    weatherCode: primary.weatherCode ?? om?.weatherCode,
+    rainProb: om?.rainProb,
+    source: primary.source,
+  );
 }

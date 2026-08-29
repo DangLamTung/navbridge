@@ -254,4 +254,67 @@ void main() {
       expect(f2.sublist(5)[0], 31);
     });
   });
+
+  group('parseMapGpsFrame (ESP GPS broadcast, type 0x0A)', () {
+    Uint8List frame({
+      int h = 7,
+      int m = 35,
+      int s = 10,
+      double lat = 10.7718,
+      double lon = 106.6982,
+      int q = 1,
+      int sats = 12,
+      int hdopX10 = 15,
+    }) {
+      final b = Uint8List(5 + 15);
+      b[0] = mapFrameMagic0;
+      b[1] = mapFrameMagic1;
+      b[2] = mapTypeGps;
+      b[3] = 15;
+      b[4] = 0;
+      final latI = (lat * 1e7).round();
+      final lonI = (lon * 1e7).round();
+      b[5] = h;
+      b[6] = m;
+      b[7] = s;
+      b[8] = latI & 0xFF;
+      b[9] = (latI >> 8) & 0xFF;
+      b[10] = (latI >> 16) & 0xFF;
+      b[11] = (latI >> 24) & 0xFF;
+      b[12] = lonI & 0xFF;
+      b[13] = (lonI >> 8) & 0xFF;
+      b[14] = (lonI >> 16) & 0xFF;
+      b[15] = (lonI >> 24) & 0xFF;
+      b[16] = q;
+      b[17] = sats;
+      b[18] = hdopX10;
+      return b;
+    }
+
+    test('decodes position/time/quality/sats/hdop', () {
+      final f = parseMapGpsFrame(frame())!;
+      expect(f.valid, isTrue);
+      expect(f.lat, closeTo(10.7718, 1e-6));
+      expect(f.lon, closeTo(106.6982, 1e-6));
+      expect(f.quality, 1);
+      expect(f.sats, 12);
+      expect(f.hdop, closeTo(1.5, 1e-9));
+      expect(f.hour, 7);
+      expect(f.minute, 35);
+      expect(f.second, 10);
+      expect(f.accuracyMeters, closeTo(9.0, 1e-9)); // 1.5 hdop × 6
+    });
+
+    test('quality 0 → not valid', () {
+      final f = parseMapGpsFrame(frame(q: 0))!;
+      expect(f.valid, isFalse);
+    });
+
+    test('returns null for non-GPS or short frames', () {
+      expect(parseMapGpsFrame(Uint8List(10)), isNull);
+      final bad = frame();
+      bad[2] = mapTypeCamera; // not a GPS frame
+      expect(parseMapGpsFrame(bad), isNull);
+    });
+  });
 }

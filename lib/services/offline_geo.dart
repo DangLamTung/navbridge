@@ -14,6 +14,49 @@ import 'package:latlong2/latlong.dart';
 /// Sample budget for [withinCoarseCorridor]'s decimation.
 const int kCoarseTarget = 256;
 
+/// Cheap equirectangular metres between two points — ~4-5x faster than
+/// haversine (one `cos` + one `sqrt` vs haversine's four trig + asin). Plenty
+/// for cumulative/decimation math where a few % of error is invisible; NOT for
+/// precise small-distance work (use `Distance` there).
+double fastDistanceMeters(LatLng a, LatLng b) {
+  final lat = (a.latitude + b.latitude) * math.pi / 360.0;
+  final dx = (b.longitude - a.longitude) * 111320.0 * math.cos(lat);
+  final dy = (b.latitude - a.latitude) * 110540.0;
+  return math.sqrt(dx * dx + dy * dy);
+}
+
+/// Reduce [points] for DISPLAY (map rendering), not for nav math. Long routes
+/// (thousands of dense OSRM vertices) render identically at road scale with
+/// far fewer vertices, so the map stays responsive right after routing a long
+/// distance. Keeps ~1 vertex per [spacingM] metres, then caps at [maxPoints].
+List<LatLng> decimatePolyline(
+  List<LatLng> points, {
+  double spacingM = 20,
+  int maxPoints = 6000,
+}) {
+  if (points.length <= maxPoints) return points;
+  final out = <LatLng>[points.first];
+  var last = points.first;
+  var since = 0.0;
+  for (var i = 1; i < points.length - 1; i++) {
+    since += fastDistanceMeters(last, points[i]);
+    if (since >= spacingM) {
+      out.add(points[i]);
+      last = points[i];
+      since = 0.0;
+    }
+  }
+  out.add(points.last);
+  if (out.length > maxPoints) {
+    final step = (out.length / maxPoints).ceil();
+    return <LatLng>[
+      for (var i = 0; i < out.length; i += step) out[i],
+      out.last,
+    ];
+  }
+  return out;
+}
+
 /// Cheap test: is [p] within roughly [corridorMeters] of the polyline,
 /// using a decimated polyline + a straight-line distance check? Returns
 /// false for objects clearly far from the road, so the expensive exact

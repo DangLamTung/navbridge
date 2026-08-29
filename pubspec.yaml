@@ -83,8 +83,15 @@ flutter:
     - assets/offline_map/icons/
     - assets/offline_map/sprite/
     - assets/offline_map/fonts/
+    # Real Vietnamese road signs (QCVN 41) — downloaded from Wikimedia Commons
+    # (public domain / PD-VietnamGov), rendered by SignIcon on map + overlay.
+    - assets/offline_map/signs/
     - assets/offline_map/fonts/Roboto Regular/
     - assets/offline_map/fonts/Roboto Medium/
     - assets/offline_map/fonts/Roboto Condensed Italic/
     # AI assistant system prompt (editable, see assets/ai/system_prompt.txt).
     - assets/ai/
+    # Waze-Mod HUD widget images (extracted from the Waze Mod APK):
+    # speedometer dial (grey/red), turn arrow, speed-camera + hazard icons.
+    - assets/waze/
+    - assets/waze/vn/

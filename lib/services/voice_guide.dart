@@ -8,17 +8,27 @@ library;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
+import 'package:navbridge/services/offline_tiles.dart' show voiceVolume;
+
 class VoiceGuide {
   final FlutterTts _tts = FlutterTts();
   bool _ready = false;
   bool get ready => _ready;
+
+  /// Apply the persisted guidance volume (0..1). Called at init and before
+  /// each utterance so a mid-ride settings change takes effect immediately.
+  Future<void> _applyVolume() async {
+    try {
+      await _tts.setVolume(voiceVolume.clamp(0.0, 1.0));
+    } catch (_) {}
+  }
 
   Future<void> init() async {
     try {
       await _tts.setLanguage('vi-VN');
       await _tts.setSpeechRate(0.55); // fast enough to finish before the turn
       await _tts.setPitch(1.0);
-      await _tts.setVolume(1.0);
+      await _applyVolume();
       // Core engine is ready — optional audio attributes below must never
       // kill the voice (some devices throw on these).
       _ready = true;
@@ -39,6 +49,7 @@ class VoiceGuide {
     if (!_ready || text.isEmpty) return;
     try {
       await _tts.stop();
+      await _applyVolume();
       await _tts.speak(text);
       debugPrint('VOICE: speak "$text"');
     } catch (e) {
@@ -54,6 +65,7 @@ class VoiceGuide {
     if (!_ready || text.isEmpty) return;
     try {
       await _tts.setQueueMode(1); // 1 = add to queue, don't interrupt
+      await _applyVolume();
       await _tts.speak(text);
     } catch (e) {
       debugPrint('VOICE: speakQueued failed: $e');

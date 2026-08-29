@@ -64,6 +64,8 @@ extension _NavRadar on _NavigationPageState {
       // The radar index also carries the satellite frames — keep it fresh.
       await _ensureRadar();
     }
+    // Satellite layer on → hide the floating widget immediately.
+    _syncOverlayVisibility();
   }
 
   void _setSatelliteFrame(int i) {
@@ -77,17 +79,19 @@ extension _NavRadar on _NavigationPageState {
       await _ensureRadar();
     }
     _persistRadar();
+    // Radar layer on → hide the floating widget immediately.
+    _syncOverlayVisibility();
   }
 
-  /// Re-fetch the radar frame index (cached ~5 min) so the overlay stays
-  /// current. Best-effort — failure shows a snackbar and leaves the overlay
-  /// off (or showing the last-known frames).
+  /// Re-fetch the radar frame index (cached ~2 min — "realtime" enough for
+  /// rain) so the overlay stays current. Best-effort — failure shows a
+  /// snackbar and leaves the overlay off (or showing the last-known frames).
   Future<void> _ensureRadar() async {
     final d = _radar;
     if (d != null &&
         _radarFetchedAt != null &&
         DateTime.now().difference(_radarFetchedAt!) <
-            const Duration(minutes: 5)) {
+            const Duration(minutes: 2)) {
       return;
     }
     setNavState(() => _radarLoading = true);
@@ -98,8 +102,16 @@ extension _NavRadar on _NavigationPageState {
       if (r != null && r.hasFrames) {
         _radar = r;
         _radarFetchedAt = DateTime.now();
-        _radarFrame = 0;
-        _satelliteFrame = 0;
+        // Default to the LATEST past radar frame ("now") instead of the
+        // oldest — the old default (frame 0) made the radar look stale.
+        var pastCount = 0;
+        for (var i = r.past.length - 1; i >= 0 && pastCount < 6; i -= 2) {
+          pastCount++;
+        }
+        _radarFrame = pastCount > 0 ? pastCount - 1 : 0;
+        // Same for the satellite layer: start on the most recent frame.
+        final sat = _satelliteFrames;
+        _satelliteFrame = sat.isEmpty ? 0 : sat.length - 1;
       }
     });
     if (r == null || !r.hasFrames) {

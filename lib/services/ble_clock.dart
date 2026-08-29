@@ -37,7 +37,8 @@ class BleClock {
   BluetoothCharacteristic? _write;
   BluetoothCharacteristic? _indicate;
   final _linkController = StreamController<ClockLink>.broadcast();
-  final _scanController = StreamController<List<ScannedClockDevice>>.broadcast();
+  final _scanController =
+      StreamController<List<ScannedClockDevice>>.broadcast();
   final Map<String, ScannedClockDevice> _devices = {};
   ClockLink _link = ClockLink.off;
   StreamSubscription<List<ScanResult>>? _scanSub;
@@ -92,11 +93,7 @@ class BleClock {
         final name = d.platformName.isNotEmpty
             ? d.platformName
             : r.advertisementData.advName;
-        _devices[mac] = ScannedClockDevice(
-          id: mac,
-          name: name,
-          rssi: r.rssi,
-        );
+        _devices[mac] = ScannedClockDevice(id: mac, name: name, rssi: r.rssi);
       }
       if (!_scanController.isClosed) {
         _scanController.add(_devices.values.toList());
@@ -130,20 +127,24 @@ class BleClock {
       if (mac != null && mac.isNotEmpty) {
         debugPrint('[BLE] connecting to picked device $mac');
         device = BluetoothDevice(remoteId: DeviceIdentifier(mac));
+        await _clearGattCache(device);
         try {
           await device.connect(timeout: const Duration(seconds: 20));
         } on Exception catch (e) {
           debugPrint('[BLE] connect to $mac failed: $e');
           throw Exception(
-              'Không kết nối được — đồng hồ chưa quảng bá. Đánh thức đồng hồ '
-              '(lắc/nhấn nút) rồi thử lại.');
+            'Không kết nối được — đồng hồ chưa quảng bá. Đánh thức đồng hồ '
+            '(lắc/nhấn nút) rồi thử lại.',
+          );
         }
       } else {
         device = await _scanForClock();
         if (device == null) {
           throw Exception(
-              'Không tìm thấy đồng hồ — hãy đánh thức nó rồi thử lại');
+            'Không tìm thấy đồng hồ — hãy đánh thức nó rồi thử lại',
+          );
         }
+        await _clearGattCache(device);
       }
       _device = device;
 
@@ -151,7 +152,8 @@ class BleClock {
       await _findCharacteristics();
       if (_write == null) {
         throw Exception(
-            'Không tìm thấy Write characteristic (${AppConfig.serviceUuid})');
+          'Không tìm thấy Write characteristic (${AppConfig.serviceUuid})',
+        );
       }
       await _setupIndicate();
       await _auth();
@@ -177,13 +179,17 @@ class BleClock {
           final d = r.device;
           final mac = d.remoteId.str.toUpperCase();
           if (seen.add(mac)) {
-            final name = (d.platformName.isNotEmpty
-                    ? d.platformName
-                    : r.advertisementData.advName)
-                .toUpperCase();
-            final hasService = r.advertisementData.serviceUuids
-                .any((u) => u.str128.toLowerCase() == AppConfig.serviceUuid);
-            debugPrint('[BLE] scan: $mac name="$name" rssi=${r.rssi} svc=$hasService');
+            final name =
+                (d.platformName.isNotEmpty
+                        ? d.platformName
+                        : r.advertisementData.advName)
+                    .toUpperCase();
+            final hasService = r.advertisementData.serviceUuids.any(
+              (u) => u.str128.toLowerCase() == AppConfig.serviceUuid,
+            );
+            debugPrint(
+              '[BLE] scan: $mac name="$name" rssi=${r.rssi} svc=$hasService',
+            );
             if (hasService ||
                 (name.isNotEmpty && name.contains('EINK')) ||
                 (targetMac.isNotEmpty && mac == targetMac)) {
@@ -193,18 +199,23 @@ class BleClock {
         }
       });
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
-      final device = await found.future
-          .timeout(const Duration(seconds: 16), onTimeout: () => null);
+      final device = await found.future.timeout(
+        const Duration(seconds: 16),
+        onTimeout: () => null,
+      );
       await sub.cancel();
       if (FlutterBluePlus.isScanningNow) {
         await FlutterBluePlus.stopScan();
       }
       if (device != null) {
-        debugPrint('[BLE] found clock on attempt ${attempt + 1}: ${device.remoteId.str}');
+        debugPrint(
+          '[BLE] found clock on attempt ${attempt + 1}: ${device.remoteId.str}',
+        );
         return device;
       }
       debugPrint(
-          '[BLE] scan attempt ${attempt + 1}/$maxAttempts: clock not advertising, keep trying...');
+        '[BLE] scan attempt ${attempt + 1}/$maxAttempts: clock not advertising, keep trying...',
+      );
     }
     return null;
   }
@@ -215,10 +226,13 @@ class BleClock {
         for (final c in s.characteristics) {
           if (c.uuid.str128.toLowerCase() == AppConfig.writeCharUuid) {
             _write = c;
-            debugPrint('[BLE] write char props: '
-                'write=${c.properties.write} '
-                'writeWithoutResponse=${c.properties.writeWithoutResponse}');
-          } else if (c.uuid.str128.toLowerCase() == AppConfig.indicateCharUuid) {
+            debugPrint(
+              '[BLE] write char props: '
+              'write=${c.properties.write} '
+              'writeWithoutResponse=${c.properties.writeWithoutResponse}',
+            );
+          } else if (c.uuid.str128.toLowerCase() ==
+              AppConfig.indicateCharUuid) {
             _indicate = c;
           }
         }
@@ -256,7 +270,8 @@ class BleClock {
     Future<bool> attempt(bool useResponse) async {
       try {
         if (useResponse) {
-          await w.write(data, withoutResponse: false)
+          await w
+              .write(data, withoutResponse: false)
               .timeout(const Duration(seconds: 4));
         } else {
           unawaited(w.write(data, withoutResponse: true));
@@ -315,6 +330,16 @@ class BleClock {
   static String _hex(Uint8List b) =>
       b.map((x) => x.toRadixString(16).padLeft(2, '0')).join(' ');
 
+  /// Android caches GATT services; after many connect/disconnect cycles the
+  /// stale cache makes the next connect fail (Android error 133). Clear it
+  /// before (re)connecting. No-op elsewhere.
+  Future<void> _clearGattCache(BluetoothDevice d) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await d.clearGattCache();
+    } catch (_) {}
+  }
+
   Future<void> disconnect() async {
     await stopScan();
     final d = _device;
@@ -332,5 +357,6 @@ class BleClock {
   void dispose() {
     disconnect();
     _scanController.close();
+    _linkController.close();
   }
 }

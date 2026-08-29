@@ -15,7 +15,9 @@ extension _NavBars on _NavigationPageState {
     if (_clockStatus == 'connected' || _mapStatus == 'connected') {
       return 'connected';
     }
-    if (_clockStatus == 'connecting' || _mapStatus == 'connecting') {
+    if (_clockStatus == 'connecting' ||
+        _mapStatus == 'connecting' ||
+        _autoConnect.isConnecting) {
       return 'connecting';
     }
     return 'off';
@@ -112,8 +114,8 @@ extension _NavBars on _NavigationPageState {
     // Compact maneuver arrow — kept small so the bar stays thin and the map
     // fills the PiP window.
     final Widget arrow = Container(
-      width: 30,
-      height: 30,
+      width: 26,
+      height: 26,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: kAppBlue,
@@ -121,19 +123,31 @@ extension _NavBars on _NavigationPageState {
       ),
       child: Text(
         icon,
-        style: const TextStyle(color: Colors.white, fontSize: 16, height: 1),
+        style: const TextStyle(color: Colors.white, fontSize: 14, height: 1),
       ),
     );
 
-    // Road name + distance/ETA (flexible). The NEXT STEP is the star: the
-    // distance to the upcoming maneuver is shown BIG + clear; the current
-    // street name is secondary and tiny (it doesn't matter while driving).
-    // Small type keeps the bar short so the map stays big.
+    // Road name + distance/ETA (flexible). The CURRENT ROAD is the star now
+    // (user: "make the road part bigger") — bold + readable; the distance to
+    // the upcoming maneuver is the smaller secondary line. Compact type keeps
+    // the bar short so the map stays big.
     final Widget roadCol = Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Next step: distance (big, bold, blue) + ETA alongside.
+        Text(
+          road,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+            color: Color(0xFF202124),
+            height: 1.05,
+          ),
+        ),
+        const SizedBox(height: 1),
+        // Next step: distance (bold blue) + ETA alongside — smaller.
         Row(
           crossAxisAlignment: CrossAxisAlignment.baseline,
           textBaseline: TextBaseline.alphabetic,
@@ -141,8 +155,8 @@ extension _NavBars on _NavigationPageState {
             Text(
               dist.isEmpty ? 'Đang chỉ đường' : dist,
               style: const TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w800,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
                 color: kAppBlue,
                 height: 1.0,
               ),
@@ -165,18 +179,6 @@ extension _NavBars on _NavigationPageState {
             ],
           ],
         ),
-        const SizedBox(height: 2),
-        // Current street — secondary, tiny, truncates.
-        Text(
-          road,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 8.5,
-            color: Color(0xFF5F6368),
-            height: 1.0,
-          ),
-        ),
       ],
     );
 
@@ -185,7 +187,7 @@ extension _NavBars on _NavigationPageState {
     if (cam != null && cam.routeMeters <= 1500) {
       pills.add(
         Container(
-          height: 24,
+          height: 20,
           padding: const EdgeInsets.symmetric(horizontal: 6),
           alignment: Alignment.center,
           decoration: BoxDecoration(
@@ -196,7 +198,7 @@ extension _NavBars on _NavigationPageState {
           child: Text(
             '📷 ${cam.routeMeters.round()}m',
             style: const TextStyle(
-              fontSize: 10,
+              fontSize: 9,
               fontWeight: FontWeight.w700,
               color: Color(0xFFD93025),
               height: 1.0,
@@ -208,7 +210,7 @@ extension _NavBars on _NavigationPageState {
     if (ahead != null) {
       pills.add(
         Container(
-          height: 24,
+          height: 20,
           padding: const EdgeInsets.symmetric(horizontal: 6),
           alignment: Alignment.center,
           decoration: BoxDecoration(
@@ -219,7 +221,7 @@ extension _NavBars on _NavigationPageState {
           child: Text(
             '${weatherEmoji(ahead.weatherCode)} ${ahead.tempC?.round() ?? '--'}°',
             style: const TextStyle(
-              fontSize: 10,
+              fontSize: 9,
               fontWeight: FontWeight.w700,
               color: Color(0xFF174EA6),
               height: 1.0,
@@ -249,7 +251,7 @@ extension _NavBars on _NavigationPageState {
             );
             if (narrow && pills.isNotEmpty) {
               return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -268,7 +270,7 @@ extension _NavBars on _NavigationPageState {
               );
             }
             return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               child: Row(
                 children: [
                   arrow,

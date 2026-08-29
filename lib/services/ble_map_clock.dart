@@ -41,6 +41,7 @@ class BleMapClock {
   final _scanController =
       StreamController<List<ScannedClockDevice>>.broadcast();
   final _gpsController = StreamController<String>.broadcast();
+  final _gpsFrameController = StreamController<Uint8List>.broadcast();
   StreamSubscription<List<int>>? _notifySub;
   final Map<String, ScannedClockDevice> _devices = {};
   ClockLink _link = ClockLink.off;
@@ -62,6 +63,10 @@ class BleMapClock {
 
   /// Raw NMEA lines broadcast by the ESP GPS (when enabled + a fix exists).
   Stream<String> get gpsNmeaStream => _gpsController.stream;
+
+  /// Compact AA55 binary GPS frames (type 0x0A) from the ESP bridge — the
+  /// board's current protocol (`gps_read_frame`).
+  Stream<Uint8List> get gpsFrameStream => _gpsFrameController.stream;
 
   BluetoothDevice? get device => _device;
 
@@ -128,6 +133,7 @@ class BleMapClock {
       if (mac != null && mac.isNotEmpty) {
         debugPrint('[MAP] connecting to picked device $mac');
         device = BluetoothDevice(remoteId: DeviceIdentifier(mac));
+        await _clearGattCache(device);
         await device
             .connect(timeout: const Duration(seconds: 20))
             .timeout(const Duration(seconds: 25));
@@ -141,6 +147,7 @@ class BleMapClock {
         // discoverServices() throws when not connected — connect the scanned
         // device explicitly (same as the by-MAC path).
         debugPrint('[MAP] connecting to scanned device ${device.remoteId.str}');
+        await _clearGattCache(device);
         await device
             .connect(timeout: const Duration(seconds: 20))
             .timeout(const Duration(seconds: 25));
@@ -231,12 +238,19 @@ class BleMapClock {
               'writeWithoutResponse=${c.properties.writeWithoutResponse} '
               'notify=${c.properties.notify}',
             );
-            // Subscribe so the ESP can broadcast GPS NMEA to us (type-agnostic:
-            // the nav char's NOTIFY carries raw NMEA lines when GPS is on).
+            // Subscribe so the ESP can broadcast GPS to us: the nav char's
+            // NOTIFY carries the compact AA55 GPS frame (type 0x0A, current
+            // protocol) or raw NMEA lines (legacy).
             if (c.properties.notify) {
               await c.setNotifyValue(true);
               _notifySub?.cancel();
               _notifySub = c.onValueReceived.listen((v) {
+                // Current protocol: compact AA55 binary GPS frame.
+                if (v.length >= 5 && v[0] == 0xAA && v[1] == 0x55) {
+                  _gpsFrameController.add(Uint8List.fromList(v));
+                  return;
+                }
+                // Legacy: raw NMEA text line.
                 final s2 = String.fromCharCodes(v).trim();
                 if (s2.isNotEmpty && s2.startsWith(r'$')) {
                   _gpsController.add(s2);
@@ -330,6 +344,16 @@ class BleMapClock {
     return true;
   }
 
+  /// Android caches GATT services; after many connect/disconnect cycles the
+  /// stale cache makes the next connect fail (Android error 133). Clear it
+  /// before (re)connecting. No-op elsewhere.
+  Future<void> _clearGattCache(BluetoothDevice d) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await d.clearGattCache();
+    } catch (_) {}
+  }
+
   Future<void> disconnect() async {
     _scanSub?.cancel();
     _scanSub = null;
@@ -354,5 +378,6 @@ class BleMapClock {
     _linkController.close();
     _scanController.close();
     _gpsController.close();
+    _gpsFrameController.close();
   }
 }

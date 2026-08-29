@@ -8,6 +8,7 @@ library;
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
@@ -188,14 +189,35 @@ Future<List<OsrmRoute>> fetchOsrmRoutes(
   if (res.statusCode != 200) {
     throw Exception('OSRM HTTP ${res.statusCode}');
   }
-  final data = jsonDecode(utf8.decode(res.bodyBytes));
-  final routes = data['routes'] as List?;
-  if (routes == null || routes.isEmpty) {
+  // CRITICAL: parsing runs in a background ISOLATE. A LONG route returns a
+  // massive JSON (tens of MB — the polyline can have 100k+ vertices); doing
+  // utf8.decode + jsonDecode + geometry decode on the MAIN thread is what
+  // froze the app ("long route → not responding").
+  final routes = await compute(
+    _parseOsrmRoutes,
+    _RouteParseInput(res.bodyBytes, points.last),
+  );
+  if (routes.isEmpty) {
     throw Exception('Không tìm thấy tuyến đường');
   }
+  return routes;
+}
+
+/// Input bundle for the isolate ([_parseOsrmRoutes]).
+class _RouteParseInput {
+  final Uint8List body;
+  final LatLng fallbackManeuver;
+  const _RouteParseInput(this.body, this.fallbackManeuver);
+}
+
+/// Top-level isolate worker: decode + parse the OSRM response into routes.
+List<OsrmRoute> _parseOsrmRoutes(_RouteParseInput input) {
+  final data = jsonDecode(utf8.decode(input.body));
+  final routes = data['routes'] as List?;
+  if (routes == null || routes.isEmpty) return const [];
   return [
     for (final r in routes.cast<Map<String, dynamic>>())
-      _parseOsrmRoute(r, points.last),
+      _parseOsrmRoute(r, input.fallbackManeuver),
   ];
 }
 

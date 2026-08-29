@@ -8,6 +8,14 @@ extension _NavMap on _NavigationPageState {
   void _zoomBy(double delta) =>
       _map.move(_map.camera.center, _map.camera.zoom + delta);
 
+  /// Decimated route geometry for the browse map, cached per route object so
+  /// a long-distance route is reduced ONCE — not re-decimated on every 1 Hz
+  /// rebuild (that iteration itself was part of the routing-stage freeze).
+  List<LatLng> _displayGeometry(List<LatLng> geo) {
+    if (_routeDisplayCache.length > 8) _routeDisplayCache.clear();
+    return _routeDisplayCache.putIfAbsent(geo, () => decimatePolyline(geo));
+  }
+
   /// Vietmap-style "overview" button: fit the camera to the whole route
   /// (leaving room for the top banner and the bottom ETA bar).
   void _overviewRoute() {
@@ -37,6 +45,15 @@ extension _NavMap on _NavigationPageState {
     _ => const Color(0xFF4285F4),
   };
 
+  /// Camera data-source color for the corner dot (waze=purple, police=teal,
+  /// osm=green, ?=grey) — matches the nav-map source ring.
+  Color _cameraSourceColor(String source) => switch (source) {
+    'waze' => const Color(0xFF7B1FA2),
+    'police' => const Color(0xFF00897B),
+    'osm' => const Color(0xFF34A853),
+    _ => const Color(0xFF5F6368),
+  };
+
   void _locateMe() {
     final c = _current;
     if (c != null) _map.move(c, 17);
@@ -64,6 +81,9 @@ extension _NavMap on _NavigationPageState {
             interactionOptions: const InteractionOptions(
               flags: InteractiveFlag.all,
             ),
+            // Keep the floating widget's auto-hide in sync with the browse
+            // map zoom EVEN without GPS fixes (deduped + cheap).
+            onPositionChanged: (pos, hasGesture) => _syncOverlayVisibility(),
             // Google-style interactive route editing on the preview map:
             // tap an alternative route line to select it, long-press to add
             // a via point and re-plan.
@@ -143,21 +163,25 @@ extension _NavMap on _NavigationPageState {
               PolylineLayer(
                 polylines: [
                   // Alternative routes drawn dimmed (Google's tap-to-compare).
+                  // Display-geometry is DECIMATED so a long-distance route
+                  // doesn't paint tens of thousands of vertices (the freeze).
                   for (var i = 0; i < _alternativeRoutes.length; i++)
                     if (i != _selectedRoute)
                       Polyline(
-                        points: _alternativeRoutes[i].geometry,
+                        points: _displayGeometry(
+                          _alternativeRoutes[i].geometry,
+                        ),
                         color: const Color(0xFF9BB2E8),
                         strokeWidth: 5,
                       ),
                   // white casing under the blue route (Google look)
                   Polyline(
-                    points: route.geometry,
+                    points: _displayGeometry(route.geometry),
                     color: Colors.white,
                     strokeWidth: 9,
                   ),
                   Polyline(
-                    points: route.geometry,
+                    points: _displayGeometry(route.geometry),
                     color: kAppBlue,
                     strokeWidth: 6,
                   ),
@@ -249,23 +273,46 @@ extension _NavMap on _NavigationPageState {
                 // Camera layer: colored dot per focus (speed / red-light /
                 // general), shown when camera alerts are on. A single circle
                 // (no separate 📷 text) so it fits the 26×26 marker box — the
-                // old dot+tag Column overflowed by 5 px for every camera.
+                // old dot+tag Column overflowed by 5 px for every camera. A
+                // tiny corner dot marks the data source (waze/police/osm).
                 if (cameraAlerts)
                   for (final c in _cameras)
                     Marker(
                       point: c.pos,
                       width: 26,
                       height: 26,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: _cameraFocusColor(c.focus),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
-                          boxShadow: const [
-                            BoxShadow(color: Colors.black38, blurRadius: 4),
-                          ],
-                        ),
-                        child: const CctvIcon(size: 11),
+                      child: Stack(
+                        children: [
+                          Container(
+                            decoration: BoxDecoration(
+                              color: _cameraFocusColor(c.focus),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 2),
+                              boxShadow: const [
+                                BoxShadow(color: Colors.black38, blurRadius: 4),
+                              ],
+                            ),
+                            child: const CctvIcon(size: 11),
+                          ),
+                          // Source tag dot (waze=purple · police=teal ·
+                          // osm=green).
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              width: 7,
+                              height: 7,
+                              decoration: BoxDecoration(
+                                color: _cameraSourceColor(c.source),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 1,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
               ],

@@ -206,16 +206,29 @@ extension _NavVoice on _NavigationPageState {
     final cur = nav.text.isNotEmpty ? nav.text : '';
     final target = nav.nextText.isNotEmpty ? nav.nextText : '';
     final onRoad = cur.isNotEmpty ? ' trên $cur' : '';
+    // Emphasize the road you turn INTO — that's the part the driver needs.
     final into = target.isNotEmpty ? ' vào $target' : '';
+    // Next-NEXT maneuver (priority 2): when there is one coming up, say it so
+    // the driver can plan two moves ahead — "rẽ trái vào X, sau đó rẽ phải
+    // vào Y". The board's nav2 packet already shows it; the voice now says it.
+    String nextNext = '';
+    if (nav.nextIconCode != 0 && nav.nextNextText.isNotEmpty) {
+      final v2 = maneuverVerb(nav.nextIconCode);
+      // Only when the 2nd move is reasonably near (it's the turn after the
+      // upcoming one; beyond ~2 km it's noise on a long straight).
+      if (nav.nextMeter <= 0 || nav.nextMeter <= 2000) {
+        nextNext = ', sau đó $v2 vào ${nav.nextNextText}';
+      }
+    }
     // Announce the effective speed limit of the current road (item 2) — the
     // value shown in the road-info chip (sign-aware: the last speed-limit sign
     // passed wins over the road's default). Omitted when unknown (0).
     final limit = _effectiveSpeedLimit;
     final limitTxt = limit > 0 ? ' Tốc độ tối đa $limit km/h.' : '';
     if (now) {
-      return '$verb$into.$limitTxt';
+      return '$verb$into$nextNext.$limitTxt';
     }
-    return 'Đi$onRoad, sau $m mét, $verb$into.$limitTxt';
+    return 'Đi$onRoad, sau $m mét, $verb$into$nextNext.$limitTxt';
   }
 
   /// Warn by voice when the driver EXCEEDS the road's speed limit. Announces

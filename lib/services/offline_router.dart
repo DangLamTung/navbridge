@@ -20,6 +20,7 @@ import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/core/route_profile.dart';
 import 'vietmap_config.dart' show dataSource, graphDownloadBaseUrl;
 import 'package:navbridge/services/vietmap_router.dart';
+import 'package:navbridge/services/google_router.dart';
 
 const MethodChannel _channel = MethodChannel('navbridge/routing');
 
@@ -419,6 +420,16 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
   bool avoidFerry = false,
   RoutePreference preference = RoutePreference.fastest,
 }) async {
+  if (dataSource == 'google' && !forceOffline) {
+    try {
+      return rankByPreference(
+        await fetchGoogleRoutes(points, maxAlternatives: maxAlternatives),
+        preference,
+      );
+    } catch (e) {
+      debugPrint('GOOGLE: route failed: $e — falling back to OSRM');
+    }
+  }
   if (dataSource == 'vietmap' &&
       !forceOffline &&
       (profile == RouteProfile.car || profile == RouteProfile.motorbike)) {

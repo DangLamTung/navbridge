@@ -2,6 +2,7 @@
 /// navigation: gas, food, hotel, ATM, medical, parking.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -12,6 +13,12 @@ import 'package:latlong2/latlong.dart';
 /// A POI category shown as a quick button during navigation.
 enum PoiType {
   fuel('fuel', 'Xăng', Icons.local_gas_station, 'amenity=fuel'),
+  charging(
+    'charging',
+    'Sạc điện',
+    Icons.ev_station,
+    'amenity in charging_station',
+  ),
   food(
     'food',
     'Ăn uống',
@@ -56,6 +63,19 @@ enum PoiType {
   /// Optional name regex to filter results (e.g. hammock cafés whose name
   /// contains "võng"). Null = no filter.
   final String? nameFilter;
+
+  /// Google Places Nearby Search `type` for this category (null = no Google
+  /// equivalent / don't search Google for it).
+  String? get googleType => switch (this) {
+    PoiType.fuel => 'gas_station',
+    PoiType.charging => 'electric_vehicle_charging_station',
+    PoiType.food => 'restaurant',
+    PoiType.cafeVong => 'cafe',
+    PoiType.hotel => 'lodging',
+    PoiType.atm => 'atm',
+    PoiType.hospital => 'hospital',
+    PoiType.parking => 'parking',
+  };
 }
 
 /// One search result.
@@ -65,11 +85,24 @@ class PoiResult {
   final double lng;
   final PoiType type;
 
+  /// Google user rating (0–5) when this came from Google Places; null for
+  /// offline / Overpass / Vietmap results.
+  final double? rating;
+
+  /// Google review count (`user_ratings_total`); null for non-Google sources.
+  final int? userRatingsTotal;
+
+  /// Google place_id — used to de-duplicate corridor searches; null otherwise.
+  final String? placeId;
+
   const PoiResult({
     required this.name,
     required this.lat,
     required this.lng,
     required this.type,
+    this.rating,
+    this.userRatingsTotal,
+    this.placeId,
   });
 
   LatLng get pos => LatLng(lat, lng);
@@ -78,6 +111,7 @@ class PoiResult {
 /// Brand color used to highlight a POI type (markers + cards).
 Color poiColor(PoiType t) => switch (t) {
   PoiType.fuel => const Color(0xFFF4B400),
+  PoiType.charging => const Color(0xFF00A651), // EV charging — green
   PoiType.food => const Color(0xFFEA4335),
   PoiType.cafeVong => const Color(0xFFB5651D), // hammock café — warm brown
   PoiType.hotel => const Color(0xFF1A73E8),
@@ -92,65 +126,122 @@ const _mirrors = [
   'https://overpass.osm.ch/api/interpreter',
 ];
 
+/// Small TTL cache so repeated quick searches don't re-hit slow Overpass
+/// mirrors (the "Xăng" search used to take seconds on EVERY tap).
+final _searchCache = <String, (List<PoiResult>, DateTime)>{};
+const _searchCacheTtl = Duration(minutes: 4);
+
 /// Find the nearest [type] POIs around [center] (Overpass `around` query).
-/// Tries each mirror in order; returns up to [limit] results.
+/// All mirrors are queried in PARALLEL and the first valid answer wins (the
+/// old sequential loop could take 3× the timeout). Results are sorted
+/// nearest-first — Overpass returns `around` rows in ARBITRARY order, so the
+/// old `out limit` could drop the closest station — and briefly cached.
 Future<List<PoiResult>> searchPois(
   PoiType type,
   LatLng center, {
   double radius = 5000,
   int limit = 8,
 }) async {
+  final key =
+      '${type.key}|${center.latitude.toStringAsFixed(3)},'
+      '${center.longitude.toStringAsFixed(3)}|${radius.round()}';
+  final hit = _searchCache[key];
+  if (hit != null && DateTime.now().difference(hit.$2) < _searchCacheTtl) {
+    return hit.$1;
+  }
   // `nwr` covers nodes + ways + relations (many fuel/food POIs are ways);
-  // `out <limit> center;` — the count must come BEFORE `center` (the old
+  // `out <count> center;` — the count must come BEFORE `center` (the old
   // `out center 8;` form is rejected by the Overpass parser → search failed).
+  // Fetch a LARGER set than [limit] so the nearest survive the truncation.
   final q =
-      '[out:json][timeout:20];'
+      '[out:json][timeout:12];'
       '(nwr[${type.overpassFilter}]'
       '(around:${radius.round()},${center.latitude},${center.longitude}););'
-      'out $limit center;';
-  Object? last;
-  for (final mirror in _mirrors) {
+      'out ${math.max(limit * 3, 40)} center;';
+  final results = await _queryMirrors(type, q, center, limit);
+  _searchCache[key] = (results, DateTime.now());
+  return results;
+}
+
+/// Query every Overpass mirror at once; return the first valid (non-empty)
+/// result. A slow or failed mirror no longer blocks the others.
+Future<List<PoiResult>> _queryMirrors(
+  PoiType type,
+  String q,
+  LatLng center,
+  int limit,
+) async {
+  final completer = Completer<List<PoiResult>>();
+  Object? firstError;
+  Future<void> run(String mirror) async {
     try {
-      final res = await http
-          .post(
-            Uri.parse(mirror),
-            body: {'data': q},
-            headers: const {'User-Agent': 'navbridge/1.0 (POI search)'},
-          )
-          .timeout(const Duration(seconds: 18));
-      if (res.statusCode != 200) continue;
-      final data = jsonDecode(utf8.decode(res.bodyBytes));
-      final elements = (data['elements'] as List?) ?? const [];
-      final out = <PoiResult>[];
-      final nameRx = type.nameFilter == null
-          ? null
-          : RegExp(type.nameFilter!, caseSensitive: false);
-      for (final e in elements) {
-        if (e is! Map) continue;
-        final tags = (e['tags'] as Map?) ?? const {};
-        final lat = (e['lat'] ?? e['center']?['lat']) as num?;
-        final lon = (e['lon'] ?? e['center']?['lon']) as num?;
-        if (lat == null || lon == null) continue;
-        // Unnamed stations are common → fall back to the category label.
-        final name = (tags['name'] as String?)?.trim() ?? type.label;
-        if (nameRx != null && !nameRx.hasMatch(name)) continue;
-        out.add(
-          PoiResult(
-            name: name,
-            lat: lat.toDouble(),
-            lng: lon.toDouble(),
-            type: type,
-          ),
-        );
-        if (out.length >= limit) break;
-      }
-      if (out.isNotEmpty) return out;
+      final r = await _queryOne(type, mirror, q, center, limit);
+      if (!completer.isCompleted) completer.complete(r);
     } catch (e) {
-      last = e;
+      firstError ??= e;
     }
   }
-  if (last is Exception) throw last;
-  throw Exception('Không tìm thấy ${type.label} gần đây');
+
+  for (final m in _mirrors) {
+    unawaited(run(m));
+  }
+  return completer.future.timeout(
+    const Duration(seconds: 13),
+    onTimeout: () {
+      if (firstError is Exception) throw firstError!;
+      throw Exception('Không tìm thấy ${type.label} gần đây');
+    },
+  );
+}
+
+/// Query ONE mirror and return its [limit] nearest results (nearest-first so
+/// the bigger `out <count>` truncation never drops the closest station).
+Future<List<PoiResult>> _queryOne(
+  PoiType type,
+  String mirror,
+  String q,
+  LatLng center,
+  int limit,
+) async {
+  final res = await http
+      .post(
+        Uri.parse(mirror),
+        body: {'data': q},
+        headers: const {'User-Agent': 'navbridge/1.0 (POI search)'},
+      )
+      .timeout(const Duration(seconds: 12));
+  if (res.statusCode != 200) throw Exception('Overpass HTTP ${res.statusCode}');
+  final data = jsonDecode(utf8.decode(res.bodyBytes));
+  final elements = (data['elements'] as List?) ?? const [];
+  final out = <PoiResult>[];
+  final nameRx = type.nameFilter == null
+      ? null
+      : RegExp(type.nameFilter!, caseSensitive: false);
+  const Distance d = Distance();
+  for (final e in elements) {
+    if (e is! Map) continue;
+    final tags = (e['tags'] as Map?) ?? const {};
+    final lat = (e['lat'] ?? e['center']?['lat']) as num?;
+    final lon = (e['lon'] ?? e['center']?['lon']) as num?;
+    if (lat == null || lon == null) continue;
+    // Unnamed stations are common → fall back to the category label.
+    final name = (tags['name'] as String?)?.trim() ?? type.label;
+    if (nameRx != null && !nameRx.hasMatch(name)) continue;
+    out.add(
+      PoiResult(
+        name: name,
+        lat: lat.toDouble(),
+        lng: lon.toDouble(),
+        type: type,
+      ),
+    );
+  }
+  out.sort(
+    (a, b) => d
+        .as(LengthUnit.Meter, center, a.pos)
+        .compareTo(d.as(LengthUnit.Meter, center, b.pos)),
+  );
+  return out.take(limit).toList();
 }
 
 /// A scenic spot / viewpoint / mountain pass (đèo) found near the drive —

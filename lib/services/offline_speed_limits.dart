@@ -69,15 +69,17 @@ Future<void> loadOfflineSpeedLimits() {
 }
 
 Future<void> _doLoad() async {
-  _loaded = true;
   try {
     final raw = await rootBundle.loadString(
       'assets/offline_map/vietnam_speed_limits.geojson',
     );
     _index = await compute(_buildIndex, raw);
+    _loaded = true;
   } catch (_) {
     // Keep null on any failure — queries return null (statutory default).
     _index = null;
+  } finally {
+    _loading = null;
   }
   // Never surface an error here: [speedLimitAt] (and the fire-and-forget
   // nav correction) must degrade to the statutory default on a bad load,

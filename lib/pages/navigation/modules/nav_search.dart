@@ -125,7 +125,19 @@ extension _NavSearch on _NavigationPageState {
 
   void _clearSearch() {
     _searchCtrl.clear();
-    setNavState(() => _suggestions = []);
+    setNavState(() {
+      _suggestions = [];
+      _searchResults = [];
+    });
+  }
+
+  /// Dismiss the search / POI markers drawn on the nav map (keeps any active
+  /// navigation) — wired to the "Đóng" chip next to the road-info card.
+  void _clearSearchResults() {
+    setNavState(() {
+      _searchResults = [];
+      _selectedPoi = null;
+    });
   }
 
   /// Clear the picked place card in browse mode (back to a plain search).
@@ -719,7 +731,9 @@ extension _NavSearch on _NavigationPageState {
       _routeStartIndex = 0; // brand-new route → draw the whole thing
     });
     unawaited(_loadElevation(route));
-    unawaited(_refreshRouteCameras());
+    // No route-wide camera/sign layer at the preview stage — a long route's
+    // 100+ cameras (x4 native circles) + 2,000+ signs crushed the low-end
+    // phone at large zoom. Those layers load only while driving, near the car.
     _map.fitCamera(
       CameraFit.bounds(
         bounds: LatLngBounds.fromPoints(points),
@@ -743,7 +757,6 @@ extension _NavSearch on _NavigationPageState {
       _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
     });
     unawaited(_loadElevation(route));
-    unawaited(_refreshRouteCameras());
     if (_planPoints.length >= 2) {
       _map.fitCamera(
         CameraFit.bounds(

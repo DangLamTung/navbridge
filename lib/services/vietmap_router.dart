@@ -7,6 +7,7 @@ library;
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
@@ -42,7 +43,7 @@ Future<List<OsrmRoute>> fetchVietmapRoutes(
   // which the low-end itel chokes on (slow download + JSON parse) and it kept
   // "stopping" / timing out. Encoded = ~2.6× smaller and far cheaper to parse.
   final url =
-      '${VietmapConfig.route}?apikey=${VietmapConfig.apiKey}'
+      '${VietmapConfig.route}?apikey=${VietmapConfig.nextKey()}'
       '&$pts&vehicle=$vehicle&points_encoded=true'
       '&annotations=congestion,toll&alternative=true';
   // Server-side route computation for a long route can take 10–15 s even on
@@ -52,17 +53,36 @@ Future<List<OsrmRoute>> fetchVietmapRoutes(
       .get(Uri.parse(url), headers: const {'User-Agent': _ua})
       .timeout(const Duration(seconds: 60));
   if (res.statusCode != 200) throw Exception('Vietmap HTTP ${res.statusCode}');
-  final data = jsonDecode(utf8.decode(res.bodyBytes));
+  // CRITICAL: parse in a background ISOLATE — a long route's JSON + polyline
+  // decode on the main thread is the same freeze as OSRM's.
+  final routes = await compute(
+    _parseVietmapRoutes,
+    _VietmapParseInput(res.bodyBytes, maxAlternatives),
+  );
+  if (routes.isEmpty) {
+    throw Exception('Không tìm thấy tuyến đường');
+  }
+  return routes;
+}
+
+/// Input bundle for the isolate ([_parseVietmapRoutes]).
+class _VietmapParseInput {
+  final Uint8List body;
+  final int maxAlternatives;
+  const _VietmapParseInput(this.body, this.maxAlternatives);
+}
+
+/// Top-level isolate worker: decode + parse the Vietmap response.
+List<OsrmRoute> _parseVietmapRoutes(_VietmapParseInput input) {
+  final data = jsonDecode(utf8.decode(input.body));
   final paths = (data is Map && data['code'] == 'OK')
       ? data['paths'] as List?
       : null;
-  if (paths == null || paths.isEmpty) {
-    throw Exception('Không tìm thấy tuyến đường');
-  }
+  if (paths == null || paths.isEmpty) return const [];
   return [
     for (final p in paths)
       if (p is Map) _parsePath(Map<String, dynamic>.from(p)),
-  ].take(maxAlternatives).toList();
+  ].take(input.maxAlternatives).toList();
 }
 
 /// Parse one Vietmap `paths[]` entry into an [OsrmRoute] (geometry, steps,

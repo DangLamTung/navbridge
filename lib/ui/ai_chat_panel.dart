@@ -60,6 +60,69 @@ class _Msg {
   });
 }
 
+/// A one-tap suggested question shown under the chat. Each prompt exercises
+/// one of the assistant's tools: place search (xăng / nhà hàng / cà phê /
+/// named place), drive context (ETA / camera / thời tiết), scenic stops and
+/// web search (giá xăng hôm nay).
+class _Suggestion {
+  final String label;
+  final String prompt;
+  final IconData icon;
+  final Color color;
+  const _Suggestion(this.label, this.prompt, this.icon, this.color);
+}
+
+const _suggestions = <_Suggestion>[
+  _Suggestion(
+    'Trạm xăng',
+    'Tìm trạm xăng gần nhất và chỉ đường tới đó',
+    Icons.local_gas_station,
+    Color(0xFFF4B400),
+  ),
+  _Suggestion(
+    'Nhà hàng',
+    'Nhà hàng nào ngon (đánh giá cao) gần đây?',
+    Icons.restaurant,
+    Color(0xFFEA4335),
+  ),
+  _Suggestion(
+    'Cà phê',
+    'Tìm quán cà phê gần đây',
+    Icons.local_cafe,
+    Color(0xFFB5651D),
+  ),
+  _Suggestion(
+    'Còn bao lâu',
+    'Còn bao lâu thì tới nơi?',
+    Icons.schedule,
+    kAppBlue,
+  ),
+  _Suggestion(
+    'Camera',
+    'Phía trước có camera tốc độ không?',
+    Icons.videocam,
+    Color(0xFF1A73E8),
+  ),
+  _Suggestion(
+    'Thời tiết',
+    'Thời tiết hiện tại và sắp tới thế nào?',
+    Icons.wb_sunny,
+    Color(0xFFF09300),
+  ),
+  _Suggestion(
+    'Điểm dừng',
+    'Gợi ý 3-5 điểm dừng đẹp (ngắm cảnh, đèo, cà phê) gần tuyến đường của tôi',
+    Icons.landscape,
+    Color(0xFF1E8E3E),
+  ),
+  _Suggestion(
+    'Giá xăng',
+    'Giá xăng hôm nay bao nhiêu?',
+    Icons.trending_up,
+    Color(0xFF9334E6),
+  ),
+];
+
 class _AiChatPanelState extends State<AiChatPanel> {
   final List<_Msg> _messages = [];
   final _ctrl = TextEditingController();
@@ -307,7 +370,9 @@ class _AiChatPanelState extends State<AiChatPanel> {
                 },
               ),
             ),
-            // One-tap quick suggestions (scenic stops along the drive).
+            // One-tap quick suggestions — each exercises one of the AI's
+            // tools: place search (xăng / nhà hàng / cà phê), drive context
+            // (ETA / camera / thời tiết), scenic stops + web search (giá xăng).
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 2, 12, 0),
               child: Align(
@@ -316,11 +381,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
-                      _suggestionChip(
-                        'Gợi ý dọc đường',
-                        'Gợi ý 3-5 điểm dừng đẹp (ngắm cảnh, đèo, cà phê) '
-                            'gần tuyến đường của tôi',
-                      ),
+                      for (final s in _suggestions) _suggestionChip(s),
                     ],
                   ),
                 ),
@@ -372,15 +433,15 @@ class _AiChatPanelState extends State<AiChatPanel> {
     );
   }
 
-  Widget _suggestionChip(String label, String prompt) {
+  Widget _suggestionChip(_Suggestion s) {
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: ActionChip(
-        avatar: const Icon(Icons.landscape, size: 16, color: Color(0xFF1E8E3E)),
-        label: Text(label, style: const TextStyle(fontSize: 12)),
+        avatar: Icon(s.icon, size: 16, color: s.color),
+        label: Text(s.label, style: const TextStyle(fontSize: 12)),
         backgroundColor: const Color(0xFFE8F0FE),
         side: BorderSide(color: kAppBlue.withValues(alpha: 0.3)),
-        onPressed: _busy ? null : () => _send(prompt),
+        onPressed: _busy ? null : () => _send(s.prompt),
       ),
     );
   }

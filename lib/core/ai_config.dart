@@ -18,6 +18,12 @@ class AiConfig {
   /// Google Gemini API key — build-time dev fallback.
   static const String geminiApiKey = String.fromEnvironment('GEMINI_API_KEY');
 
+  /// Tavily web-search API key — real-time, AI-optimized web grounding for
+  /// the assistant. Build-time only (`--dart-define=TAVILY_API_KEY=...`, from
+  /// `.env` via tool/env.sh). Empty = the AI falls back to the free
+  /// DuckDuckGo / Wikipedia sources.
+  static const String tavilyApiKey = String.fromEnvironment('TAVILY_API_KEY');
+
   /// DeepSeek chat endpoint (OpenAI-compatible chat completions).
   static const String deepSeekEndpoint =
       'https://api.deepseek.com/chat/completions';

@@ -132,8 +132,7 @@ class _NavStatusBarState extends State<NavStatusBar> {
                     label: 'Thời gian',
                     icon: Icons.schedule,
                     selected: widget.mode == NavBarMode.time,
-                    onTap: () =>
-                        widget.onModeChanged?.call(NavBarMode.time),
+                    onTap: () => widget.onModeChanged?.call(NavBarMode.time),
                   ),
                   const SizedBox(width: 8),
                   _ModeChip(
@@ -186,12 +185,12 @@ class _NavStatusBarState extends State<NavStatusBar> {
                 Text(
                   [
                     '${weatherEmoji(w.weatherCode)} '
-                    '${w.tempC?.round() ?? '--'}°',
-                    if (w.humidityPct != null)
-                      '💧 ${w.humidityPct!.round()}%',
+                        '${w.tempC?.round() ?? '--'}°',
+                    if (w.humidityPct != null) '💧 ${w.humidityPct!.round()}%',
                     if (w.windKmh != null) '💨 ${w.windKmh!.round()} km/h',
                     if ((w.precipMm ?? 0) > 0)
-                      '🌧 ${w.precipMm!.toStringAsFixed(1)} mm',
+                      '🌧 ${w.precipMm!.toStringAsFixed(1)} mm', // Windy attribution (free tier requires a credit).
+                    if (w.source != null) w.source!,
                   ].join(' · '),
                   style: TextStyle(
                     fontSize: 13,
@@ -225,10 +224,7 @@ class _NavStatusBarState extends State<NavStatusBar> {
                 // markers — drag to scrub along the path.
                 Row(
                   children: [
-                    Text(
-                      'Bắt đầu',
-                      style: TextStyle(fontSize: 11, color: sub),
-                    ),
+                    Text('Bắt đầu', style: TextStyle(fontSize: 11, color: sub)),
                     const Spacer(),
                     if (dest != null && dest.isNotEmpty)
                       Flexible(
@@ -253,8 +249,7 @@ class _NavStatusBarState extends State<NavStatusBar> {
                           _scrubAt(d.localPosition.dx, width),
                       onHorizontalDragUpdate: (d) =>
                           _scrubAt(d.localPosition.dx, width),
-                      onHorizontalDragEnd: (_) =>
-                          widget.onScrubEnd?.call(),
+                      onHorizontalDragEnd: (_) => widget.onScrubEnd?.call(),
                       child: SizedBox(
                         height: 34,
                         child: Stack(
@@ -287,9 +282,7 @@ class _NavStatusBarState extends State<NavStatusBar> {
                             Positioned(
                               left: 2,
                               top: 11,
-                              child: _Dot(
-                                color: const Color(0xFF1E8E3E),
-                              ),
+                              child: _Dot(color: const Color(0xFF1E8E3E)),
                             ),
                             // Destination marker (red flag).
                             Positioned(
@@ -333,7 +326,6 @@ class _Stat extends StatelessWidget {
   final String label;
   final Color color;
 
-
   @override
   Widget build(BuildContext context) {
     return Row(
@@ -343,7 +335,11 @@ class _Stat extends StatelessWidget {
         const SizedBox(width: 4),
         Text(
           label,
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: color),
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: color,
+          ),
         ),
       ],
     );
@@ -403,9 +399,7 @@ class _ModeChip extends StatelessWidget {
             Icon(
               icon,
               size: 14,
-              color: selected
-                  ? Colors.white
-                  : const Color(0xFF5F6368),
+              color: selected ? Colors.white : const Color(0xFF5F6368),
             ),
             const SizedBox(width: 4),
             Text(
@@ -413,9 +407,7 @@ class _ModeChip extends StatelessWidget {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
-                color: selected
-                    ? Colors.white
-                    : const Color(0xFF5F6368),
+                color: selected ? Colors.white : const Color(0xFF5F6368),
               ),
             ),
           ],

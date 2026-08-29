@@ -31,7 +31,8 @@ Future<List<VmSuggestion>> vietmapAutocomplete(
   String text, {
   LatLng? focus,
 }) async {
-  var url = '${VietmapConfig.autocomplete}?apikey=${VietmapConfig.apiKey}'
+  var url =
+      '${VietmapConfig.autocomplete}?apikey=${VietmapConfig.nextKey()}'
       '&text=${Uri.encodeQueryComponent(text)}&display_type=6';
   if (focus != null) {
     url += '&focus=${focus.latitude},${focus.longitude}';
@@ -46,12 +47,14 @@ Future<List<VmSuggestion>> vietmapAutocomplete(
   for (final e in data.cast<Map<String, dynamic>>()) {
     final display = '${e['display'] ?? ''}';
     if (display.isEmpty) continue;
-    out.add(VmSuggestion(
-      refId: '${e['ref_id'] ?? ''}',
-      display: display,
-      name: '${e['name'] ?? ''}',
-      address: '${e['address'] ?? ''}',
-    ));
+    out.add(
+      VmSuggestion(
+        refId: '${e['ref_id'] ?? ''}',
+        display: display,
+        name: '${e['name'] ?? ''}',
+        address: '${e['address'] ?? ''}',
+      ),
+    );
   }
   return out;
 }
@@ -59,7 +62,8 @@ Future<List<VmSuggestion>> vietmapAutocomplete(
 /// Resolve coordinates + display name for a chosen suggestion.
 /// Returns (lat, lng, display) or null on failure. One transaction per call.
 Future<(double, double, String)?> vietmapPlace(String refId) async {
-  final url = '${VietmapConfig.place}?apikey=${VietmapConfig.apiKey}'
+  final url =
+      '${VietmapConfig.place}?apikey=${VietmapConfig.nextKey()}'
       '&refid=${Uri.encodeQueryComponent(refId)}';
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': _ua})
@@ -72,4 +76,55 @@ Future<(double, double, String)?> vietmapPlace(String refId) async {
   if (lat == null || lng == null) return null;
   final display = (d['display'] ?? d['name'] ?? '') as String;
   return (lat, lng, display);
+}
+
+/// A POI found via the Vietmap place index.
+class VmPoi {
+  final String name;
+  final double lat;
+  final double lng;
+  const VmPoi(this.name, this.lat, this.lng);
+}
+
+/// Small TTL cache so repeated "trạm xăng" / "trạm sạc" taps are instant.
+final _vmPoiCache = <String, (List<VmPoi>, DateTime)>{};
+const _vmPoiCacheTtl = Duration(minutes: 4);
+
+/// Find [text] POIs (e.g. "trạm xăng", "trạm sạc") around [center] via the
+/// Vietmap place index: autocomplete returns names + ref_ids, then each ref_id
+/// is resolved to coordinates IN PARALLEL. Returns up to [limit] nearest-first.
+/// Empty when there's no Vietmap key (or offline).
+Future<List<VmPoi>> vietmapPoiSearch(
+  String text,
+  LatLng center, {
+  int limit = 8,
+}) async {
+  if (VietmapConfig.apiKey.isEmpty) return const [];
+  final key =
+      '$text|${center.latitude.toStringAsFixed(3)},'
+      '${center.longitude.toStringAsFixed(3)}';
+  final hit = _vmPoiCache[key];
+  if (hit != null && DateTime.now().difference(hit.$2) < _vmPoiCacheTtl) {
+    return hit.$1;
+  }
+  final suggestions = await vietmapAutocomplete(text, focus: center);
+  final resolved = await Future.wait([
+    for (final s in suggestions.take(limit * 2)) _resolveVmPoi(s),
+  ]);
+  final out = [for (final p in resolved) ?p];
+  const Distance d = Distance();
+  out.sort(
+    (a, b) => d
+        .as(LengthUnit.Meter, center, LatLng(a.lat, a.lng))
+        .compareTo(d.as(LengthUnit.Meter, center, LatLng(b.lat, b.lng))),
+  );
+  final result = out.take(limit).toList();
+  _vmPoiCache[key] = (result, DateTime.now());
+  return result;
+}
+
+Future<VmPoi?> _resolveVmPoi(VmSuggestion s) async {
+  final p = await vietmapPlace(s.refId);
+  if (p == null) return null;
+  return VmPoi(s.display, p.$1, p.$2);
 }

@@ -16,9 +16,10 @@ import 'package:navbridge/core/settings.dart';
 import 'package:navbridge/pages/offline_screen.dart';
 import 'package:navbridge/pages/trips_screen.dart';
 import 'package:navbridge/services/offline_tiles.dart';
+import 'package:navbridge/services/overlay_visibility.dart';
 import 'package:navbridge/services/overlay_widget.dart';
-import 'package:navbridge/services/vietmap_config.dart'
-    show VietmapConfig, dataSource;
+import 'package:navbridge/services/vietmap_config.dart' show dataSource;
+import 'package:navbridge/ui/overlay_layout_screen.dart';
 import 'package:navbridge/ui/widgets.dart';
 
 /// General settings entry point — the ⚙ button on the map opens this.
@@ -36,9 +37,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _routingEngine = 'auto';
   bool _smoothCamera = true;
   bool _cameraAlerts = true;
+  bool _gpsFilter = true;
   bool _overlayOn = false; // floating speed/limit widget over other apps
+  String _overlayLayout = 'vertical'; // floating widget layout id
+  double _overlayScale = 1.0;
   String _pipAspect = '34';
   bool _ridingMode = false;
+  double _voiceVolume = 1.0;
+  bool _bleAutoConnect = true;
+  String _lastBleMac = '';
+  String _lastBleName = '';
+  String _lastBleType = 'auto';
   final _wakeWordCtrl = TextEditingController();
 
   // --- AI assistant keys (encrypted on-device) ---
@@ -60,8 +69,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _routingEngine = routingEngine;
     _smoothCamera = smoothCamera;
     _cameraAlerts = cameraAlerts;
+    _gpsFilter = gpsFilter;
+    _overlayLayout = overlayLayout;
+    _overlayScale = overlayScale;
     _pipAspect = pipAspect;
     _ridingMode = ridingMode;
+    _voiceVolume = voiceVolume;
+    _bleAutoConnect = bleAutoConnect;
+    _lastBleMac = lastBleMac;
+    _lastBleName = lastBleName;
+    _lastBleType = lastBleType;
     _wakeWordCtrl.text = wakeWord;
     _connSub = onlineStream().listen((o) {
       if (mounted) setState(() => _online = o);
@@ -91,11 +108,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     routingEngine: routingEngine,
     smoothCamera: smoothCamera,
     cameraAlerts: cameraAlerts,
+    gpsFilter: gpsFilter,
     radar: radarOn,
     pipAspect: pipAspect,
     ridingMode: ridingMode,
+    voiceVolume: voiceVolume,
     simpleMode: simpleMode,
     wakeWord: wakeWord,
+    overlayLayout: overlayLayout,
+    overlayScale: overlayScale,
+    bleAutoConnect: bleAutoConnect,
+    lastBleMac: lastBleMac,
+    lastBleName: lastBleName,
+    lastBleType: lastBleType,
   );
 
   Future<void> _toggleSimpleMode(bool v) async {
@@ -202,6 +227,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await saveSettings(_currentSettings());
   }
 
+  /// GPS outlier filter (innovation gate): reject bad fixes (too inaccurate /
+  /// position jumping) before they reach the map, filter and speed chip.
+  /// Off → raw GPS passes through with no fixes dropped.
+  Future<void> _toggleGpsFilter(bool v) async {
+    setState(() {
+      _gpsFilter = v;
+      gpsFilter = v;
+    });
+    await saveSettings(_currentSettings());
+  }
+
+  /// Spoken guidance volume (0..1), persisted.
+  Future<void> _setVoiceVolume(double v) async {
+    setState(() {
+      _voiceVolume = v;
+      voiceVolume = v;
+    });
+    await saveSettings(_currentSettings());
+  }
+
   /// Floating speed-limit / camera widget over other apps (Waze-Mod style):
   /// requests the "display over other apps" permission and shows/hides the
   /// self-contained overlay widget.
@@ -217,6 +262,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Open the floating-widget layout chooser page.
+  Future<void> _openOverlayLayout() async {
+    final picked = await Navigator.of(context).push<OverlayLayoutResult>(
+      MaterialPageRoute(
+        builder: (_) =>
+            OverlayLayoutScreen(selected: _overlayLayout, scale: _overlayScale),
+      ),
+    );
+    if (picked != null && mounted) {
+      setState(() {
+        _overlayLayout = picked.layout;
+        overlayLayout = picked.layout;
+        _overlayScale = picked.scale;
+        overlayScale = picked.scale;
+      });
+      await saveSettings(_currentSettings());
+      // Push the new layout + scale to the RUNNING overlay and resize its
+      // window NOW. Previously this only saved the setting — the bubble kept
+      // the old layout at the old window size until the next navigation sync,
+      // so the new "Nằm ngang" content was clipped/overlapped and the limit
+      // badge looked missing.
+      await pushOverlayLayout(picked.layout, scale: picked.scale);
+    }
+  }
+
+  String _layoutLabel(String id) {
+    final mapped = switch (id) {
+      'horizontal' || 'pill' => 'horizontal',
+      _ => 'vertical',
+    };
+    for (final l in kOverlayLayouts) {
+      if (l.id == mapped) {
+        return '${l.label} (${(_overlayScale * 100).round()}%)';
+      }
+    }
+    return 'Nằm dọc (${(_overlayScale * 100).round()}%)';
+  }
+
   void _setPipAspect(String v) {
     if (pipAspect == v) return;
     setState(() {
@@ -224,6 +307,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _pipAspect = v;
     });
     unawaited(saveSettings(_currentSettings()));
+  }
+
+  Future<void> _toggleBleAutoConnect(bool v) async {
+    setState(() {
+      _bleAutoConnect = v;
+      bleAutoConnect = v;
+    });
+    await saveSettings(_currentSettings());
+  }
+
+  Future<void> _clearRememberedBleDevice() async {
+    setState(() {
+      _lastBleMac = '';
+      _lastBleName = '';
+      _lastBleType = 'auto';
+      lastBleMac = '';
+      lastBleName = '';
+      lastBleType = 'auto';
+    });
+    await saveSettings(_currentSettings());
   }
 
   Future<void> _loadAiKeys() async {
@@ -310,6 +413,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _buildDataSource(),
           const SizedBox(height: 16),
           _buildNavPreferences(),
+          const SizedBox(height: 16),
+          _buildBluetoothSection(),
           const SizedBox(height: 16),
           _buildAiSection(),
         ],
@@ -450,10 +555,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Expanded(
                   child: _SourceChoice(
                     label: 'Vietmap',
-                    subtitle: 'Nhanh + giao thông thật',
+                    subtitle: 'Nhanh + giao thông',
                     icon: Icons.traffic,
                     selected: dataSource == 'vietmap',
                     onTap: () => _setDataSource('vietmap'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _SourceChoice(
+                    label: 'Google',
+                    subtitle: 'Chuẩn, cần mạng',
+                    icon: Icons.place,
+                    selected: dataSource == 'google',
+                    onTap: () => _setDataSource('google'),
                   ),
                 ),
               ],
@@ -527,45 +642,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 8),
-                Row(
+                GridView.count(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 8,
+                  crossAxisSpacing: 8,
+                  // Taller cells (2.5 overflowed the _SourceChoice card on the
+                  // itel's narrow screen — RenderFlex overflow at the bottom).
+                  childAspectRatio: 1.6,
                   children: [
-                    Expanded(
-                      child: _SourceChoice(
-                        label: 'Photon',
-                        subtitle: 'Nhanh, không cần khóa',
-                        icon: Icons.bolt,
-                        selected: _geocodingProvider == 'photon',
-                        onTap: () => _setGeocodingProvider('photon'),
-                      ),
+                    _SourceChoice(
+                      label: 'Google Maps',
+                      subtitle: 'Chuẩn, cần khóa API',
+                      icon: Icons.place,
+                      selected: _geocodingProvider == 'google',
+                      onTap: () => _setGeocodingProvider('google'),
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _SourceChoice(
-                        label: 'Nominatim',
-                        subtitle: 'OSM chính thức',
-                        icon: Icons.public,
-                        selected: _geocodingProvider == 'nominatim',
-                        onTap: () => _setGeocodingProvider('nominatim'),
-                      ),
+                    _SourceChoice(
+                      label: 'Vietmap',
+                      subtitle: 'VN, cần khóa API',
+                      icon: Icons.map,
+                      selected: _geocodingProvider == 'vietmap',
+                      onTap: () => _setGeocodingProvider('vietmap'),
+                    ),
+                    _SourceChoice(
+                      label: 'Photon',
+                      subtitle: 'Nhanh, không cần khóa',
+                      icon: Icons.bolt,
+                      selected: _geocodingProvider == 'photon',
+                      onTap: () => _setGeocodingProvider('photon'),
+                    ),
+                    _SourceChoice(
+                      label: 'Nominatim',
+                      subtitle: 'OSM chính thức',
+                      icon: Icons.public,
+                      selected: _geocodingProvider == 'nominatim',
+                      onTap: () => _setGeocodingProvider('nominatim'),
                     ),
                   ],
                 ),
-                if (VietmapConfig.hasKeys) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _SourceChoice(
-                          label: 'Vietmap',
-                          subtitle: 'VN, cần khóa API',
-                          icon: Icons.map,
-                          selected: _geocodingProvider == 'vietmap',
-                          onTap: () => _setGeocodingProvider('vietmap'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
                 const SizedBox(height: 8),
                 SwitchListTile(
                   dense: true,
@@ -604,6 +720,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(fontSize: 12, color: Colors.grey[700]),
                   ),
                   onTap: _editWakeWord,
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(Icons.volume_up, color: kAppBlue, size: 22),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Âm lượng giọng nói',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '${(_voiceVolume * 100).round()}%',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                    ),
+                  ],
+                ),
+                Slider(
+                  value: _voiceVolume,
+                  onChanged: _setVoiceVolume,
+                  activeColor: kAppBlue,
+                  min: 0.0,
+                  max: 1.0,
+                  divisions: 10,
+                  label: '${(_voiceVolume * 100).round()}%',
                 ),
                 const SizedBox(height: 12),
                 const Text(
@@ -670,6 +815,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 8),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
+                  value: _gpsFilter,
+                  onChanged: _toggleGpsFilter,
+                  activeThumbColor: kAppBlue,
+                  secondary: const Icon(
+                    Icons.filter_alt,
+                    color: kAppBlue,
+                    size: 22,
+                  ),
+                  title: const Text(
+                    'Lọc GPS (chống nhảy vị trí)',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    _gpsFilter
+                        ? 'Chặn fix GPS bất thường (nhảy vị trí / tốc độ ảo) '
+                              'trước khi vẽ lên bản đồ.'
+                        : 'Dùng GPS thô — không chặn fix nào (vị trí có thể '
+                              'nhảy, tốc độ có thể sai).',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
                   value: _cameraAlerts,
                   onChanged: _setCameraAlerts,
                   activeThumbColor: kAppBlue,
@@ -712,6 +881,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(fontSize: 11, color: Colors.grey[700]),
                   ),
                 ),
+                // Floating-widget LAYOUT picker (opens a dedicated page).
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: const Icon(
+                    Icons.dashboard_customize,
+                    color: kAppBlue,
+                    size: 22,
+                  ),
+                  title: const Text(
+                    'Kiểu widget nổi',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    _layoutLabel(_overlayLayout),
+                    style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                  ),
+                  trailing: const Icon(Icons.chevron_right, size: 20),
+                  onTap: _openOverlayLayout,
+                ),
                 const SizedBox(height: 12),
                 const Text(
                   'Hướng cửa sổ nổi (PiP)',
@@ -752,6 +941,122 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'đang mở).',
                   style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                 ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Bluetooth & external display auto-connect settings.
+  Widget _buildBluetoothSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Màn hình ngoài & Bluetooth',
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        Material(
+          color: const Color(0xFFF1F3F4),
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _bleAutoConnect,
+                  onChanged: _toggleBleAutoConnect,
+                  activeThumbColor: kAppBlue,
+                  secondary: const Icon(
+                    Icons.bluetooth_searching,
+                    color: kAppBlue,
+                    size: 22,
+                  ),
+                  title: const Text(
+                    'Tự động kết nối Bluetooth',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    _bleAutoConnect
+                        ? 'Tự động quét & kết nối với đồng hồ E-ink hoặc màn hình NAV-OSM khi mở app hoặc khi ở gần.'
+                        : 'Tắt tự động kết nối — bạn cần chọn kết nối thủ công trên bản đồ.',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                  ),
+                ),
+                const Divider(height: 16),
+                if (_lastBleMac.isNotEmpty) ...[
+                  Row(
+                    children: [
+                      Icon(
+                        _lastBleType == 'map' ? Icons.tv : Icons.watch,
+                        size: 20,
+                        color: Colors.green[700],
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _lastBleName.isNotEmpty
+                                  ? _lastBleName
+                                  : 'Thiết bị BLE',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              'MAC: $_lastBleMac • Đã lưu tự kết nối',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _clearRememberedBleDevice,
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.redAccent,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: const Text(
+                          'Quên',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else ...[
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.info_outline,
+                        size: 16,
+                        color: Colors.grey[600],
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Chưa lưu thiết bị cụ thể. Khi bật tự động kết nối, app sẽ tự tìm kiếm bất kỳ màn hình E-ink hoặc NAV-OSM nào gần bạn.',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),

@@ -34,43 +34,54 @@ extension _NavBuild on _NavigationPageState {
         children: [
           _pipTopBar(),
           Expanded(
-            child: VectorNavMap(
-              routeGeometry: route?.geometry ?? const [],
-              routeSteps: route?.steps ?? const [],
-              routeStartIndex: _routeStartIndex,
-              current: current,
-              speedMps: _progress?.speedMps,
-              gpsAccuracy: _lastGpsAccuracy,
-              bearing: _routeBearing,
-              heading: _heading,
-              headingUp: _headingUp,
-              tilt3D: _tilt3d,
-              terrain3D: _terrain3d,
-              nightMode: _nightMode,
-              satellite: _satellite,
-              vietmapBase:
-                  dataSource == 'vietmap' && !_offline && VietmapConfig.hasKeys,
-              // Keep the user's chosen basemap (OSM/CARTO/topo/…) on the nav
-              // map's online fallback — never a surprise style switch.
-              tileSource: _tileSource,
-              carIcon: _carIcon,
-              pois: _pois,
-              selectedPoi: _selectedPoi,
-              searchPois: _searchResults,
-              stops: _stops,
-              // During nav only cameras near the route are loaded (not all
-              // ~1,800 nationwide) — the driver sees what's on their road.
-              cameras: cameraAlerts ? _routeCameras : const [],
-              showRadar: radarOn,
-              radarUrl: _radarLayerUrl,
-              showSatellite: _satelliteOn,
-              satelliteUrl: _satelliteLayerUrl,
-              onPoiTap: _onNavPoiTap,
-              signs: _routeSigns,
-              controller: _vmFollow,
-              smoothCamera: smoothCamera,
-              // No compass in the tiny PiP window — it just eats space.
-              showCompass: false,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: VectorNavMap(
+                    routeGeometry: route?.geometry ?? const [],
+                    routeSteps: route?.steps ?? const [],
+                    routeStartIndex: _routeStartIndex,
+                    current: current,
+                    speedMps: _progress?.speedMps,
+                    gpsAccuracy: _lastGpsAccuracy,
+                    bearing: _routeBearing,
+                    heading: _heading,
+                    headingUp: _headingUp,
+                    tilt3D: _tilt3d,
+                    terrain3D: _terrain3d,
+                    nightMode: _nightMode,
+                    satellite: _satellite,
+                    vietmapBase:
+                        dataSource == 'vietmap' &&
+                        !_offline &&
+                        VietmapConfig.hasKeys,
+                    // Keep the user's chosen basemap (OSM/CARTO/topo/…) on the nav
+                    // map's online fallback — never a surprise style switch.
+                    tileSource: _tileSource,
+                    carIcon: _carIcon,
+                    pois: _pois,
+                    selectedPoi: _selectedPoi,
+                    searchPois: _searchResults,
+                    stops: _stops,
+                    // During nav only cameras near the route are loaded (not all
+                    // ~1,800 nationwide) — the driver sees what's on their road.
+                    cameras: cameraAlerts ? _routeCameras : const [],
+                    showRadar: radarOn,
+                    radarUrl: _radarLayerUrl,
+                    showSatellite: _satelliteOn,
+                    satelliteUrl: _satelliteLayerUrl,
+                    onPoiTap: _onNavPoiTap,
+                    signs: _routeSigns,
+                    controller: _vmFollow,
+                    smoothCamera: smoothCamera,
+                    // PiP can't be pinched — start at ~16 so ~1.5–2 km of the route
+                    // is visible in the small window.
+                    defaultZoom: 16,
+                    // No compass in the tiny PiP window — it just eats space.
+                    showCompass: false,
+                  ),
+                ),
+              ],
             ),
           ),
           _pipManeuverBar(),
@@ -245,7 +256,53 @@ extension _NavBuild on _NavigationPageState {
                                   limitOverride: _effectiveSpeedLimit > 0
                                       ? _effectiveSpeedLimit
                                       : null,
+                                  // GPS source tag lives INSIDE the chip so it
+                                  // never overlaps the right controls column.
+                                  fromEsp: _espActive(),
                                 ),
+                                // Close chip to dismiss the search / POI
+                                // markers on the nav map (blue search markers
+                                // + the tapped/selected POI highlight).
+                                if (_searchResults.isNotEmpty ||
+                                    _selectedPoi != null) ...[
+                                  const SizedBox(width: 6),
+                                  Tooltip(
+                                    message: 'Đóng kết quả tìm kiếm',
+                                    child: Material(
+                                      color: const Color(0xE6181A22),
+                                      borderRadius: BorderRadius.circular(16),
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.circular(16),
+                                        onTap: _clearSearchResults,
+                                        child: const Padding(
+                                          padding: EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 6,
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.close,
+                                                size: 15,
+                                                color: Colors.white,
+                                              ),
+                                              SizedBox(width: 4),
+                                              Text(
+                                                'Đóng',
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
                                 const Spacer(),
                                 // Nav controls: a scrollable column capped to
                                 // the space ABOVE the bottom bars so it can
@@ -457,6 +514,15 @@ extension _NavBuild on _NavigationPageState {
                                           icon: Icons.directions_car,
                                           color: const Color(0xFF1A73E8),
                                           onTap: _openVietmapNav,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        // "Điều hướng bằng Google Maps" —
+                                        // hands off to Google Maps (Google's
+                                        // roads + live traffic).
+                                        RoundActionButton(
+                                          icon: Icons.navigation,
+                                          color: const Color(0xFFEA4335),
+                                          onTap: _openGoogleMapsNav,
                                         ),
                                       ],
                                     ),

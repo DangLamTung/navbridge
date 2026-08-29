@@ -45,6 +45,8 @@ const int mapTypeWeather =
     0x07; // weather: tempC(s8) hum(u8) code(u8) slen text
 const int mapTypeNav2 = 0x08; // second maneuver (after the upcoming one)
 const int mapTypeCamera = 0x09; // speed camera ahead: dist(u16) type(u8)
+const int mapTypeGps =
+    0x0A; // ESP GPS: time(3) lat/lon(i32 x1e7 x2) q sats hdop
 
 // ---- maneuver ids (match `navManeuverName` in ble_nav.cpp) ----
 const int mapManeuverStraight = 0;
@@ -197,6 +199,55 @@ Uint8List buildMapClockFrame({required int hour, required int minute}) {
   p[0] = hour.clamp(0, 23);
   p[1] = minute.clamp(0, 59);
   return _frame(mapTypeClock, p);
+}
+
+/// Decoded ESP32 GPS frame (type 0x0A) — the board's compact position
+/// broadcast (`gps_read_frame` in gps_ublox.c). Carries UTC time, position,
+/// fix quality, satellites and HDOP — but NOT speed/heading (the app derives
+/// those from movement between the 1 Hz frames).
+class EspGpsFrame {
+  final int hour, minute, second; // UTC
+  final double lat, lon; // degrees
+  final int quality; // 0 none, 1 GPS, 2 DGPS
+  final int sats;
+  final double hdop;
+  const EspGpsFrame({
+    required this.hour,
+    required this.minute,
+    required this.second,
+    required this.lat,
+    required this.lon,
+    required this.quality,
+    required this.sats,
+    required this.hdop,
+  });
+  bool get valid => quality > 0;
+  double get accuracyMeters => hdop <= 0 ? 12.0 : (hdop * 6.0).clamp(3.0, 60.0);
+}
+
+/// Parse an `0xAA 0x55 0x0A` GPS frame; null if [bytes] isn't one.
+EspGpsFrame? parseMapGpsFrame(Uint8List b) {
+  if (b.length < 5 + 15) return null;
+  if (b[0] != mapFrameMagic0 || b[1] != mapFrameMagic1 || b[2] != mapTypeGps) {
+    return null;
+  }
+  final p = b.sublist(5, 5 + 15);
+  // Little-endian i32 (two's complement → sign-extend for negative coords).
+  int readI32(int o) {
+    final v = p[o] | (p[o + 1] << 8) | (p[o + 2] << 16) | (p[o + 3] << 24);
+    return v >= 0x80000000 ? v - 0x100000000 : v;
+  }
+
+  return EspGpsFrame(
+    hour: p[0],
+    minute: p[1],
+    second: p[2],
+    lat: readI32(3) / 1e7,
+    lon: readI32(7) / 1e7,
+    quality: p[11],
+    sats: p[12],
+    hdop: p[13] / 10.0,
+  );
 }
 
 /// `<route-cont>` — the route continuation polyline, drawn faint behind the
