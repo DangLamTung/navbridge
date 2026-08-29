@@ -93,19 +93,25 @@ int statutoryLimit(String highway, {String vehicle = 'car'}) {
     'footway': 10,
     'cycleway': 20,
   };
+  // Xe mô tô (2/3 bánh) — Thông tư 38/2024/TT-BGTVT (hiệu lực 01/01/2025):
+  //   ngoài khu đông dân cư: 60 km/h (đường hai chiều không dải phân cách —
+  //   điển hình QL1A) hoặc 70 (đường đôi / ≥2 làn); trong khu đông dân cư:
+  //   50 (hai chiều) hoặc 60 (đường đôi). Default to the 2-way value; real
+  //   posted signs (DATMAP/Waze/OSM) tighten it where present. (Xe gắn máy
+  //   = 40 everywhere; mô tô bị cấm trên cao tốc — capped, not 0.)
   const motorbike = {
     'motorway': 80,
     'motorway_link': 60,
-    'trunk': 80,
-    'trunk_link': 60,
-    'primary': 70,
+    'trunk': 60,
+    'trunk_link': 50,
+    'primary': 60,
     'primary_link': 50,
     'secondary': 60,
     'secondary_link': 50,
     'tertiary': 60,
     'tertiary_link': 50,
-    'unclassified': 40,
-    'residential': 40,
+    'unclassified': 50,
+    'residential': 50,
     'living_street': 20,
     'service': 30,
     'pedestrian': 10,

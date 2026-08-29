@@ -69,9 +69,13 @@ void main() {
       expect(statutoryLimit('motorway', vehicle: 'car'), 120);
       expect(statutoryLimit('primary', vehicle: 'car'), 80);
       // Motorbikes are capped lower (and banned on motorways — capped, not 0).
+      // Thông tư 38/2024/TT-BGTVT: QL (trunk/primary) outside populated
+      // 2-way = 60 km/h, urban 2-way = 50.
       expect(statutoryLimit('motorway', vehicle: 'motorbike'), 80);
-      expect(statutoryLimit('primary', vehicle: 'motorbike'), 70);
+      expect(statutoryLimit('trunk', vehicle: 'motorbike'), 60);
+      expect(statutoryLimit('primary', vehicle: 'motorbike'), 60);
       expect(statutoryLimit('secondary', vehicle: 'motorbike'), 60);
+      expect(statutoryLimit('residential', vehicle: 'motorbike'), 50);
       // Trucks lower still.
       expect(statutoryLimit('primary', vehicle: 'truck'), 60);
     });
@@ -90,10 +94,10 @@ void main() {
 
     test('motorbike never inherits the car posted limit (OSM is car data)', () {
       // A primary posted 80 for cars must NOT show 80 for a motorbike —
-      // the VN statutory motorbike default (70) wins.
+      // the VN statutory motorbike default (60) wins.
       expect(
         effectiveLimit('primary', vehicle: 'motorbike', taggedKmh: 80),
-        70,
+        60,
       );
       expect(
         effectiveLimit('motorway', vehicle: 'motorbike', taggedKmh: 120),
@@ -104,7 +108,7 @@ void main() {
     test(
       'motorbike is capped by a posted limit LOWER than its statutory default',
       () {
-        // A residential posted 30 applies to motorbikes too → 30, not 40.
+        // A residential posted 30 applies to motorbikes too → 30, not 50.
         expect(
           effectiveLimit('residential', vehicle: 'motorbike', taggedKmh: 30),
           30,
@@ -118,7 +122,7 @@ void main() {
     });
 
     test('untagged non-car vehicles use their statutory default', () {
-      expect(effectiveLimit('trunk', vehicle: 'motorbike'), 80);
+      expect(effectiveLimit('trunk', vehicle: 'motorbike'), 60);
       expect(effectiveLimit('trunk', vehicle: 'truck'), 70);
     });
   });
