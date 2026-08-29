@@ -31,8 +31,15 @@ jobs:
         with:
           channel: stable
           cache: true
-          # Matches the local toolchain (Flutter 3.44 default NDK).
-          ndk: 28.2.13676358
+
+      # Accept the Android SDK licenses so AGP can AUTO-DOWNLOAD the NDK /
+      # cmake during the build (subosito/flutter-action has no ndk input; the
+      # local toolchain's NDK is 28.2.13676358 via flutter.ndkVersion).
+      - name: Accept Android SDK licenses
+        run: |
+          yes | flutter doctor --android-licenses >/dev/null 2>&1 || true
+          (command -v sdkmanager >/dev/null && yes | sdkmanager --licenses >/dev/null 2>&1) || true
+          echo "SDK licenses accepted — AGP will auto-download the NDK if missing."
 
       # The app's keys come from a gitignored .env locally; recreate it in CI
       # from repo Secrets so tool/build.sh's --dart-define pipeline is reused
