@@ -258,6 +258,11 @@ extension _NavVoice on _NavigationPageState {
   /// once when the speeding episode starts, then at most every 60 s while
   /// still speeding (never a per-fix beep); resets when back within the limit
   /// (hysteresis). The ~5 km/h threshold ignores normal speedometer error.
+  ///
+  /// Voice stays SHORT and whole-number only: a plain "Vượt quá tốc độ" — the
+  /// exact overage is spoken ONLY in the mild 5–10 km/h band (rounded to a
+  /// whole km/h, never decimals); anything worse is just a firm simple
+  /// "Giảm tốc độ!".
   void _maybeSpeakOverspeed(double speedMps) {
     if (!_voiceOn || !_voice.ready) return;
     if (!_navigating && !_simulating) return;
@@ -275,11 +280,12 @@ extension _NavVoice on _NavigationPageState {
               now.difference(last) >= const Duration(seconds: 60))) {
         _speedingSpoken = true;
         _lastOverspeedAt = now;
-        _voice.speak(
-          over >= 20
-              ? 'Giảm tốc độ! Bạn đang vượt quá $over km/h so với giới hạn $limit km/h.'
-              : 'Bạn đang vượt quá tốc độ, $kmh km/h. Giới hạn $limit km/h.',
-        );
+        // Whole-number speech only — never decimals. Mild overage (5–10 km/h)
+        // states the exact (rounded) amount; more is just a firm simple alert.
+        final msg = over < 10
+            ? 'Vượt quá tốc độ ${over.round()} km/h.'
+            : 'Giảm tốc độ! Vượt quá tốc độ.';
+        _voice.speak(msg);
       }
     } else {
       _speedingSpoken = false;
