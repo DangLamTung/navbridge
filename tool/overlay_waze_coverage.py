@@ -256,7 +256,7 @@ def main():
 </div>
 <div id="map"><canvas id="cv"></canvas></div>
 <div id="zoombox"><button id="zIn" title="Zoom in">+</button><button id="zOut" title="Zoom out">−</button></div>
-<div id="attr">© OpenStreetMap contributors</div>
+<div id="attr">© OpenStreetMap · © CARTO</div>
 <script>
 const BUCKETS=[__BUCKETS__];
 const SEGS=[__SEGS__];
@@ -306,11 +306,21 @@ function resize(){scale=window.devicePixelRatio||1;
 function tileKey(z,x,y){return z+'/'+x+'/'+y;}
 function loadTile(z,x,y){
   const k=tileKey(z,x,y);
-  if(tiles[k]!==undefined||z<0||y<0||x>=Math.pow(2,z))return;
+  if(z<0||y<0||x>=Math.pow(2,z))return;
+  const st=tiles[k];
+  if(st && (st.im || st.loading)) return;   // loaded or already in-flight
+  const tries=(st&&st.tries)||0;
+  const local=tries===0;                     // 1st attempt = bundled offline tile
   const im=new Image();
+  tiles[k]={loading:true, tries:tries+1};
   im.onload=()=>{tiles[k]={im,z,x,y}; requestRender();};
-  im.onerror=()=>{ delete tiles[k]; setTimeout(()=>loadTile(z,x,y),2500); };
-  tiles[k]=null; im.src='https://tile.openstreetmap.org/'+k+'.png';
+  im.onerror=()=>{
+    if(tries<3){ tiles[k]={tries:tries+1}; setTimeout(()=>loadTile(z,x,y), local?0:2000); }
+    else delete tiles[k];
+  };
+  im.src = local
+    ? 'waze_tiles/'+k+'.png'
+    : 'https://basemaps.cartocdn.com/light_all/'+k+'.png';
 }
 
 function render(){
@@ -321,7 +331,7 @@ function render(){
   ctx.fillStyle='#aad3df'; ctx.fillRect(0,0,W,H);
   for(let ty=y0;ty<=y1;ty++)for(let tx=x0;tx<=x1;tx++){
     const t=tiles[tileKey(Z,tx,ty)];
-    if(t) ctx.drawImage(t.im,t.x*TILE-offX,t.y*TILE-offY,TILE,TILE);
+    if(t && t.im) ctx.drawImage(t.im,t.x*TILE-offX,t.y*TILE-offY,TILE,TILE);
   }
   const vx0=offX/S, vy0=offY/S, vx1=(offX+W)/S, vy1=(offY+H)/S;
 
