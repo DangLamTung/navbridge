@@ -27,10 +27,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pin Java 17 (AGP/Gradle 9.1 need 17+) — the runner's default JDK is not
+      # guaranteed and the project's gradle.properties points to a MAC-ONLY
+      # JBR path, so we fix that below.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
+
+      # CI-safe Gradle settings: the repo's android/gradle.properties contains a
+      # macOS-only `org.gradle.java.home` (Android Studio JBR path that doesn't
+      # exist on Linux → Gradle fails to start) and -Xmx8G (the 7 GB runner
+      # OOMs). Strip the java.home (use JAVA_HOME from setup-java) and shrink
+      # the heap for the runner. Local builds are untouched.
+      - name: Patch gradle.properties for CI
+        run: |
+          sed -i '/^org\.gradle\.java\.home=/d' android/gradle.properties
+          sed -i 's/-Xmx8G/-Xmx3G/; s/-XX:MaxMetaspaceSize=4G/-XX:MaxMetaspaceSize=1G/; s/-XX:ReservedCodeCacheSize=512m/-XX:ReservedCodeCacheSize=256m/' android/gradle.properties
+          echo "--- patched android/gradle.properties ---"
+          cat android/gradle.properties
 
       # Accept the Android SDK licenses so AGP can AUTO-DOWNLOAD the NDK /
       # cmake during the build (subosito/flutter-action has no ndk input; the
