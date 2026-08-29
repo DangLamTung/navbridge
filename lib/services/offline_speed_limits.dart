@@ -51,6 +51,12 @@ class _SpeedLimitIndex {
 }
 
 _SpeedLimitIndex? _index;
+
+/// Real Waze posted speed limits as POINTS (from the Waze crawl — the driver
+/// trusts these over the sparse DATMAP layer). Queried FIRST in
+/// [speedLimitAt]; a Waze point within the window wins over a DATMAP segment.
+_WazeIndex? _waze;
+
 bool _loaded = false;
 Future<void>? _loading;
 
@@ -70,14 +76,17 @@ Future<void> loadOfflineSpeedLimits() {
 
 Future<void> _doLoad() async {
   try {
-    final raw = await rootBundle.loadString(
-      'assets/offline_map/vietnam_speed_limits.geojson',
-    );
-    _index = await compute(_buildIndex, raw);
+    final raws = await Future.wait(<Future<String>>[
+      rootBundle.loadString('assets/offline_map/vietnam_speed_limits.geojson'),
+      rootBundle.loadString('assets/offline_map/waze_speed_limits.json'),
+    ]);
+    _index = await compute(_buildIndex, raws[0]);
+    _waze = await compute(_buildWazeIndex, raws[1]);
     _loaded = true;
   } catch (_) {
     // Keep null on any failure — queries return null (statutory default).
     _index = null;
+    _waze = null;
   } finally {
     _loading = null;
   }
@@ -146,6 +155,40 @@ _SpeedLimitIndex _buildIndex(String raw) {
   );
 }
 
+/// Waze speed-limit POINTS: packed Float32List [lat, lng, kmh, …] + a grid
+/// (cell -> point indices), built in a background isolate.
+class _WazeIndex {
+  final Float32List pts;
+  final Map<int, Uint32List> grid;
+  const _WazeIndex({required this.pts, required this.grid});
+}
+
+_WazeIndex _buildWazeIndex(String raw) {
+  final d = jsonDecode(raw) as Map<String, dynamic>;
+  final points = (d['points'] as List?) ?? const [];
+  final pts = <double>[];
+  final grid = <int, List<int>>{};
+  for (final p in points) {
+    if (p is! Map) continue;
+    final lat = (p['lat'] as num?)?.toDouble();
+    final lng = (p['lng'] as num?)?.toDouble();
+    final kmh = (p['kmh'] as num?)?.toDouble();
+    if (lat == null || lng == null || kmh == null) continue;
+    if (kmh < 5 || kmh > 200) continue;
+    final idx = pts.length ~/ 3;
+    pts
+      ..add(lat)
+      ..add(lng)
+      ..add(kmh);
+    final key = _cellKey(lng, lat);
+    (grid[key] ??= <int>[]).add(idx);
+  }
+  return _WazeIndex(
+    pts: Float32List.fromList(pts),
+    grid: {for (final e in grid.entries) e.key: Uint32List.fromList(e.value)},
+  );
+}
+
 int _cellKey(double lon, double lat) {
   final x = (lon / _cellDeg).floor();
   final y = (lat / _cellDeg).floor();
@@ -158,17 +201,45 @@ int _cellKey(double lon, double lat) {
 Future<int?> speedLimitAt(LatLng p, {double maxDistM = 25}) async {
   await loadOfflineSpeedLimits();
   final idx = _index;
-  if (idx == null) return null;
-  final meta = idx.meta;
-  final coords = idx.coords;
-  final offsets = idx.offsets;
-  final grid = idx.grid;
+  final waze = _waze;
+  if (idx == null && waze == null) return null;
 
   final lon = p.longitude, lat = p.latitude;
   final cx = (lon / _cellDeg).floor();
   final cy = (lat / _cellDeg).floor();
   final cosLat = math.cos(lat * math.pi / 180.0);
   final maxDeg = maxDistM / _mPerDeg;
+
+  // 1) WAZE point layer FIRST — the driver trusts Waze's real posted limits.
+  if (waze != null) {
+    var best = double.infinity;
+    var bestKmh = 0.0;
+    final pts = waze.pts;
+    for (var dx = -1; dx <= 1; dx++) {
+      for (var dy = -1; dy <= 1; dy++) {
+        final key = (((cx + dx) & 0xFFFF) << 16) | ((cy + dy) & 0xFFFF);
+        final ids = waze.grid[key];
+        if (ids == null) continue;
+        for (var k = 0; k < ids.length; k++) {
+          final i = ids[k] * 3;
+          final kmh = pts[i + 2];
+          if (kmh < 5 || kmh > 200) continue;
+          final d = _ptDistM(pts[i], pts[i + 1], lat, lon, cosLat);
+          if (d < best) {
+            best = d;
+            bestKmh = kmh;
+          }
+        }
+      }
+    }
+    if (best <= maxDistM) return bestKmh.round();
+  }
+  if (idx == null) return null;
+
+  final meta = idx.meta;
+  final coords = idx.coords;
+  final offsets = idx.offsets;
+  final grid = idx.grid;
 
   var best = double.infinity;
   var bestSpeed = 0.0;
@@ -204,6 +275,19 @@ Future<int?> speedLimitAt(LatLng p, {double maxDistM = 25}) async {
     return bestSpeed.round();
   }
   return null;
+}
+
+/// Great-circle-ish planar distance (m) from a Waze POINT to (lat, lon).
+double _ptDistM(
+  double plat,
+  double plng,
+  double lat,
+  double lon,
+  double cosLat,
+) {
+  final dLat = (plat - lat) * _mPerDeg;
+  final dLon = (plng - lon) * _mPerDeg * cosLat;
+  return math.sqrt(dLat * dLat + dLon * dLon);
 }
 
 /// Minimum distance (m) from (lon, lat) to segment [i]'s polyline.

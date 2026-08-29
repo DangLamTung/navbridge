@@ -56,8 +56,11 @@ class _VietmapNavScreenState extends State<VietmapNavScreen> {
     final key = VietmapConfig.apiKey;
     _options = _plugin.getDefaultOptions()
       ..apiKey = key
+      // The style endpoint 423s with the API key (locked / needs the paid nav
+      // SDK key) but works with the TILE key — use it so the map actually
+      // renders. The API key still drives routing/guidance in the SDK.
       ..mapStyle =
-          'https://maps.vietmap.vn/api/maps/light/styles.json?apikey=$key'
+          'https://maps.vietmap.vn/api/maps/light/styles.json?apikey=${VietmapConfig.tileKey}'
       ..language = 'vi'
       ..units = VoiceUnits.metric
       ..simulateRoute = false

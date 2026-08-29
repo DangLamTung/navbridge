@@ -6,6 +6,7 @@
 library;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter_tts/flutter_tts.dart';
 
 import 'package:navbridge/services/offline_tiles.dart' show voiceVolume;
@@ -14,6 +15,11 @@ class VoiceGuide {
   final FlutterTts _tts = FlutterTts();
   bool _ready = false;
   bool get ready => _ready;
+
+  /// Native channel that asks Android to DUCK (lower) media volume during an
+  /// announcement so the navigation voice isn't drowned out by YouTube /
+  /// Spotify. See MainActivity.kt (navbridge/audio).
+  static const MethodChannel _audioChannel = MethodChannel('navbridge/audio');
 
   /// Apply the persisted guidance volume (0..1). Called at init and before
   /// each utterance so a mid-ride settings change takes effect immediately.
@@ -39,6 +45,11 @@ class VoiceGuide {
       try {
         await _tts.setSharedInstance(true);
       } catch (_) {}
+      try {
+        // When an utterance finishes, release the ducked media focus so
+        // YouTube / radio volume returns to normal.
+        _tts.setCompletionHandler(_releaseMediaFocus);
+      } catch (_) {}
       debugPrint('VOICE: TTS ready (vi-VN, navigation audio)');
     } catch (e) {
       debugPrint('VOICE: TTS init failed: $e');
@@ -50,6 +61,7 @@ class VoiceGuide {
     try {
       await _tts.stop();
       await _applyVolume();
+      await _duckMedia();
       await _tts.speak(text);
       debugPrint('VOICE: speak "$text"');
     } catch (e) {
@@ -66,10 +78,25 @@ class VoiceGuide {
     try {
       await _tts.setQueueMode(1); // 1 = add to queue, don't interrupt
       await _applyVolume();
+      await _duckMedia();
       await _tts.speak(text);
     } catch (e) {
       debugPrint('VOICE: speakQueued failed: $e');
     }
+  }
+
+  /// Ask Android to DUCK (lower) media volume for the announcement.
+  Future<void> _duckMedia() async {
+    try {
+      await _audioChannel.invokeMethod('duck');
+    } catch (_) {}
+  }
+
+  /// Release the ducked media focus after the utterance finishes.
+  Future<void> _releaseMediaFocus() async {
+    try {
+      await _audioChannel.invokeMethod('abandon');
+    } catch (_) {}
   }
 
   Future<void> stop() async {

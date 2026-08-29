@@ -41,6 +41,11 @@ class _OverlayAppState extends State<OverlayApp> {
   double _kmh = 0;
   int? _limit;
 
+  /// Last raw fix — used to DERIVE speed from the distance travelled between
+  /// fixes when the phone GPS reports speed = 0 (common on cheap devices).
+  LatLng? _lastGpsPos;
+  DateTime? _lastGpsAt;
+
   /// Every camera distance (metres) within 600 m, pushed by the main app or
   /// self-computed.
   List<int> _nearCams = const [];
@@ -116,7 +121,11 @@ class _OverlayAppState extends State<OverlayApp> {
         }
 
         if (m['kmh'] != null && m['kmh'] is num) {
-          _kmh = (m['kmh'] as num).toDouble();
+          // Same exponential smoothing as the self-GPS path so the pushed
+          // (outlier-gated / ESP BLE) speed doesn't jump on every update.
+          final kmh = (m['kmh'] as num).toDouble();
+          final alpha = kmh > _kmh ? 0.5 : 0.3;
+          _kmh += alpha * (kmh - _kmh);
         }
         if (_hidden) {
           _nearCams = const [];
@@ -158,7 +167,10 @@ class _OverlayAppState extends State<OverlayApp> {
       _sub = Geolocator.getPositionStream(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
-          distanceFilter: 3,
+          // 0 = every fix (the main nav app uses 0 too). A non-zero distance
+          // filter throttled updates to every 3 m — at city speed the widget
+          // looked frozen/stale.
+          distanceFilter: 0,
         ),
       ).listen(_onFix);
     } finally {
@@ -172,10 +184,45 @@ class _OverlayAppState extends State<OverlayApp> {
   }
 
   void _onFix(Position p) {
-    final kmh = (p.speed.isNaN ? 0.0 : p.speed) * 3.6;
     if (!mounted) return;
-    setState(() => _kmh = kmh);
-    unawaited(_selfContainedAhead(LatLng(p.latitude, p.longitude)));
+    final pos = LatLng(p.latitude, p.longitude);
+    // Raw GPS speed (m/s); NaN → 0.
+    var spd = p.speed.isNaN ? 0.0 : p.speed;
+    // Cheap phones often report speed = 0: derive it from the distance
+    // travelled between consecutive fixes (same trick as the ESP frame path
+    // in the main nav app).
+    final now = DateTime.now();
+    final lastPos = _lastGpsPos;
+    final lastAt = _lastGpsAt;
+    _lastGpsPos = pos;
+    _lastGpsAt = now;
+    if (spd < 0.5 && lastPos != null && lastAt != null) {
+      final dt = now.difference(lastAt).inMilliseconds / 1000.0;
+      if (dt > 0.4 && dt < 5) {
+        final derived =
+            const Distance().as(LengthUnit.Meter, lastPos, pos) / dt;
+        // Trust the derived speed only when plausible (> ~5 km/h); below that
+        // GPS jitter makes position deltas meaningless.
+        if (derived > 1.4) spd = derived;
+      }
+    }
+    final kmh = spd * 3.6;
+    // Prefer the MAIN app's pushed speed (outlier-gated, ESP BLE when the
+    // receiver is active) whenever it is alive (<2 s since its last message);
+    // otherwise this raw self-GPS speed would overwrite it every fix and the
+    // bubble would flicker between the two sources.
+    final lastMsg = _lastMsgAt;
+    final msgFresh =
+        lastMsg != null &&
+        DateTime.now().difference(lastMsg) < const Duration(seconds: 2);
+    if (!msgFresh) {
+      // Exponential smoothing so the dial/card doesn't jump on every noisy
+      // fix (respond a little faster when accelerating).
+      final alpha = kmh > _kmh ? 0.5 : 0.3;
+      _kmh += alpha * (kmh - _kmh);
+      setState(() {});
+    }
+    unawaited(_selfContainedAhead(pos));
   }
 
   Future<void> _selfContainedAhead(LatLng pos) async {

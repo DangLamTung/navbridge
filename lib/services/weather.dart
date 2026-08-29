@@ -102,6 +102,21 @@ String weatherTextForCode(int? code) {
   return 'Storm';
 }
 
+/// A compact HOURLY rain timeline for the AI assistant, so it can answer
+/// "mưa tạnh lúc mấy giờ": e.g. "13h 80%, 14h 40%, 15h 10%". Each entry is
+/// the rain probability (%) for the current hour, +1h, +2h… (from the hourly
+/// forecast, oldest first). Empty when the feed has no probability.
+String rainTimelineText(List<int>? probs) {
+  if (probs == null || probs.isEmpty) return '';
+  final nowH = DateTime.now().hour;
+  final parts = <String>[];
+  for (var i = 0; i < probs.length && i < 6; i++) {
+    final h = (nowH + i) % 24;
+    parts.add('${h.toString().padLeft(2, '0')}h ${probs[i]}%');
+  }
+  return parts.join(', ');
+}
+
 /// Current air temperature (°C) at [lat]/[lng], or null on failure.
 /// Best-effort info — never fatal.
 Future<double?> fetchCurrentTemperature(double lat, double lng) async {
@@ -163,9 +178,10 @@ Future<WeatherInfo?> fetchWeather(double lat, double lng) async {
       '&current=temperature_2m,apparent_temperature,'
       'relative_humidity_2m,wind_speed_10m,wind_direction_10m,'
       'precipitation,weather_code'
-      // Hourly rain probability — the "sắp mưa không?" prediction.
+      // Hourly rain probability — the "sắp mưa không?" prediction. 8 hours so
+      // the AI can also answer "mưa tạnh lúc mấy giờ" (see [rainTimelineText]).
       '&hourly=precipitation_probability,precipitation'
-      '&forecast_hours=4',
+      '&forecast_hours=8',
     );
     final res = await http
         .get(url, headers: const {'User-Agent': 'navbridge/1.0 (weather)'})
@@ -407,19 +423,146 @@ Future<WeatherInfo?> fetchWindyWeather(double lat, double lng) async {
   }
 }
 
-/// Best current weather: Windy (if a key is set) → real observed METAR
-/// (nearest VN airport) → Open-Meteo. Open-Meteo fills the fields Windy/METAR
-/// lack (humidity, rain probability, forecast).
+/// AccuWeather API key — real-time current conditions + 12-hour rain forecast.
+/// Free tier ≈ 50 calls/day per endpoint. From `--dart-define=
+/// ACCUWEATHER_API_KEY` (.env). Empty = AccuWeather disabled (the app uses
+/// Windy → METAR → Open-Meteo).
+const String accuWeatherApiKey = String.fromEnvironment('ACCUWEATHER_API_KEY');
+
+/// AccuWeather WeatherIcon (1–44) → Open-Meteo WMO code, so the existing
+/// emoji / merge / rain-ahead logic just works.
+int? _accuIconToWmo(int icon) {
+  if (icon <= 0) return null;
+  if (icon == 1 || icon == 31 || icon == 32) return 0; // clear
+  if (icon <= 5) return 1; // partly cloudy
+  if (icon == 6 || icon == 7) return 2; // cloudy
+  if (icon == 8 || icon == 35 || icon == 36) return 3; // overcast
+  if (icon == 11) return 45; // fog
+  if (icon == 12 || icon == 13 || icon == 14 || icon == 37 || icon == 38) {
+    return 61; // rain
+  }
+  if (icon == 15 || icon == 16) return 95; // thunderstorm
+  if (icon == 17 || icon == 18 || icon == 39 || icon == 40) {
+    return 80; // showers
+  }
+  if (icon >= 19 && icon <= 26) return 71; // snow
+  if (icon == 29 || icon == 30) return 51; // drizzle
+  if (icon >= 41 && icon <= 44) return 73; // snow
+  return null;
+}
+
+WeatherInfo? _accuCache;
+double? _accuCacheLat;
+double? _accuCacheLng;
+DateTime? _accuCacheAt;
+const _accuCacheTtl = Duration(minutes: 30);
+
+/// Real-time current weather from AccuWeather (when a key is set): location
+/// key lookup → current conditions + 12-hour rain probability. Cached
+/// ~30 min so the free tier (~50 calls/day per endpoint) isn't blown by the
+/// 3-min nav refresh. Best-effort: null on failure / no key (falls back to
+/// Windy → METAR → Open-Meteo).
+Future<WeatherInfo?> fetchAccuWeather(double lat, double lng) async {
+  final key = accuWeatherApiKey;
+  if (key.isEmpty) return null;
+  final now = DateTime.now();
+  if (_accuCache != null &&
+      _accuCacheLat == lat &&
+      _accuCacheLng == lng &&
+      now.difference(_accuCacheAt!) < _accuCacheTtl) {
+    return _accuCache;
+  }
+  try {
+    // 1) Location key from the coordinates (geoposition search).
+    final locRes = await http
+        .get(
+          Uri.parse(
+            'https://dataservice.accuweather.com/locations/v1/cities/'
+            'geoposition/search?apikey=$key&q=$lat,$lng&language=vi',
+          ),
+          headers: const {'User-Agent': 'navbridge/1.0 (accuweather)'},
+        )
+        .timeout(const Duration(seconds: 10));
+    if (locRes.statusCode != 200) return null;
+    final loc = jsonDecode(utf8.decode(locRes.bodyBytes)) as Map?;
+    final locKey = loc?['Key'] as String?;
+    if (locKey == null || locKey.isEmpty) return null;
+    // 2) Current conditions.
+    final curRes = await http
+        .get(
+          Uri.parse(
+            'https://dataservice.accuweather.com/currentconditions/v1/'
+            '$locKey?apikey=$key&language=vi&details=true',
+          ),
+          headers: const {'User-Agent': 'navbridge/1.0 (accuweather)'},
+        )
+        .timeout(const Duration(seconds: 10));
+    if (curRes.statusCode != 200) return null;
+    final curList = jsonDecode(utf8.decode(curRes.bodyBytes)) as List?;
+    if (curList == null || curList.isEmpty) return null;
+    final c = (curList.first as Map?) ?? const {};
+    double? m(Object? v) => v is num ? v.toDouble() : null;
+    final temp = m((c['Temperature'] as Map?)?['Metric']?['Value']);
+    if (temp == null) return null;
+    // 3) 12-hour rain probability ("sắp mưa không?").
+    List<int>? probs;
+    try {
+      final fcRes = await http
+          .get(
+            Uri.parse(
+              'https://dataservice.accuweather.com/forecasts/v1/hourly/12hour/'
+              '$locKey?apikey=$key&language=vi&metric=true',
+            ),
+            headers: const {'User-Agent': 'navbridge/1.0 (accuweather)'},
+          )
+          .timeout(const Duration(seconds: 10));
+      if (fcRes.statusCode == 200) {
+        final fc = jsonDecode(utf8.decode(fcRes.bodyBytes)) as List?;
+        probs = [
+          for (final h in fc ?? const [])
+            if (h is Map) (h['RainProbability'] as num?)?.toInt() ?? 0,
+        ];
+      }
+    } catch (_) {}
+    final icon = (c['WeatherIcon'] as num?)?.toInt();
+    final info = WeatherInfo(
+      tempC: temp,
+      feelsLikeC: m((c['RealFeelTemperature'] as Map?)?['Metric']?['Value']),
+      humidityPct: m(c['RelativeHumidity']),
+      windKmh: m((c['Wind'] as Map?)?['Speed']?['Metric']?['Value']),
+      windDir: m((c['Wind'] as Map?)?['Direction']?['Degrees']),
+      precipMm: m(
+        (c['PrecipitationSummary'] as Map?)?['PastHour']?['Metric']?['Value'],
+      ),
+      weatherCode: icon == null ? null : _accuIconToWmo(icon),
+      rainProb: probs,
+      source: 'AccuWeather',
+    );
+    _accuCache = info;
+    _accuCacheLat = lat;
+    _accuCacheLng = lng;
+    _accuCacheAt = now;
+    return info;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Best current weather: AccuWeather (if a key is set) → Windy → real
+/// observed METAR (nearest VN airport) → Open-Meteo. Open-Meteo fills the
+/// fields the others lack (humidity, rain probability, forecast).
 Future<WeatherInfo?> fetchBestWeather(double lat, double lng) async {
   final results = await Future.wait([
     fetchWeather(lat, lng),
     fetchMetarWeather(lat, lng),
     fetchWindyWeather(lat, lng),
+    fetchAccuWeather(lat, lng),
   ]);
   final om = results[0];
   final metar = results[1];
   final windy = results[2];
-  final primary = windy ?? metar ?? om;
+  final accu = results[3];
+  final primary = accu ?? windy ?? metar ?? om;
   if (primary == null) return null;
   return WeatherInfo(
     tempC: primary.tempC ?? om?.tempC,

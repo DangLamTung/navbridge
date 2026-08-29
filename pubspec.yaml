@@ -80,6 +80,7 @@ flutter:
     - assets/offline_map/vietnam_cameras.json
     - assets/offline_map/vietnam_signs.json
     - assets/offline_map/vietnam_speed_limits.geojson
+    - assets/offline_map/waze_speed_limits.json
     - assets/offline_map/icons/
     - assets/offline_map/sprite/
     - assets/offline_map/fonts/

@@ -363,17 +363,19 @@ class _NavigationPageState extends State<NavigationPage>
     }
     // Markers near the car — BOUNDED so the low-end phone stays smooth: the
     // 1.5 km / 80-sign map layer (and the 5 km uncapped camera layer, each
-    // camera drawn as 4 native circles) froze navigation. Now signs are
-    // 800 m / 20 and cameras 3 km / 40 (nearest first).
+    // camera drawn as 4 native circles) froze navigation. Bumped up so the
+    // route actually shows the limits/signs ahead: signs 1.5 km / 60 and
+    // cameras 5 km / 60 (nearest first) — plenty for the driver without the
+    // old route-wide freeze.
     const Distance d = Distance();
-    var cams = await camerasNearPoint(pos, maxDistM: 3000);
+    var cams = await camerasNearPoint(pos, maxDistM: 5000);
     cams.sort(
       (a, b) => d
           .as(LengthUnit.Meter, pos, a.pos)
           .compareTo(d.as(LengthUnit.Meter, pos, b.pos)),
     );
-    if (cams.length > 40) cams = cams.sublist(0, 40);
-    final signs = await signsNearPoint(pos, maxDistM: 800, max: 20);
+    if (cams.length > 60) cams = cams.sublist(0, 60);
+    final signs = await signsNearPoint(pos, maxDistM: 1500, max: 60);
     if (!mounted) return;
     setNavState(() {
       _routeCameras = cams;

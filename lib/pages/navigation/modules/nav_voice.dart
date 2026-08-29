@@ -18,29 +18,35 @@ extension _NavVoice on _NavigationPageState {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
-      builder: (_) => AiChatPanel(
-        context: _aiContext(),
-        initialQuestion: question?.trim(),
-        // Opened by a voice command → speak the answer aloud while it streams
-        // so the driver never has to look at the screen.
-        speakAloud: question != null && question.trim().isNotEmpty,
-        onSpeak: (sentence) {
-          if (sentence.isEmpty) {
-            _voice.stop(); // flush any queued spoken answer
-          } else {
-            _voice.speakQueued(sentence);
-          }
-        },
-        // "Đi đến" chip on an AI-grounded place → plan the route.
-        onNavigate: (name, lat, lng) {
-          unawaited(_planToPoint(name, lat, lng));
-        },
-        onMicPressed: () async {
-          final mic = await Permission.microphone.request();
-          if (!mic.isGranted) return '';
-          if (!mounted) return '';
-          return _recognizeOnePhrase();
-        },
+      // The modal sheet's builder context reliably reports the on-screen
+      // keyboard via viewInsets — this Padding lifts the whole panel above the
+      // keyboard so the question field is never blocked while typing.
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+        child: AiChatPanel(
+          context: _aiContext(),
+          initialQuestion: question?.trim(),
+          // Opened by a voice command → speak the answer aloud while it streams
+          // so the driver never has to look at the screen.
+          speakAloud: question != null && question.trim().isNotEmpty,
+          onSpeak: (sentence) {
+            if (sentence.isEmpty) {
+              _voice.stop(); // flush any queued spoken answer
+            } else {
+              _voice.speakQueued(sentence);
+            }
+          },
+          // "Đi đến" chip on an AI-grounded place → plan the route.
+          onNavigate: (name, lat, lng) {
+            unawaited(_planToPoint(name, lat, lng));
+          },
+          onMicPressed: () async {
+            final mic = await Permission.microphone.request();
+            if (!mic.isGranted) return '';
+            if (!mounted) return '';
+            return _recognizeOnePhrase();
+          },
+        ),
       ),
     );
   }
@@ -50,6 +56,16 @@ extension _NavVoice on _NavigationPageState {
   /// this device (no_match) would otherwise leave the chat mic waiting forever.
   Future<String> _recognizeOnePhrase() async {
     if (!_commands.available) return '';
+    // If the nav voice (or the always-on wake word) is already listening, a
+    // SECOND recognizer start returns no result (speech_to_text throws/silent
+    // on double-start) — stop it first so the AI mic actually works while
+    // navigating. The always-on loop re-arms itself on the next toggle.
+    if (_listening || _alwaysOnVoice) {
+      _listening = false;
+      _alwaysOnVoice = false;
+      if (mounted) setNavState(() {});
+      await _commands.stop();
+    }
     final completer = Completer<String>();
     _listening = true;
     if (mounted) setNavState(() {});
@@ -112,15 +128,22 @@ extension _NavVoice on _NavigationPageState {
     return cond.isEmpty ? '${w.tempC}°C' : '${w.tempC}°C, $cond';
   }
 
-  /// "mưa 80% trong giờ tới" for the AI context — the radar-based rain
-  /// prediction (Open-Meteo hourly probability), so the assistant can answer
-  /// "sắp mưa không?". Null when the feed has no probability.
+  /// "mưa 80% trong giờ tới; từng giờ: 13h 80%, 14h 40%, 15h 10%" for the AI
+  /// context — the radar-based rain prediction (Open-Meteo hourly probability)
+  /// plus the full hourly timeline so the assistant can answer "mưa tạnh lúc
+  /// mấy giờ". Null when the feed has no probability.
   String? _rainPredictionText(WeatherInfo? w) {
     final p = w?.rainProbSoon;
-    if (p == null) return null;
-    if (p >= 50) return 'mưa khả năng cao $p% trong giờ tới';
-    if (p >= 30) return 'khả năng mưa $p% trong giờ tới';
-    return 'khả năng mưa thấp $p% trong giờ tới';
+    final tl = rainTimelineText(w?.rainProb);
+    final base = p == null
+        ? null
+        : p >= 50
+        ? 'mưa khả năng cao $p% trong giờ tới'
+        : p >= 30
+        ? 'khả năng mưa $p% trong giờ tới'
+        : 'khả năng mưa thấp $p% trong giờ tới';
+    if (base == null) return tl.isEmpty ? null : 'Dự báo mưa từng giờ: $tl';
+    return tl.isEmpty ? base : '$base; từng giờ: $tl';
   }
 
   /// Speak the upcoming maneuver AHEAD of the turn at speed-aware distances

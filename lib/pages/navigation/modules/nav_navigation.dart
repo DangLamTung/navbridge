@@ -145,8 +145,21 @@ extension _NavNavigation on _NavigationPageState {
       // voice) instead of waiting for the next GPS fix.
       _handleNav(from, speedMps: speedMps);
       _sendMapRoute();
-    } catch (_) {
-      // keep the old route on failure
+    } catch (e) {
+      // keep the old route on failure — but TELL the driver so they know the
+      // reroute didn't take (previously silent → the car kept being guided
+      // back onto the original route and the map never updated).
+      debugPrint('REROUTE: failed: $e — keeping the old route');
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Không tính được lộ trình mới — giữ tuyến cũ.'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+      }
     }
   }
 

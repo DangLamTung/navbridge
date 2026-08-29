@@ -1,9 +1,11 @@
 package com.navbridge.app
 
 import android.app.PictureInPictureParams
+import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Rect
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
@@ -24,6 +26,10 @@ class MainActivity : FlutterActivity() {
     /// PiP window shape (see [pipAspect]). Updated live via `setAspect` so the
     /// window re-shapes even while it's open. Defaults to the larger 3:4.
     private var pipAspect: String = "34"
+
+    /// Reused audio-focus listener so we can duck media (YouTube/radio) and
+    /// later abandon the focus (see "navbridge/audio" channel below).
+    private var audioFocusListener: AudioManager.OnAudioFocusChangeListener? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -53,6 +59,34 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+
+        // Duck media (YouTube / Spotify / radio) during a voice announcement so
+        // the navigation voice isn't drowned out. Requested before each
+        // utterance; abandoned when the utterance finishes (voice_guide.dart).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "navbridge/audio")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "duck" -> {
+                        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                        val l = audioFocusListener
+                            ?: object : AudioManager.OnAudioFocusChangeListener {
+                                override fun onAudioFocusChange(focusChange: Int) {}
+                            }.also { audioFocusListener = it }
+                        val r = am.requestAudioFocus(
+                            l,
+                            AudioManager.STREAM_MUSIC,
+                            AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+                        )
+                        result.success(r == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+                    }
+                    "abandon" -> {
+                        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                        audioFocusListener?.let { am.abandonAudioFocus(it) }
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "navbridge/routing")
             .setMethodCallHandler { call, result ->

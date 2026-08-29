@@ -74,6 +74,7 @@ jobs:
           GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
           TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
           WINDY_API_KEY=${{ secrets.WINDY_API_KEY }}
+          ACCUWEATHER_API_KEY=${{ secrets.ACCUWEATHER_API_KEY }}
           EOF
 
       # Optional real signing: decode the keystore secret + write key.properties.
