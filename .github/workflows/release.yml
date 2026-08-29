@@ -27,13 +27,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pin Java 17 (AGP/Gradle 9.1 need 17+) — the runner's default JDK is not
-      # guaranteed and the project's gradle.properties points to a MAC-ONLY
-      # JBR path, so we fix that below.
+      # Pin Java 21 — matches the local Android Studio JBR (21.0.10). The
+      # maplibre_gl plugin compiles with `--release 21`, so Java 17 in CI
+      # fails with "invalid source release: 21".
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - uses: subosito/flutter-action@v2
         with:
