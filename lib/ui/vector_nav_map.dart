@@ -28,9 +28,25 @@ import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/poi_search.dart';
 import 'package:navbridge/ui/sign_icons.dart';
 import 'package:navbridge/services/terrain.dart';
+import 'package:navbridge/services/vietmap_config.dart' show VietmapConfig;
 import 'package:navbridge/core/car_filter.dart';
 import 'package:navbridge/core/route_snap.dart';
 import 'package:navbridge/core/trip_plan.dart';
+
+/// Approx. bounds of the BUNDLED nav-map vector tiles (`saigon_z16.pmtiles`,
+/// HCMC metro). OUTSIDE this box there are no vector tiles, so the nav map
+/// falls back to an online raster basemap (the user's chosen [tileSource])
+/// instead of showing a blank gray map — e.g. driving QL1A out of HCMC.
+const double _navMinLat = 10.40, _navMaxLat = 11.20;
+const double _navMinLon = 106.30, _navMaxLon = 107.10;
+
+bool _insideNavCoverage(ll.LatLng? p) {
+  if (p == null) return true; // unknown position → assume inside (no swap)
+  return p.latitude >= _navMinLat &&
+      p.latitude <= _navMaxLat &&
+      p.longitude >= _navMinLon &&
+      p.longitude <= _navMaxLon;
+}
 
 /// Built-in car marker icons (see assets/offline_map/icons/).
 const List<String> kCarIcons = [
@@ -311,6 +327,11 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// were never bundled or the user hasn't downloaded them. Show a prompt to
   /// download instead of a blank/error map.
   bool _mapMissing = false;
+
+  /// True when the car is OUTSIDE the bundled HCMC vector-tile coverage — no
+  /// vector tiles exist there, so the map renders an online raster basemap
+  /// (the user's chosen tileSource) instead of a blank gray map.
+  bool _outsideCoverage = false;
 
   /// Last computed route bearing — reused (instead of the raw phone compass)
   /// when the route geometry is momentarily absent (e.g. during a re-route),
@@ -595,6 +616,13 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// [widget.terrain3D] and whether offline DEM data exists.
   String _buildStyleString() {
     if (_baseStyle == null) return '';
+    // OUTSIDE the bundled nav-tile coverage (e.g. QL1A) there are no vector
+    // tiles → render an online raster basemap instead of a blank gray map.
+    // Route line / car arrow / camera markers are drawn by the controller on
+    // top, so navigation still works everywhere.
+    if (_outsideCoverage) {
+      return _rasterFallbackStyle();
+    }
     final style = applyTerrainToStyle(
       _baseStyle!,
       _demSource,
@@ -649,6 +677,70 @@ class _VectorNavMapState extends State<VectorNavMap>
       return _darkStyle(style);
     }
     return jsonEncode(style);
+  }
+
+  /// Minimal raster-only MapLibre style for areas OUTSIDE the bundled vector
+  /// tiles: an opaque background + the user's chosen online basemap raster
+  /// (Carto voyager by default, dark in night mode; Vietmap when the Vietmap
+  /// data source is active online). Keeps the same look as the browse map.
+  String _rasterFallbackStyle() {
+    final dark = widget.nightMode;
+    final tiles = _fallbackTiles();
+    final style = <String, dynamic>{
+      'version': 8,
+      'sources': <String, dynamic>{
+        'basemap': <String, dynamic>{
+          'type': 'raster',
+          'tiles': tiles,
+          'tileSize': 256,
+          'attribution': '© OpenStreetMap contributors © CARTO',
+        },
+      },
+      'layers': <dynamic>[
+        <String, dynamic>{
+          'id': 'bg',
+          'type': 'background',
+          'paint': <String, dynamic>{
+            'background-color': dark ? '#16181d' : '#f2efe9',
+          },
+        },
+        <String, dynamic>{
+          'id': 'basemap',
+          'type': 'raster',
+          'source': 'basemap',
+          'paint': <String, dynamic>{'raster-opacity': 1.0},
+        },
+      ],
+    };
+    return jsonEncode(style);
+  }
+
+  /// Tile URL templates for the online raster fallback basemap — mirrors the
+  /// browse-map layer list so an OSM/CARTO user gets the same style, never a
+  /// surprise switch.
+  List<String> _fallbackTiles() {
+    if (widget.vietmapBase && VietmapConfig.hasKeys) {
+      return [VietmapConfig.mapTiles];
+    }
+    switch (widget.tileSource) {
+      case 'osm':
+        return ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
+      case 'topo':
+        return ['https://tile.opentopomap.org/{z}/{x}/{y}.png'];
+      case 'esri':
+        return [
+          'https://server.arcgisonline.com/ArcGIS/rest/services/'
+              'World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        ];
+      case 'carto':
+      default:
+        return widget.nightMode
+            ? ['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png']
+            : [
+                'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/'
+                    '{z}/{x}/{y}.png',
+              ];
+    }
   }
 
   /// Real dark-map theme for the vector style (used when [widget.nightMode]).
@@ -1637,6 +1729,21 @@ class _VectorNavMapState extends State<VectorNavMap>
   @override
   void didUpdateWidget(VectorNavMap old) {
     super.didUpdateWidget(old);
+    // Coverage-boundary crossing (bundled HCMC vector tiles vs. the rest of
+    // VN): swap to/from the online raster basemap when the car crosses it so
+    // the map never goes blank outside HCMC (e.g. QL1A).
+    final curPos = widget.current;
+    final outside = curPos != null && !_insideNavCoverage(curPos);
+    if (outside != _outsideCoverage) {
+      _outsideCoverage = outside;
+      _styleString = _buildStyleString();
+      final ctrl = _controller;
+      if (ctrl != null) {
+        unawaited(_reloadStyle(ctrl, _styleString!));
+      } else if (mounted) {
+        setState(() {});
+      }
+    }
     // Re-target the car-arrow rotation on every parent rebuild (GPS fix) so
     // the arrow glides instead of snapping between fixes.
     _setPuckTarget(_puckRotate());
