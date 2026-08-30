@@ -165,3 +165,11 @@ contributors, ODbL). Camera lists are derived from public provincial police
 data. Speed-limit and traffic-sign data are aggregated from online navigation
 sources. All data is provided **as-is for awareness only** — always obey
 posted speed limits and traffic law.
+
+## License
+
+MIT © 2026 DangLamTung — see [LICENSE](LICENSE).
+
+Bundled datasets remain subject to their own upstream licenses (OSM ODbL,
+Waze, and the provincial police "phạt nguội" sources) — the MIT license
+covers the code in this repository, not the third-party data.

@@ -1,6 +1,7 @@
 name: navbridge
 description: "BLE portable turn-by-turn navigation that mirrors directions to an external e-ink monitor."
 publish_to: 'none'
+# MIT licensed — see LICENSE.
 # Build 2002: the phone already carries an install with versionCode 2001
 # (from an earlier sideload), so the code must stay above it or Android
 # rejects the install as a downgrade.
