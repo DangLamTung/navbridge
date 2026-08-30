@@ -131,6 +131,7 @@ class VectorNavMap extends StatefulWidget {
     this.cameras = const [],
     this.satellite = false,
     this.vietmapBase = false,
+    this.offline = false,
     this.tileSource = 'osm',
     this.showRadar = false,
     this.radarUrl,
@@ -254,6 +255,12 @@ class VectorNavMap extends StatefulWidget {
   /// tiles) so the nav map keeps the SAME look the user picked while
   /// browsing — an OSM user gets OSM fallback tiles, not a surprise CARTO.
   final String tileSource;
+
+  /// True when the device has no network. When offline the nav map MUST stay
+  /// on the bundled vector style (opaque background, never blank) instead of
+  /// the online raster basemap — the raster has no tiles offline, which is
+  /// what used to leave a blank gray map outside the vector coverage.
+  final bool offline;
 
   /// Google-style smooth map movement: a ticker eases the camera toward the
   /// live (dead-reckoned) car position every frame instead of one ~500 ms
@@ -412,6 +419,11 @@ class _VectorNavMapState extends State<VectorNavMap>
     _camTicker = createTicker(_onCamTick);
     widget.controller?.attachRecenter(_recenter);
     widget.controller?.setFollowing(true);
+    final cur = widget.current;
+    if (cur != null) {
+      _outsideCoverage = !_insideNavCoverage(cur);
+    }
+    _styleString = _rasterFallbackStyle();
     _prepare();
   }
 
@@ -478,11 +490,18 @@ class _VectorNavMapState extends State<VectorNavMap>
           } catch (_) {}
         }
       }
-      // If after all that there is still no tile source, tell the user to
-      // download the nav map (no blank/error map).
+      // If after all that there is still no tile source, fall back to the
+      // online/cached raster basemap so the navigation map is always visible.
       if (!pmtilesFile.existsSync()) {
-        debugPrint('VECTORMAP: nav-map tiles not present — download needed');
-        if (mounted) setState(() => _mapMissing = true);
+        debugPrint(
+          'VECTORMAP: nav-map tiles not present — fallback to raster basemap',
+        );
+        if (mounted) {
+          setState(() {
+            _mapMissing = true;
+            _styleString = _rasterFallbackStyle();
+          });
+        }
         return;
       }
 
@@ -576,7 +595,12 @@ class _VectorNavMapState extends State<VectorNavMap>
       if (mounted) setState(() => _styleString = _buildStyleString());
     } catch (e) {
       debugPrint('VECTORMAP: prepare failed: $e');
-      if (mounted) setState(() => _styleError = '$e');
+      if (mounted) {
+        setState(() {
+          _styleError = '$e';
+          _styleString = _rasterFallbackStyle();
+        });
+      }
     }
   }
 
@@ -615,12 +639,15 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// The style JSON string with (or without) 3D terrain, depending on
   /// [widget.terrain3D] and whether offline DEM data exists.
   String _buildStyleString() {
-    if (_baseStyle == null) return '';
-    // OUTSIDE the bundled nav-tile coverage (e.g. QL1A) there are no vector
-    // tiles → render an online raster basemap instead of a blank gray map.
-    // Route line / car arrow / camera markers are drawn by the controller on
-    // top, so navigation still works everywhere.
-    if (_outsideCoverage) {
+    // The nav map must NEVER go blank. Use the consistent vector style when
+    // a vector style exists AND we are inside the bundled vector coverage OR
+    // offline (the online raster has no tiles offline, which is what used to
+    // leave a blank gray map outside coverage). Online + outside coverage →
+    // the user's chosen online raster basemap (nice map outside HCMC).
+    final curPos = widget.current;
+    final outside = curPos != null && !_insideNavCoverage(curPos);
+    if (_baseStyle == null ||
+        (!widget.offline && (outside || curPos == null))) {
       return _rasterFallbackStyle();
     }
     final style = applyTerrainToStyle(
@@ -732,6 +759,15 @@ class _VectorNavMapState extends State<VectorNavMap>
           'https://server.arcgisonline.com/ArcGIS/rest/services/'
               'World_Imagery/MapServer/tile/{z}/{y}/{x}',
         ];
+      case 'esri-street':
+        return [
+          'https://server.arcgisonline.com/ArcGIS/rest/services/'
+              'World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+        ];
+      case 'carto-light':
+        return ['https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png'];
+      case 'carto-dark':
+        return ['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'];
       case 'carto':
       default:
         return widget.nightMode
@@ -1170,9 +1206,25 @@ class _VectorNavMapState extends State<VectorNavMap>
     final ctrl = _controller;
     if (ctrl == null) return;
     // Perf: 4 native circles per camera — cap to the ~60 nearest to the car
-    // (HCMC has ~700; far ones aren't useful while driving).
+    // (HCMC has ~700; far ones aren't useful while driving). Traffic signs
+    // (focus 'sign') are EXEMPT from the cap: show ALL within 300 m.
     final cur = widget.current;
-    final cams = _nearestCameras(widget.cameras, 60, cur);
+    final all = widget.cameras;
+    final nearSigns = <OfflineCamera>[];
+    final others = <OfflineCamera>[];
+    for (final c in all) {
+      if (c.focus == 'sign' &&
+          cur != null &&
+          _distMeters(cur, ll.LatLng(c.lat, c.lng)) <= 300) {
+        nearSigns.add(c);
+      } else {
+        others.add(c);
+      }
+    }
+    final cams = <OfflineCamera>[
+      ...nearSigns,
+      ..._nearestCameras(others, 60, cur),
+    ];
     final sig = _cameraSignature(cams, cur);
     if (sig == _lastCameraSig) return;
     _lastCameraSig = sig;
@@ -1187,6 +1239,7 @@ class _VectorNavMapState extends State<VectorNavMap>
       final col = switch (c.focus) {
         'speed' => '#D93025', // red — speed camera
         'red_light' => '#F9AB00', // amber — red-light camera
+        'sign' => '#0F9D58', // green — traffic sign
         _ => '#4285F4', // blue — general enforcement
       };
       // Camera source shown as a thin ring around the body so the driver can
@@ -1760,6 +1813,7 @@ class _VectorNavMapState extends State<VectorNavMap>
         old.nightMode != widget.nightMode ||
         old.satellite != widget.satellite ||
         old.vietmapBase != widget.vietmapBase ||
+        old.offline != widget.offline ||
         old.tileSource != widget.tileSource ||
         old.showRadar != widget.showRadar ||
         old.radarUrl != widget.radarUrl ||
@@ -1902,43 +1956,9 @@ class _VectorNavMapState extends State<VectorNavMap>
 
   @override
   Widget build(BuildContext context) {
-    if (_styleError != null) {
-      return const ColoredBox(color: Color(0xFFE8EAED));
-    }
-    if (_mapMissing) {
-      return ColoredBox(
-        color: const Color(0xFFE8EAED),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(28),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.map_outlined, size: 52, color: Colors.grey),
-                const SizedBox(height: 14),
-                const Text(
-                  'Bản đồ dẫn đường chưa được tải',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Vào ⚙ Cài đặt → Bản đồ ngoại tuyến → "Bản đồ dẫn đường"\n'
-                  'để tải bản đồ vector dùng khi chỉ đường.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 13, color: Colors.grey[700]),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-    final style = _styleString;
-    if (style == null) {
-      // Preparing the offline map.
-      return const ColoredBox(color: Color(0xFFE8EAED));
-    }
+    final style = (_styleString == null || _styleString!.isEmpty)
+        ? _rasterFallbackStyle()
+        : _styleString!;
     final c = widget.current;
     // No pointer wrapper around MapLibreMap — an ancestor Listener interferes
     // with the platform view's multitouch. Follow uses MapLibre's native

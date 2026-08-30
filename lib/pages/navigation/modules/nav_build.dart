@@ -55,6 +55,7 @@ extension _NavBuild on _NavigationPageState {
                         dataSource == 'vietmap' &&
                         !_offline &&
                         VietmapConfig.hasKeys,
+                    offline: _offline,
                     // Keep the user's chosen basemap (OSM/CARTO/topo/…) on the nav
                     // map's online fallback — never a surprise style switch.
                     tileSource: _tileSource,
@@ -169,6 +170,7 @@ extension _NavBuild on _NavigationPageState {
                       dataSource == 'vietmap' &&
                       !_offline &&
                       VietmapConfig.hasKeys,
+                  offline: _offline,
                   // Keep the user's chosen basemap (OSM/CARTO/topo/…) on the
                   // nav map's online fallback — never a surprise style switch.
                   tileSource: _tileSource,
@@ -463,6 +465,14 @@ extension _NavBuild on _NavigationPageState {
                                               ? kAppBlue
                                               : const Color(0xFF5F6368),
                                           onTap: _toggleNight,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        // Basemap layer cycle (online OSM /
+                                        // CARTO / topo / ESRI / Vietmap).
+                                        RoundActionButton(
+                                          icon: Icons.map_outlined,
+                                          color: const Color(0xFF1A73E8),
+                                          onTap: _cycleTileSource,
                                         ),
                                         const SizedBox(height: 8),
                                         RoundActionButton(

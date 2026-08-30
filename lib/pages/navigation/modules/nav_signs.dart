@@ -111,6 +111,22 @@ extension _NavSigns on _NavigationPageState {
         near
             ? 'Cấm rẽ trái và quay đầu sắp tới'
             : 'Cấm rẽ trái và quay đầu phía trước ${m.round()} mét',
+      RoadSignKind.slowDown =>
+        near
+            ? 'Giảm tốc độ sắp tới'
+            : 'Giảm tốc độ phía trước ${m.round()} mét',
+      RoadSignKind.tollBooth =>
+        near
+            ? 'Trạm thu phí sắp tới'
+            : 'Trạm thu phí phía trước ${m.round()} mét',
+      RoadSignKind.railwayCrossing =>
+        near
+            ? 'Đường ngang giao với đường sắt sắp tới'
+            : 'Đường ngang giao với đường sắt phía trước ${m.round()} mét',
+      RoadSignKind.tunnel =>
+        near
+            ? 'Hầm đường bộ sắp tới'
+            : 'Hầm đường bộ phía trước ${m.round()} mét',
       _ =>
         near
             ? 'Cấm rẽ phải và quay đầu sắp tới'

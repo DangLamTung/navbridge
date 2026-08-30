@@ -368,13 +368,26 @@ class _NavigationPageState extends State<NavigationPage>
     // cameras 5 km / 60 (nearest first) — plenty for the driver without the
     // old route-wide freeze.
     const Distance d = Distance();
-    var cams = await camerasNearPoint(pos, maxDistM: 5000);
-    cams.sort(
+    var allCams = await camerasNearPoint(pos, maxDistM: 5000);
+    // Traffic signs (focus 'sign'): keep ALL within 300 m — they're sparse and
+    // informative, so they must not be dropped by the camera cap. Other camera
+    // types (speed/violations/red-light): reduce to the ~60 nearest.
+    final nearSigns = <OfflineCamera>[];
+    var others = <OfflineCamera>[];
+    for (final c in allCams) {
+      if (c.focus == 'sign' && d.as(LengthUnit.Meter, pos, c.pos) <= 300) {
+        nearSigns.add(c);
+      } else {
+        others.add(c);
+      }
+    }
+    others.sort(
       (a, b) => d
           .as(LengthUnit.Meter, pos, a.pos)
           .compareTo(d.as(LengthUnit.Meter, pos, b.pos)),
     );
-    if (cams.length > 60) cams = cams.sublist(0, 60);
+    if (others.length > 60) others = others.sublist(0, 60);
+    final cams = [...nearSigns, ...others];
     final signs = await signsNearPoint(pos, maxDistM: 1500, max: 60);
     if (!mounted) return;
     setNavState(() {
@@ -469,16 +482,12 @@ class _NavigationPageState extends State<NavigationPage>
   TripLogger? _trip;
 
   // --- offline mode ---
-  // Browse basemap is LOCKED to ONE source so the map never swaps styles when
-  // zooming. _tileProvider.source MUST match _tileSource — the tile cache and
-  // downloaded regions are keyed by it.
-  final String _tileSource = 'carto';
-  final OfflineTileProvider _tileProvider = OfflineTileProvider(
-    // Keep in sync with [_tileSource] ('carto') — the tile cache and
-    // downloaded regions are keyed by this. (A field initializer can't
-    // reference _tileSource directly — the implicit_this lint forbids it.)
-    source: 'carto',
-  );
+  // Basemap layer is changeable via the layer button ([_cycleTileSource]). The
+  // tile cache + downloaded regions are keyed by the ACTIVE source; the
+  // provider is recreated per switch so each layer caches under its own folder
+  // and styles never mix.
+  String _tileSource = 'carto';
+  OfflineTileProvider _tileProvider = OfflineTileProvider(source: 'carto');
   bool _offline = false;
 
   /// Whether to show the transient "Đang ngoại tuyến" banner. Shown briefly
@@ -500,15 +509,46 @@ class _NavigationPageState extends State<NavigationPage>
     'osm': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     'carto':
         'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+    'carto-light':
+        'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+    'carto-dark': 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
     'topo': 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
     'esri':
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    'esri-street':
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
     // Vietmap layers need the tile key (--dart-define=VIETMAP_TILE_KEY).
     // Without it their URLs carry `?apikey=` and every tile 403s, so the
     // menu only lists them when real keys were compiled in (see below).
     'vietmap': VietmapConfig.mapTiles,
     'vietmapsat': VietmapConfig.satelliteTiles,
   };
+
+  /// Basemap order the layer button cycles through (online OSM / CARTO /
+  /// topo / ESRI; Vietmap layers only when real tile keys are compiled in).
+  List<String> get _layerOrder => [
+    'carto',
+    'carto-light',
+    'carto-dark',
+    'osm',
+    'topo',
+    'esri',
+    'esri-street',
+    if (VietmapConfig.hasKeys) ...['vietmap', 'vietmapsat'],
+  ];
+
+  /// Cycle the online basemap layer. Recreates the tile provider so each
+  /// layer caches under its own folder (styles never mix). The nav map's
+  /// raster fallback follows via `tileSource`.
+  void _cycleTileSource() {
+    final order = _layerOrder;
+    final i = order.indexOf(_tileSource);
+    final next = order[(i < 0 ? 0 : i + 1) % order.length];
+    setNavState(() {
+      _tileSource = next;
+      _tileProvider = OfflineTileProvider(source: next);
+    });
+  }
 
   // --- multi-stop plan ---
   final List<TripStop> _stops = [];
@@ -834,8 +874,7 @@ class _NavigationPageState extends State<NavigationPage>
         'SETTINGS: cameraAlerts=$cameraAlerts radar=$radarOn '
         '(persisted=$s.cameraAlerts) bleAuto=$bleAutoConnect',
       );
-      setState(() => _offline = _offline || forceOffline);
-      _flashOfflineBanner();
+      setState(() => _offline = forceOffline ? true : _offline);
       // If Bluetooth auto-connect is enabled, start the auto-connect hunt.
       if (bleAutoConnect) {
         _autoConnect.rearm();

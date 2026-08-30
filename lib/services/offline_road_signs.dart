@@ -38,7 +38,11 @@ enum RoadSignKind {
   onlyStraight('only_straight', 'R.411 Hướng phải đi thẳng'),
   onlyLeft('only_left', 'R.412a Hướng phải rẽ trái'),
   onlyRight('only_right', 'R.412 Hướng phải rẽ phải'),
-  endProhibitions('end_prohibitions', 'P.133 Hết mọi lệnh cấm');
+  endProhibitions('end_prohibitions', 'P.133 Hết mọi lệnh cấm'),
+  slowDown('slow_down', 'Giảm tốc độ'),
+  tollBooth('toll_booth', 'Trạm thu phí'),
+  railwayCrossing('railway_crossing', 'Đường ngang giao với đường sắt'),
+  tunnel('tunnel', 'Hầm đường bộ');
 
   const RoadSignKind(this.key, this.label);
 
@@ -65,6 +69,10 @@ enum RoadSignKind {
     'only_left' => onlyLeft,
     'only_right' => onlyRight,
     'end_prohibitions' => endProhibitions,
+    'slow_down' => slowDown,
+    'toll_booth' => tollBooth,
+    'railway_crossing' => railwayCrossing,
+    'tunnel' => tunnel,
     _ => signal,
   };
 }

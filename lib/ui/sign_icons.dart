@@ -97,6 +97,16 @@ class SignIcon extends StatelessWidget {
         RoadSignKind.endProhibitions => const CustomPaint(
           painter: _EndProhibitionsPainter(),
         ),
+        RoadSignKind.slowDown => const CustomPaint(
+          painter: _InfoPainter('SLOW'),
+        ),
+        RoadSignKind.tollBooth => const CustomPaint(
+          painter: _InfoPainter('THU PHÍ'),
+        ),
+        RoadSignKind.railwayCrossing => const CustomPaint(
+          painter: _RailwayPainter(),
+        ),
+        RoadSignKind.tunnel => const CustomPaint(painter: _InfoPainter('HẦM')),
       },
     );
   }
@@ -123,6 +133,85 @@ void _drawText(
     textDirection: TextDirection.ltr,
   )..layout();
   tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+}
+
+/// Generic informational sign — a blue rounded square with a short label
+/// (toll booth, tunnel, slow-down warnings …). Keeps offline rendering simple.
+class _InfoPainter extends CustomPainter {
+  const _InfoPainter(this.label);
+  final String label;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(
+        size.width * 0.04,
+        size.height * 0.04,
+        size.width * 0.92,
+        size.height * 0.92,
+      ),
+      Radius.circular(size.width * 0.15),
+    );
+    canvas.drawRRect(rrect, Paint()..color = const Color(0xFF1A5FB4));
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = size.width * 0.06
+        ..color = Colors.white,
+    );
+    _drawText(
+      canvas,
+      label,
+      Offset(size.width / 2, size.height / 2),
+      size.height * 0.30,
+      color: Colors.white,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _InfoPainter old) => old.label != label;
+}
+
+/// Đường ngang giao với đường sắt — a white X (crossing) on a red triangle.
+class _RailwayPainter extends CustomPainter {
+  const _RailwayPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width, h = size.height;
+    final p = Path()
+      ..moveTo(w * 0.02, h * 0.02)
+      ..lineTo(w * 0.98, h * 0.02)
+      ..lineTo(w * 0.5, h * 0.98)
+      ..close();
+    canvas.drawPath(p, Paint()..color = _signRed);
+    canvas.drawPath(
+      p,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.07
+        ..strokeJoin = StrokeJoin.round
+        ..color = Colors.white,
+    );
+    final paint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = w * 0.09
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(
+      Offset(w * 0.30, h * 0.30),
+      Offset(w * 0.70, h * 0.70),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(w * 0.70, h * 0.30),
+      Offset(w * 0.30, h * 0.70),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _RailwayPainter old) => false;
 }
 
 /// Biển 122 "STOP" — red octagon with a white border and white text.
