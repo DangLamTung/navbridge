@@ -88,49 +88,53 @@ extension _NavSigns on _NavigationPageState {
     if (_signDedupe.seen(sig)) return;
     final phrase = switch (next.kind) {
       RoadSignKind.stop =>
-        near ? 'Biển STOP sắp tới' : 'Biển STOP phía trước ${m.round()} mét',
+        near
+            ? 'Biển STOP sắp tới'
+            : 'Biển STOP phía trước ${formatDistanceSpoken(m)}',
       RoadSignKind.giveWay =>
         near
             ? 'Biển nhường đường sắp tới'
-            : 'Biển nhường đường phía trước ${m.round()} mét',
+            : 'Biển nhường đường phía trước ${formatDistanceSpoken(m)}',
       RoadSignKind.noPassing =>
-        near ? 'Cấm vượt sắp tới' : 'Cấm vượt phía trước ${m.round()} mét',
+        near
+            ? 'Cấm vượt sắp tới'
+            : 'Cấm vượt phía trước ${formatDistanceSpoken(m)}',
       RoadSignKind.noLeftTurn =>
         near
             ? 'Cấm rẽ trái sắp tới'
-            : 'Cấm rẽ trái phía trước ${m.round()} mét',
+            : 'Cấm rẽ trái phía trước ${formatDistanceSpoken(m)}',
       RoadSignKind.noRightTurn =>
         near
             ? 'Cấm rẽ phải sắp tới'
-            : 'Cấm rẽ phải phía trước ${m.round()} mét',
+            : 'Cấm rẽ phải phía trước ${formatDistanceSpoken(m)}',
       RoadSignKind.noUTurn =>
         near
             ? 'Cấm quay đầu sắp tới'
-            : 'Cấm quay đầu phía trước ${m.round()} mét',
+            : 'Cấm quay đầu phía trước ${formatDistanceSpoken(m)}',
       RoadSignKind.noLeftUTurn =>
         near
             ? 'Cấm rẽ trái và quay đầu sắp tới'
-            : 'Cấm rẽ trái và quay đầu phía trước ${m.round()} mét',
+            : 'Cấm rẽ trái và quay đầu phía trước ${formatDistanceSpoken(m)}',
       RoadSignKind.slowDown =>
         near
             ? 'Giảm tốc độ sắp tới'
-            : 'Giảm tốc độ phía trước ${m.round()} mét',
+            : 'Giảm tốc độ phía trước ${formatDistanceSpoken(m)}',
       RoadSignKind.tollBooth =>
         near
             ? 'Trạm thu phí sắp tới'
-            : 'Trạm thu phí phía trước ${m.round()} mét',
+            : 'Trạm thu phí phía trước ${formatDistanceSpoken(m)}',
       RoadSignKind.railwayCrossing =>
         near
             ? 'Đường ngang giao với đường sắt sắp tới'
-            : 'Đường ngang giao với đường sắt phía trước ${m.round()} mét',
+            : 'Đường ngang giao với đường sắt phía trước ${formatDistanceSpoken(m)}',
       RoadSignKind.tunnel =>
         near
             ? 'Hầm đường bộ sắp tới'
-            : 'Hầm đường bộ phía trước ${m.round()} mét',
+            : 'Hầm đường bộ phía trước ${formatDistanceSpoken(m)}',
       _ =>
         near
             ? 'Cấm rẽ phải và quay đầu sắp tới'
-            : 'Cấm rẽ phải và quay đầu phía trước ${m.round()} mét',
+            : 'Cấm rẽ phải và quay đầu phía trước ${formatDistanceSpoken(m)}',
     };
     _voice.speak(phrase);
     if (mounted) setNavState(() {});

@@ -724,7 +724,11 @@ extension _NavSearch on _NavigationPageState {
       _selectedRoute = 0;
       _planPoints = points;
       _routeBearing = 0;
-      _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
+      _engine = TurnByTurnEngine(
+        route,
+        stopNames: _engineStopNames(route),
+        maxSpeedMps: _routeProfile.legalMaxMps,
+      );
       _destination = _stops.last.pos;
       _navigating = false;
       _progress = null;
@@ -754,7 +758,11 @@ extension _NavSearch on _NavigationPageState {
       _selectedRoute = i;
       _route = route;
       _routeBearing = 0;
-      _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
+      _engine = TurnByTurnEngine(
+        route,
+        stopNames: _engineStopNames(route),
+        maxSpeedMps: _routeProfile.legalMaxMps,
+      );
     });
     unawaited(_loadElevation(route));
     if (_planPoints.length >= 2) {

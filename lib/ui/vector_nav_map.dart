@@ -293,7 +293,6 @@ class _VectorNavMapState extends State<VectorNavMap>
     with WidgetsBindingObserver, TickerProviderStateMixin {
   MapLibreMapController? _controller;
   String? _styleString;
-  String? _styleError;
 
   /// Parsed nav style with file:// paths resolved — terrain is injected on
   /// top of this per [_buildStyleString].
@@ -329,11 +328,6 @@ class _VectorNavMapState extends State<VectorNavMap>
   // map at the zoom the user chose instead of snapping back.
   late double _zoom = widget.defaultZoom;
   String? _lastRouteSig;
-
-  /// True when the nav-map tiles (PMTiles) are not on disk yet — either they
-  /// were never bundled or the user hasn't downloaded them. Show a prompt to
-  /// download instead of a blank/error map.
-  bool _mapMissing = false;
 
   /// True when the car is OUTSIDE the bundled HCMC vector-tile coverage — no
   /// vector tiles exist there, so the map renders an online raster basemap
@@ -498,7 +492,6 @@ class _VectorNavMapState extends State<VectorNavMap>
         );
         if (mounted) {
           setState(() {
-            _mapMissing = true;
             _styleString = _rasterFallbackStyle();
           });
         }
@@ -597,7 +590,6 @@ class _VectorNavMapState extends State<VectorNavMap>
       debugPrint('VECTORMAP: prepare failed: $e');
       if (mounted) {
         setState(() {
-          _styleError = '$e';
           _styleString = _rasterFallbackStyle();
         });
       }
@@ -745,13 +737,19 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// Tile URL templates for the online raster fallback basemap — mirrors the
   /// browse-map layer list so an OSM/CARTO user gets the same style, never a
   /// surprise switch.
+  ///
+  /// IMPORTANT: this style is handed to **MapLibre**, which only expands the
+  /// `{a}`-`{d}` subdomain placeholders — it does NOT understand the `{s}`
+  /// shorthand that flutter_map/Leaflet uses. A raw `{s}` template resolves to
+  /// a literal `{s}.basemaps.cartocdn.com` host and every tile fails DNS,
+  /// leaving a blank map. So CARTO subdomains are expanded to all four hosts.
   List<String> _fallbackTiles() {
     if (widget.vietmapBase && VietmapConfig.hasKeys) {
       return [VietmapConfig.mapTiles];
     }
     switch (widget.tileSource) {
       case 'osm':
-        return ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
+        return _osm();
       case 'topo':
         return ['https://tile.opentopomap.org/{z}/{x}/{y}.png'];
       case 'esri':
@@ -765,19 +763,32 @@ class _VectorNavMapState extends State<VectorNavMap>
               'World_Street_Map/MapServer/tile/{z}/{y}/{x}',
         ];
       case 'carto-light':
-        return ['https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png'];
+        return _carto('light_all');
       case 'carto-dark':
-        return ['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'];
+        return _carto('dark_all');
       case 'carto':
       default:
         return widget.nightMode
-            ? ['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png']
-            : [
-                'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/'
-                    '{z}/{x}/{y}.png',
-              ];
+            ? _carto('dark_all')
+            : _carto('rastertiles/voyager');
     }
   }
+
+  /// OSM tile servers — same as the browse-map layer, expanded to the three
+  /// standard subdomains (MapLibre understands `a`/`b`/`c` hosts fine).
+  List<String> _osm() => [
+    'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  ];
+
+  /// All four CARTO subdomains, with `{s}` expanded to real hosts for MapLibre.
+  List<String> _carto(String style) => [
+    'https://a.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+    'https://b.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+    'https://c.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+    'https://d.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+  ];
 
   /// Real dark-map theme for the vector style (used when [widget.nightMode]).
   /// Every paint color is remapped to a dark version of the same hue — light

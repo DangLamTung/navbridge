@@ -16,9 +16,9 @@ class VoiceGuide {
   bool _ready = false;
   bool get ready => _ready;
 
-  /// Native channel that asks Android to DUCK (lower) media volume during an
-  /// announcement so the navigation voice isn't drowned out by YouTube /
-  /// Spotify. See MainActivity.kt (navbridge/audio).
+  /// Native channel that asks Android to PAUSE media during an announcement so
+  /// the navigation voice isn't drowned out by YouTube / Spotify. See
+  /// MainActivity.kt (navbridge/audio).
   static const MethodChannel _audioChannel = MethodChannel('navbridge/audio');
 
   /// Apply the persisted guidance volume (0..1). Called at init and before
@@ -46,8 +46,8 @@ class VoiceGuide {
         await _tts.setSharedInstance(true);
       } catch (_) {}
       try {
-        // When an utterance finishes, release the ducked media focus so
-        // YouTube / radio volume returns to normal.
+        // When an utterance finishes, release the paused media focus so
+        // YouTube / radio resumes where it left off.
         _tts.setCompletionHandler(_releaseMediaFocus);
       } catch (_) {}
       debugPrint('VOICE: TTS ready (vi-VN, navigation audio)');
@@ -61,7 +61,7 @@ class VoiceGuide {
     try {
       await _tts.stop();
       await _applyVolume();
-      await _duckMedia();
+      await _pauseMedia();
       await _tts.speak(text);
       debugPrint('VOICE: speak "$text"');
     } catch (e) {
@@ -78,24 +78,24 @@ class VoiceGuide {
     try {
       await _tts.setQueueMode(1); // 1 = add to queue, don't interrupt
       await _applyVolume();
-      await _duckMedia();
+      await _pauseMedia();
       await _tts.speak(text);
     } catch (e) {
       debugPrint('VOICE: speakQueued failed: $e');
     }
   }
 
-  /// Ask Android to DUCK (lower) media volume for the announcement.
-  Future<void> _duckMedia() async {
+  /// Ask Android to PAUSE media for the announcement.
+  Future<void> _pauseMedia() async {
     try {
-      await _audioChannel.invokeMethod('duck');
+      await _audioChannel.invokeMethod('pause');
     } catch (_) {}
   }
 
-  /// Release the ducked media focus after the utterance finishes.
+  /// Release the paused media focus after the utterance finishes.
   Future<void> _releaseMediaFocus() async {
     try {
-      await _audioChannel.invokeMethod('abandon');
+      await _audioChannel.invokeMethod('resume');
     } catch (_) {}
   }
 

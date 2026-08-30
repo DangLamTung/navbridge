@@ -210,16 +210,19 @@ extension _NavWeather on _NavigationPageState {
           'speed' =>
             near
                 ? 'Camera tốc độ ngay phía trước'
-                : 'Camera tốc độ phía trước $m mét',
+                : 'Camera tốc độ phía trước ${formatDistanceSpoken(next.routeMeters)}',
           'red_light' =>
             near
                 ? 'Camera đèn đỏ ngay phía trước'
-                : 'Camera đèn đỏ phía trước $m mét',
+                : 'Camera đèn đỏ phía trước ${formatDistanceSpoken(next.routeMeters)}',
           'violations' =>
             near
                 ? 'Khu vực giám sát ngay phía trước'
-                : 'Khu vực giám sát phía trước $m mét',
-          _ => near ? 'Camera ngay phía trước' : 'Camera phía trước $m mét',
+                : 'Khu vực giám sát phía trước ${formatDistanceSpoken(next.routeMeters)}',
+          _ =>
+            near
+                ? 'Camera ngay phía trước'
+                : 'Camera phía trước ${formatDistanceSpoken(next.routeMeters)}',
         };
         _voice.speak(phrase);
         unawaited(NavForegroundService.instance.notifyCamera(next.camera, m));

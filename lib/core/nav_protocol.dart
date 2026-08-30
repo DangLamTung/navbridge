@@ -114,6 +114,16 @@ String formatDistance(num meters) {
   return '${meters.round()} m';
 }
 
+/// Spoken Vietnamese distance — "450 mét" / "1,2 km" — so TTS says a natural
+/// unit: meters under 1 km, kilometres above (the UI card already uses
+/// [formatDistance], the voice now matches it).
+String formatDistanceSpoken(num meters) {
+  if (meters >= 1000) {
+    return '${(meters / 1000).toStringAsFixed(1).replaceAll('.', ',')} km';
+  }
+  return '${meters.round()} mét';
+}
+
 /// Vietnamese guidance verb for a clock icon code ("rẽ trái", "đi thẳng", …).
 /// Shared by the spoken announcements and the on-screen Vietmap-style banner.
 String maneuverVerb(int code) => switch (code) {

@@ -185,6 +185,25 @@ void main() {
       expect(fast.etaFactor, lessThan(0.9));
     });
 
+    test('adaptive ETA caps assumed pace at the vehicle legal max', () {
+      // _straightRoute: 1110 m / 80 s → ~13.9 m/s (~50 km/h) profile speed.
+      OsrmRoute route() => _straightRoute();
+
+      // Motorbike legal max = 80 km/h ≈ 22.2 m/s. Driver bursts at 33 m/s
+      // (~119 km/h, above the law) for many fixes: the EMA would suggest
+      // factor = 13.9/33 ≈ 0.42 → an absurdly early ETA. The cap must clamp
+      // the assumed pace to 22.2 → factor ≈ 13.9/22.2 ≈ 0.63, never below.
+      final bike = TurnByTurnEngine(route(), maxSpeedMps: 80 / 3.6);
+      for (var i = 0; i < 30; i++) {
+        bike.update(route().geometry.first, speedMps: 33.0);
+      }
+      bike.update(bike.positionAtDistance(400), speedMps: 33.0);
+      // Capped factor (≈0.63) is HIGHER than the uncapped one (≈0.42) —
+      // i.e. the ETA is less optimistic than the raw-speed math would be.
+      expect(bike.etaFactor, greaterThan(0.58));
+      expect(bike.etaFactor, lessThan(0.70));
+    });
+
     test('nextMeter is the distance to the second maneuver', () {
       final base = _straightRoute(); // depart leg 1110 → arrive
       // Insert a turn at ~500 m so there are two maneuvers ahead.

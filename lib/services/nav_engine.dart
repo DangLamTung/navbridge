@@ -108,9 +108,17 @@ class TurnByTurnEngine {
   /// 0.5–3.0). 1.0 = not yet engaged (still the pure profile ETA).
   double get etaFactor => _etaFactor;
 
-  TurnByTurnEngine(this.route, {List<String>? stopNames})
-    : stopNames = stopNames ?? const [],
-      _stopCum = List.of(route.stopCumulative) {
+  /// Legal maximum cruise speed (m/s) for this vehicle — the ETA's assumed
+  /// pace is CAPPED here (Vietnamese road law), so a short 100 km/h burst can
+  /// never make the arrival time unrealistically optimistic.
+  final double maxSpeedMps;
+
+  TurnByTurnEngine(
+    this.route, {
+    List<String>? stopNames,
+    this.maxSpeedMps = 33.3, // ~120 km/h (car) — overridden by the caller
+  }) : stopNames = stopNames ?? const [],
+       _stopCum = List.of(route.stopCumulative) {
     // Fast approximate metres per segment — this loop runs the WHOLE route
     // synchronously on the main thread right after routing; haversine over
     // tens of thousands of vertices is what froze long-distance routes.
@@ -384,6 +392,10 @@ class TurnByTurnEngine {
     // assumes a static profile speed, so once we have a few moving fixes we
     // scale the remaining time by profileSpeed / actualSpeed (clamped) —
     // slower driving (traffic/wind) lengthens it, a fast pace shortens it.
+    // The speed is CAPPED at the vehicle's legal max ([maxSpeedMps]) so a
+    // short 100 km/h burst on an 80 km/h road can never halve the ETA (the
+    // driver will be back at legal pace shortly); the factor floor is 0.6
+    // (was 0.5) so the ETA can't claim more than ~1.6× the legal pace.
     final remainBase =
         (route.duration * ((route.distance - cum) / route.distance));
     if (speedMps > 1.0) {
@@ -398,7 +410,10 @@ class TurnByTurnEngine {
         : 0.0;
     _etaFactor = 1.0;
     if (_etaMovingFixes >= 8 && _etaEmaMps > 1.5 && profileMps > 0) {
-      final factor = (profileMps / _etaEmaMps).clamp(0.5, 3.0);
+      // Cap the EMA at the vehicle's legal max before comparing to the
+      // profile pace, so a burst can't push the factor below the law.
+      final legalCapped = math.min(_etaEmaMps, maxSpeedMps);
+      final factor = (profileMps / legalCapped).clamp(0.6, 3.0);
       _etaFactor = factor;
       remainSec = (remainBase * factor).round();
     }

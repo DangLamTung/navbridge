@@ -95,6 +95,20 @@ void main() {
     });
   });
 
+  group('formatDistanceSpoken', () {
+    test('says mét under 1 km', () {
+      expect(formatDistanceSpoken(450), '450 mét');
+      expect(formatDistanceSpoken(999), '999 mét');
+      expect(formatDistanceSpoken(0), '0 mét');
+    });
+
+    test('says km from 1 km up', () {
+      expect(formatDistanceSpoken(1000), '1,0 km');
+      expect(formatDistanceSpoken(1200), '1,2 km');
+      expect(formatDistanceSpoken(12345), '12,3 km');
+    });
+  });
+
   group('maneuverVerb', () {
     test('Vietnamese verbs for spoken guidance', () {
       expect(maneuverVerb(iconTurnLeft), 'rẽ trái');

@@ -107,11 +107,11 @@ extension _NavVoice on _NavigationPageState {
       nextManeuver: nav == null
           ? null
           : '${nav.text.isEmpty ? 'lượt tiếp' : nav.text} '
-                'còn ${nav.meter} m',
+                'còn ${formatDistanceSpoken(nav.meter)}',
       cameraAhead: cam == null
           ? null
           : 'Camera ${cam.camera.name} phía trước '
-                '${cam.routeMeters.round()} m',
+                '${formatDistanceSpoken(cam.routeMeters)}',
       weather: _weatherText(w),
       radar: _rainPredictionText(w),
       tripNotes: _stops.isEmpty
@@ -251,7 +251,8 @@ extension _NavVoice on _NavigationPageState {
     if (now) {
       return '$verb$into$nextNext.$limitTxt';
     }
-    return 'Đi$onRoad, sau $m mét, $verb$into$nextNext.$limitTxt';
+    return 'Đi$onRoad, sau ${formatDistanceSpoken(m)}, '
+        '$verb$into$nextNext.$limitTxt';
   }
 
   /// Warn by voice when the driver EXCEEDS the road's speed limit. Announces

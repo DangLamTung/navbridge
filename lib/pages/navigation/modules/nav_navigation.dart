@@ -139,6 +139,7 @@ extension _NavNavigation on _NavigationPageState {
         _engine = TurnByTurnEngine(
           bridged,
           stopNames: _engineStopNames(bridged),
+          maxSpeedMps: _routeProfile.legalMaxMps,
         );
       });
       // Snap straight into the new route (updates distance, icon, clock,
@@ -595,6 +596,7 @@ extension _NavNavigation on _NavigationPageState {
       final engine = TurnByTurnEngine(
         bridged,
         stopNames: _engineStopNames(bridged),
+        maxSpeedMps: _routeProfile.legalMaxMps,
       );
       setNavState(() {
         _route = bridged;

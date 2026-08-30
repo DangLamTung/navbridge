@@ -649,7 +649,11 @@ extension _NavPoi on _NavigationPageState {
         _destination = newStops.last.pos;
         _route = route;
         _routeBearing = 0;
-        _engine = TurnByTurnEngine(route, stopNames: _engineStopNames(route));
+        _engine = TurnByTurnEngine(
+          route,
+          stopNames: _engineStopNames(route),
+          maxSpeedMps: _routeProfile.legalMaxMps,
+        );
         _alternativeRoutes = routes.length > 1 ? routes : [];
         _selectedRoute = 0;
         _planPoints = points;

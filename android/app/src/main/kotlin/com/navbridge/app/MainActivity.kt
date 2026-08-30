@@ -27,7 +27,7 @@ class MainActivity : FlutterActivity() {
     /// window re-shapes even while it's open. Defaults to the larger 3:4.
     private var pipAspect: String = "34"
 
-    /// Reused audio-focus listener so we can duck media (YouTube/radio) and
+    /// Reused audio-focus listener so we can pause media (YouTube/radio) and
     /// later abandon the focus (see "navbridge/audio" channel below).
     private var audioFocusListener: AudioManager.OnAudioFocusChangeListener? = null
 
@@ -60,13 +60,16 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        // Duck media (YouTube / Spotify / radio) during a voice announcement so
+        // Pause media (YouTube / Spotify / radio) during a voice announcement so
         // the navigation voice isn't drowned out. Requested before each
         // utterance; abandoned when the utterance finishes (voice_guide.dart).
+        // Uses AUDIOFOCUS_GAIN_TRANSIENT (NOT ..._MAY_DUCK): most media apps
+        // respond to transient focus by PAUSING playback, which is what the
+        // user asked for over simply lowering the volume.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "navbridge/audio")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "duck" -> {
+                    "pause" -> {
                         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                         val l = audioFocusListener
                             ?: object : AudioManager.OnAudioFocusChangeListener {
@@ -75,11 +78,11 @@ class MainActivity : FlutterActivity() {
                         val r = am.requestAudioFocus(
                             l,
                             AudioManager.STREAM_MUSIC,
-                            AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+                            AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
                         )
                         result.success(r == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
                     }
-                    "abandon" -> {
+                    "resume" -> {
                         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                         audioFocusListener?.let { am.abandonAudioFocus(it) }
                         result.success(null)
