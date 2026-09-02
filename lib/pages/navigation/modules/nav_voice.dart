@@ -588,7 +588,14 @@ extension _NavVoice on _NavigationPageState {
         _voiceText = '';
       });
     });
-    await _commands.listen(_onVoiceResult, onPartial: _onVoicePartial);
+    // Hard cap on a single tap-to-talk window (~10 s): long enough for a
+    // full command, short enough to never leave the mic "hanging" if the
+    // driver stops talking and the recognizer doesn't finalize on its own.
+    await _commands.listen(
+      _onVoiceResult,
+      onPartial: _onVoicePartial,
+      budget: const Duration(seconds: 10),
+    );
     // Window closed with no result → free the mic and tell the driver.
     if (!mounted) return;
     if (_listening) {
