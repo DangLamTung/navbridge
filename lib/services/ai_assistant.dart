@@ -24,6 +24,20 @@ import 'package:navbridge/services/vietmap_api.dart';
 import 'package:navbridge/services/vietmap_config.dart';
 import 'package:latlong2/latlong.dart';
 
+/// Scrub an upstream HTTP error body before it reaches a log or a user-facing
+/// exception. A misconfigured proxy/gateway can echo request headers back in
+/// the body (including `Authorization: Bearer <api-key>`); never let the raw
+/// key land in a snackbar or debug log. Also caps the length so a huge error
+/// dump can't flood the UI.
+String _sanitizeErrBody(String body, String? secret, {int maxLen = 600}) {
+  var s = body;
+  final k = secret?.trim() ?? '';
+  if (k.isNotEmpty) {
+    s = s.replaceAll(k, '***');
+  }
+  return s.length <= maxLen ? s : s.substring(0, maxLen);
+}
+
 /// Everything the assistant knows about the current drive, injected into the
 /// prompt so answers are grounded in reality.
 class AiContext {
@@ -944,7 +958,7 @@ class AiAssistant {
           .send(request)
           .timeout(const Duration(seconds: 60));
       if (res.statusCode != 200) {
-        final errBody = await res.stream.bytesToString();
+        final errBody = _sanitizeErrBody(await res.stream.bytesToString(), key);
         throw Exception('DeepSeek lỗi ${res.statusCode}: $errBody');
       }
       // SSE: "data: {...}\n\n" lines, read incrementally so tokens stream.
@@ -1058,7 +1072,10 @@ class AiAssistant {
         );
       }
       if (streamed.statusCode != 200) {
-        final errBody = await streamed.stream.bytesToString();
+        final errBody = _sanitizeErrBody(
+          await streamed.stream.bytesToString(),
+          key,
+        );
         client.close();
         lastSc = streamed.statusCode;
         lastBody = errBody;

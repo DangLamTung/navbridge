@@ -110,12 +110,16 @@ extension _NavNavigation on _NavigationPageState {
     if (dest == null) return;
     final sw = Stopwatch()..start();
     try {
+      // Fast-fail the ONLINE attempts (Google/Vietmap can block 30–60 s in a
+      // dead zone) — cap them at 5 s and fall back to the on-device graph /
+      // OSRM so turn-by-turn guidance keeps updating in a tunnel or rural gap.
       final route = await fetchAnyRoute(
         [from, dest],
         profile: _routeProfile,
         avoidHighway: _avoidHighway,
         avoidFerry: _avoidFerry,
         preference: _routePreference,
+        onlineTimeout: const Duration(seconds: 5),
       );
       sw.stop();
       debugPrint(

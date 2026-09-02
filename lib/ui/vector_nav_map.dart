@@ -129,7 +129,6 @@ class VectorNavMap extends StatefulWidget {
     this.searchPois = const [],
     this.stops = const [],
     this.cameras = const [],
-    this.satellite = false,
     this.vietmapBase = false,
     this.offline = false,
     this.tileSource = 'osm',
@@ -223,11 +222,6 @@ class VectorNavMap extends StatefulWidget {
   /// Speed / red-light / enforcement cameras to show on the map (colored
   /// dot + camera tag). Empty = no camera layer.
   final List<OfflineCamera> cameras;
-
-  /// Satellite imagery basemap (ESRI World Imagery, free) — shows real
-  /// terrain, nicer for mountain views than the light vector map. Online
-  /// only; falls back to the vector/light map when offline.
-  final bool satellite;
 
   /// Vietmap light-raster basemap in nav mode — used when the Vietmap data
   /// source is active and online. Only affects the online raster fallback
@@ -1923,7 +1917,6 @@ class _VectorNavMapState extends State<VectorNavMap>
     if (old.terrain3D != widget.terrain3D ||
         old.tilt3D != widget.tilt3D ||
         old.nightMode != widget.nightMode ||
-        old.satellite != widget.satellite ||
         old.vietmapBase != widget.vietmapBase ||
         old.offline != widget.offline ||
         old.tileSource != widget.tileSource ||

@@ -472,7 +472,6 @@ class _NavigationPageState extends State<NavigationPage>
   bool _tilt3d = false; // tilted perspective camera (turn off = flat 2D)
   bool _terrain3d = false; // true 3D terrain relief (needs offline DEM)
   bool _nightMode = false; // night/dark map
-  final bool _satellite = false; // satellite imagery basemap (removed toggle)
   bool _showStatusBar = false; // Google-style bottom info bar (default off)
 
   /// Dark theme for simple nav mode (no map) — toggled on the simple screen.

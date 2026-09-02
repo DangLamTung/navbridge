@@ -95,11 +95,18 @@ Uint8List _frame(int type, Uint8List payload) {
 }
 
 /// UTF-8 bytes of [s], truncated to the firmware's street buffer (leaving
-/// room for the terminator it appends).
+/// room for the terminator it appends). Truncates on a WHOLE code point so a
+/// multi-byte Vietnamese character (Đ / ư / ợ …) is never split mid-sequence —
+/// a half-cut lead/continuation byte corrupts the ESP32's UTF-8 font renderer.
 Uint8List _utf8Capped(String s) {
-  final b = Uint8List.fromList(utf8.encode(s));
   final max = mapMaxStreetBytes - 1;
-  return b.length <= max ? b : Uint8List.sublistView(b, 0, max);
+  final out = <int>[];
+  for (final r in s.runes) {
+    final enc = utf8.encode(String.fromCharCode(r));
+    if (out.length + enc.length > max) break;
+    out.addAll(enc);
+  }
+  return Uint8List.fromList(out);
 }
 
 /// `<route>` — the full route polyline (sent once per route / on re-route).

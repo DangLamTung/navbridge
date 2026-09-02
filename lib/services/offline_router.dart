@@ -403,6 +403,7 @@ Future<OsrmRoute> fetchAnyRoute(
   bool avoidHighway = false,
   bool avoidFerry = false,
   RoutePreference preference = RoutePreference.fastest,
+  Duration? onlineTimeout,
 }) async {
   final routes = await fetchAnyRoutes(
     points,
@@ -410,6 +411,7 @@ Future<OsrmRoute> fetchAnyRoute(
     avoidHighway: avoidHighway,
     avoidFerry: avoidFerry,
     preference: preference,
+    onlineTimeout: onlineTimeout,
   );
   return routes.first;
 }
@@ -421,6 +423,11 @@ Future<OsrmRoute> fetchAnyRoute(
 /// [avoidHighway] / [avoidFerry] re-route without motorways / ferries
 /// (OSRM `exclude=motorway,ferry`); the on-device car graph and Vietmap
 /// don't support exclusions, so they're ignored there.
+///
+/// [onlineTimeout] caps how long an ONLINE attempt (Google / Vietmap) may
+/// take before falling through to the on-device graph / OSRM. Live off-route
+/// reroutes pass a short budget so a dead zone (tunnel / rural) can't freeze
+/// turn-by-turn guidance for 30–60 s waiting on a network that is gone.
 Future<List<OsrmRoute>> fetchAnyRoutes(
   List<LatLng> points, {
   RouteProfile profile = RouteProfile.car,
@@ -428,16 +435,18 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
   bool avoidHighway = false,
   bool avoidFerry = false,
   RoutePreference preference = RoutePreference.fastest,
+  Duration? onlineTimeout,
 }) async {
   // Xe mô tô is PROHIBITED on VN motorways — always avoid them for this
   // profile, regardless of the user's car-oriented "avoid highway" toggle.
   final effAvoidHighway = avoidHighway || profile == RouteProfile.motorbike;
   if (dataSource == 'google' && !forceOffline) {
     try {
-      return rankByPreference(
-        await fetchGoogleRoutes(points, maxAlternatives: maxAlternatives),
-        preference,
-      );
+      final fut = fetchGoogleRoutes(points, maxAlternatives: maxAlternatives);
+      final routes = onlineTimeout == null
+          ? await fut
+          : await fut.timeout(onlineTimeout);
+      return rankByPreference(routes, preference);
     } catch (e) {
       debugPrint('GOOGLE: route failed: $e — falling back to OSRM');
     }
@@ -446,14 +455,15 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
       !forceOffline &&
       (profile == RouteProfile.car || profile == RouteProfile.motorbike)) {
     try {
-      return rankByPreference(
-        await fetchVietmapRoutes(
-          points,
-          vehicle: profile == RouteProfile.motorbike ? 'motorcycle' : 'car',
-          maxAlternatives: maxAlternatives,
-        ),
-        preference,
+      final fut = fetchVietmapRoutes(
+        points,
+        vehicle: profile == RouteProfile.motorbike ? 'motorcycle' : 'car',
+        maxAlternatives: maxAlternatives,
       );
+      final routes = onlineTimeout == null
+          ? await fut
+          : await fut.timeout(onlineTimeout);
+      return rankByPreference(routes, preference);
     } catch (e) {
       debugPrint('VIETMAP: route failed: $e — falling back to OSRM');
     }
