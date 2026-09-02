@@ -116,7 +116,8 @@ class PoiInfoCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              if (poi.address != null) _row(Icons.location_on_outlined, poi.address!),
+              if (poi.address != null)
+                _row(Icons.location_on_outlined, poi.address!),
               if (poi.phone != null) _row(Icons.call_outlined, poi.phone!),
               if (poi.openingHours != null)
                 _row(Icons.schedule_outlined, poi.openingHours!),
@@ -182,12 +183,7 @@ class PoiInfoCard extends StatelessWidget {
         children: [
           Icon(icon, size: 18, color: Colors.grey[600]),
           const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(fontSize: 13.5),
-            ),
-          ),
+          Expanded(child: Text(text, style: const TextStyle(fontSize: 13.5))),
         ],
       ),
     );
@@ -207,8 +203,7 @@ String _wikiUrl(String ref) {
   return 'https://$lang.wikipedia.org/wiki/${Uri.encodeComponent(title)}';
 }
 
-String _withScheme(String url) =>
-    url.startsWith('http') ? url : 'https://$url';
+String _withScheme(String url) => url.startsWith('http') ? url : 'https://$url';
 
 String _host(String url) {
   final u = Uri.tryParse(_withScheme(url));

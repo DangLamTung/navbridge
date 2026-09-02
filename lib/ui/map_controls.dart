@@ -28,7 +28,11 @@ class MapControls extends StatelessWidget {
       children: [
         RoundActionButton(icon: Icons.add, color: kAppBlue, onTap: onZoomIn),
         const SizedBox(height: 8),
-        RoundActionButton(icon: Icons.remove, color: kAppBlue, onTap: onZoomOut),
+        RoundActionButton(
+          icon: Icons.remove,
+          color: kAppBlue,
+          onTap: onZoomOut,
+        ),
         const SizedBox(height: 8),
         RoundActionButton(
           icon: Icons.my_location,

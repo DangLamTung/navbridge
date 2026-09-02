@@ -46,13 +46,116 @@ extension _NavMap on _NavigationPageState {
   };
 
   /// Camera data-source color for the corner dot (waze=purple, police=teal,
-  /// osm=green, ?=grey) — matches the nav-map source ring.
+  /// osm=green, vietmap=indigo, ?=grey) — matches the nav-map source ring.
   Color _cameraSourceColor(String source) => switch (source) {
     'waze' => const Color(0xFF7B1FA2),
     'police' => const Color(0xFF00897B),
     'osm' => const Color(0xFF34A853),
+    'vietmap' => const Color(0xFF5C6BC0),
     _ => const Color(0xFF5F6368),
   };
+
+  /// Bottom-sheet details for a camera marker tapped on the map: what kind of
+  /// camera it is + which source reported it (CSGT / Waze / Vietmap / OSM) so
+  /// the driver can judge how much to trust it. Also used by the nav map's
+  /// camera tap.
+  void _showCameraInfo(OfflineCamera c) {
+    final type = switch (c.type) {
+      'speed_camera' =>
+        (c.speedLimit ?? 0) > 0
+            ? 'Camera tốc độ ${c.speedLimit} km/h'
+            : 'Camera tốc độ',
+      'traffic_camera' => 'Camera giám sát giao thông',
+      'penalty_camera' => 'Camera phạt nguội',
+      'red_light' => 'Camera đèn đỏ',
+      _ => switch (c.focus) {
+        'speed' => 'Camera tốc độ',
+        'red_light' => 'Camera đèn đỏ',
+        'violations' => 'Camera phạt nguội',
+        'sign' => 'Biển báo',
+        _ => 'Camera',
+      },
+    };
+    final seg = c.segmentMeters;
+    final detail = <String>[
+      if (seg != null && seg > 0) 'Đoạn giám sát ~${formatDistanceSpoken(seg)}',
+      if (c.devices != null && c.devices! > 0) '${c.devices} thiết bị',
+      if (c.district != null && c.district!.isNotEmpty) c.district!,
+    ].join(' · ');
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: _cameraFocusColor(c.focus),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const CctvIcon(size: 12),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      type,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (c.name.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  c.name,
+                  style: TextStyle(fontSize: 13, color: Colors.grey[800]),
+                ),
+              ],
+              if (detail.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  detail,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+              ],
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: _cameraSourceColor(c.source),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Nguồn: ${cameraSourceLabel(c.source)}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   void _locateMe() {
     final c = _current;
@@ -78,6 +181,10 @@ extension _NavMap on _NavigationPageState {
           options: MapOptions(
             initialCenter: current ?? const LatLng(10.8231, 106.6297),
             initialZoom: 13,
+            // Map-tinted background (warm land tone, not stark white) so a
+            // zoomed-out / offline area with no tiles doesn't look like a
+            // blank white screen.
+            backgroundColor: const Color(0xFFF1EEE6),
             interactionOptions: const InteractionOptions(
               flags: InteractiveFlag.all,
             ),
@@ -137,6 +244,9 @@ extension _NavMap on _NavigationPageState {
             ),
             // Rain radar (RainViewer) — a translucent live rain map above the
             // basemap, below the route. Online-only (fresh data every frame).
+            // High-res 512px tiles (RainViewer serves 512 = 2x the 256 default)
+            // so the overlay stays crisp when zoomed in — we request 512 tiles
+            // and render them at their native size (no simulated-retina blur).
             if (radarOn && _radarLayerUrl != null)
               Opacity(
                 opacity: 0.55,
@@ -144,6 +254,7 @@ extension _NavMap on _NavigationPageState {
                   urlTemplate: _radarLayerUrl!,
                   userAgentPackageName: 'com.navbridge.app',
                   tileProvider: NetworkTileProvider(),
+                  tileSize: 512,
                   maxNativeZoom: 7,
                 ),
               ),
@@ -156,6 +267,7 @@ extension _NavMap on _NavigationPageState {
                   urlTemplate: _satelliteLayerUrl!,
                   userAgentPackageName: 'com.navbridge.app',
                   tileProvider: NetworkTileProvider(),
+                  tileSize: 512,
                   maxNativeZoom: 6,
                 ),
               ),
@@ -275,44 +387,57 @@ extension _NavMap on _NavigationPageState {
                 // (no separate 📷 text) so it fits the 26×26 marker box — the
                 // old dot+tag Column overflowed by 5 px for every camera. A
                 // tiny corner dot marks the data source (waze/police/osm).
+                // Only NEAR-THE-USER cameras ([_nearCameras], ≤120) are drawn
+                // — all ~70k nationwide markers crushed the low-end phone.
                 if (cameraAlerts)
-                  for (final c in _cameras)
+                  for (final c in _nearCameras)
                     Marker(
                       point: c.pos,
                       width: 26,
                       height: 26,
-                      child: Stack(
-                        children: [
-                          Container(
-                            decoration: BoxDecoration(
-                              color: _cameraFocusColor(c.focus),
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 2),
-                              boxShadow: const [
-                                BoxShadow(color: Colors.black38, blurRadius: 4),
-                              ],
-                            ),
-                            child: const CctvIcon(size: 11),
-                          ),
-                          // Source tag dot (waze=purple · police=teal ·
-                          // osm=green).
-                          Positioned(
-                            right: 0,
-                            bottom: 0,
-                            child: Container(
-                              width: 7,
-                              height: 7,
+                      // Tap a camera marker → details (type + source) so the
+                      // driver knows what it is and how much to trust it.
+                      child: GestureDetector(
+                        onTap: () => _showCameraInfo(c),
+                        child: Stack(
+                          children: [
+                            Container(
                               decoration: BoxDecoration(
-                                color: _cameraSourceColor(c.source),
+                                color: _cameraFocusColor(c.focus),
                                 shape: BoxShape.circle,
                                 border: Border.all(
                                   color: Colors.white,
-                                  width: 1,
+                                  width: 2,
+                                ),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Colors.black38,
+                                    blurRadius: 4,
+                                  ),
+                                ],
+                              ),
+                              child: const CctvIcon(size: 11),
+                            ),
+                            // Source tag dot (waze=purple · police=teal ·
+                            // osm=green · vietmap=indigo).
+                            Positioned(
+                              right: 0,
+                              bottom: 0,
+                              child: Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: _cameraSourceColor(c.source),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 1,
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
               ],

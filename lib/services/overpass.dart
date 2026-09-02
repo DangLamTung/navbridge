@@ -45,6 +45,12 @@ const String _ua = 'navbridge/1.0 (BLE portable navigation; road info)';
 
 /// Vietnamese label + statutory default limit (km/h) per OSM/GraphHopper
 /// highway class value. Used when the way has no `maxspeed` tag.
+///
+/// Non-drivable classes (service, footway, pedestrian, cycleway) return an
+/// EMPTY label — the app is a motor-vehicle nav, and "Đường nội bộ"/"Lối đi
+/// bộ"/"Phố đi bộ" are not roads the driver is legitimately on, so showing
+/// them as the road type was confusing (and the motorbike nav must not
+/// claim to be driving down a sidewalk).
 (String, int) classInfo(String highway) => switch (highway) {
   'motorway' => ('Cao tốc', 120),
   'motorway_link' => ('Cao tốc', 100),
@@ -58,11 +64,13 @@ const String _ua = 'navbridge/1.0 (BLE portable navigation; road info)';
   'tertiary_link' => ('Đường huyện', 50),
   'unclassified' => ('Đường làng', 50),
   'residential' => ('Đường dân sinh', 50),
-  'living_street' => ('Đường phố', 20),
-  'service' => ('Đường nội bộ', 30),
-  'pedestrian' => ('Phố đi bộ', 10),
-  'footway' => ('Lối đi bộ', 10),
-  'cycleway' => ('Đường xe đạp', 20),
+  'living_street' => ('', 20), // không phải đường cho xe cơ giới — bỏ nhãn
+  'service' => ('', 30), // đường nội bộ — không phải đường chính, bỏ nhãn
+  'pedestrian' => ('', 10), // phố đi bộ — không phải đường xe, bỏ nhãn
+  'footway' => ('', 10), // lối đi bộ/vỉa hè — bỏ nhãn
+  'cycleway' => ('', 20), // đường xe đạp — bỏ nhãn
+  'path' => ('', 10),
+  'track' => ('Đường đất', 30),
   _ => ('Đường', 50),
 };
 

@@ -38,6 +38,24 @@ class AiContext {
   final String? radar; // rain prediction: "mưa 80% trong giờ tới"
   final String? tripNotes; // trip name / stop count
 
+  /// Remaining distance to the destination ("Còn 45 km"); null when unknown.
+  final String? routeRemainingKm;
+
+  /// Count of enforcement/ahead cameras on the route within the next ~10 km.
+  final int? camerasAhead;
+
+  /// Count of mountain-pass ("đèo") road segments ahead on the route.
+  final int? passesAhead;
+
+  /// Distance to the nearest fuel station AHEAD on the route (km); null when
+  /// none known. Lets the AI answer "trạm xăng còn xa không".
+  final double? gasNextKm;
+
+  /// Short description of difficult/hazardous sections AHEAD (e.g. "2 đoạn đèo,
+  /// 12 km đường uốn gắt, 1 hầm") computed from route curvature + signs; null
+  /// when the road ahead is easy.
+  final String? hardSections;
+
   /// The car's position as coordinates (used for REAL POI lookups like
   /// nearby gas stations — not included in the visible prompt).
   final LatLng? center;
@@ -53,6 +71,11 @@ class AiContext {
     this.weather,
     this.radar,
     this.tripNotes,
+    this.routeRemainingKm,
+    this.camerasAhead,
+    this.passesAhead,
+    this.gasNextKm,
+    this.hardSections,
     this.center,
   });
 
@@ -66,6 +89,12 @@ class AiContext {
       if (speedKmh != null) 'Tốc độ: $speedKmh',
       if (destination != null) 'Điểm đến: $destination',
       if (eta != null) 'ETA: $eta',
+      if (routeRemainingKm != null) 'Còn lại: $routeRemainingKm',
+      if (camerasAhead != null) 'Camera phía trước: $camerasAhead',
+      if (passesAhead != null) 'Đèo phía trước: $passesAhead',
+      if (gasNextKm != null)
+        'Trạm xăng tiếp theo: ${gasNextKm!.toStringAsFixed(0)} km',
+      if (hardSections != null) 'Đoạn khó đi phía trước: $hardSections',
       if (nextManeuver != null) 'Lượt tiếp: $nextManeuver',
       ?cam,
       if (weather != null) 'Thời tiết: $weather',

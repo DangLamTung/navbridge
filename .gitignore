@@ -83,3 +83,16 @@ android/build/
 
 # Local screenshots may contain personal info — never commit.
 docs/screenshots/
+
+# Offline ENFORCEMENT databases — sensitive / redistribution-restricted
+# (police camera locations, road-sign DB, posted speed limits from DATMAP /
+# Waze / Vietmap). Generated locally by tool/ scripts; NOT committed to the
+# public repo. Keep the files on disk so `flutter build` still bundles them
+# for local/dev releases (pubspec still lists them as assets).
+assets/offline_map/vietnam_cameras.json
+assets/offline_map/vietnam_signs.json
+assets/offline_map/vietnam_speed_limits.geojson
+assets/offline_map/waze_speed_limits.json
+assets/offline_map/vietmap_speed_limits.json
+assets/offline_map/*.bak
+assets/offline_map/*.bak_*

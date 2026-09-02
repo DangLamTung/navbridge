@@ -116,8 +116,14 @@ class RoadInfoChip extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Primary line: the road class label when meaningful, else
+                // the road NAME (a service/footway/pedestrian class has no
+                // label — "Đường nội bộ"/"Lối đi bộ" aren't real roads, so
+                // we show the actual road name or nothing instead).
                 Text(
-                  i?.label ?? (loading ? 'Đang tải…' : 'Ngoài đường'),
+                  i?.label.isNotEmpty == true
+                      ? i!.label
+                      : (i?.name.isNotEmpty == true ? i!.name : ''),
                   style: const TextStyle(
                     fontSize: 10.5,
                     fontWeight: FontWeight.w700,
@@ -125,9 +131,9 @@ class RoadInfoChip extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  (i != null && i.name.isNotEmpty)
+                  (i != null && i.name.isNotEmpty && i.label.isNotEmpty)
                       ? i.name
-                      : (i?.highway ?? ''),
+                      : '',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 10.5, color: Colors.grey[700]),

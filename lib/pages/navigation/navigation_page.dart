@@ -301,8 +301,15 @@ class _NavigationPageState extends State<NavigationPage>
   final _cameraGate = _PerSecondGate(); // 1 Hz per-fix check throttle
   final _cameraDedupe = _ZoneDedupe(); // speak each camera far + near only
 
-  /// All bundled cameras, shown as a map layer when [cameraAlerts] is on.
-  List<OfflineCamera> _cameras = [];
+  /// Cameras shown on the BROWSE map when [cameraAlerts] is on — bounded to
+  /// NEAR-THE-USER only (NOT all ~70k nationwide markers, which crushed the
+  /// low-end phone while browsing / right after finding a route). Refreshed
+  /// when the user moves a couple of km (see [_refreshNearCameras]).
+  List<OfflineCamera> _nearCameras = [];
+
+  /// Center of the last [_nearCameras] refresh — the list only recomputes
+  /// once the user has moved a couple of km, so a 1 Hz GPS fix never rescans.
+  LatLng? _nearCamCenter;
 
   /// True once the camera index load has been requested (one-shot, so the
   /// browse map with camera alerts on still shows cameras — but loaded AFTER
@@ -352,7 +359,7 @@ class _NavigationPageState extends State<NavigationPage>
     }
     final pos = _navigating ? _current : null;
     if (pos == null) {
-      // Preview/browse: DON'T load the route-wide marker layers (see doc).
+      // Preview/browse: DON'T load the marker layers (see doc).
       if (mounted && (_routeCameras.isNotEmpty || _routeSigns.isNotEmpty)) {
         setNavState(() {
           _routeCameras = const [];
@@ -361,38 +368,42 @@ class _NavigationPageState extends State<NavigationPage>
       }
       return;
     }
-    // Markers near the car — BOUNDED so the low-end phone stays smooth: the
-    // 1.5 km / 80-sign map layer (and the 5 km uncapped camera layer, each
-    // camera drawn as 4 native circles) froze navigation. Bumped up so the
-    // route actually shows the limits/signs ahead: signs 1.5 km / 60 and
-    // cameras 5 km / 60 (nearest first) — plenty for the driver without the
-    // old route-wide freeze.
-    const Distance d = Distance();
-    var allCams = await camerasNearPoint(pos, maxDistM: 5000);
-    // Traffic signs (focus 'sign'): keep ALL within 300 m — they're sparse and
-    // informative, so they must not be dropped by the camera cap. Other camera
-    // types (speed/violations/red-light): reduce to the ~60 nearest.
-    final nearSigns = <OfflineCamera>[];
-    var others = <OfflineCamera>[];
-    for (final c in allCams) {
-      if (c.focus == 'sign' && d.as(LengthUnit.Meter, pos, c.pos) <= 300) {
-        nearSigns.add(c);
-      } else {
-        others.add(c);
-      }
-    }
-    others.sort(
-      (a, b) => d
-          .as(LengthUnit.Meter, pos, a.pos)
-          .compareTo(d.as(LengthUnit.Meter, pos, b.pos)),
+    // Show what's ON the route: project each camera/sign onto the route
+    // polyline and keep only those within a ~200 m corridor AHEAD of the car
+    // (NOT a pointless radius around the car that includes parallel roads —
+    // the user: "just show what on the route, no 300 m around the place").
+    // The map widget still caps the camera circles (4 per camera) so the
+    // low-end phone stays smooth.
+    final aheadCams = await camerasAheadOnRoute(
+      pos,
+      r.geometry,
+      maxAheadMeters: 10000,
     );
-    if (others.length > 60) others = others.sublist(0, 60);
-    final cams = [...nearSigns, ...others];
-    final signs = await signsNearPoint(pos, maxDistM: 1500, max: 60);
+    final signAhead = await signsAheadOnRoute(
+      pos,
+      r.geometry,
+      maxAheadMeters: 10000,
+    );
     if (!mounted) return;
+    // "Show all the speed & sign on the route": merge the two marker layers by
+    // ALONG-ROUTE distance and cap at 10 km OR 30 items, whichever comes
+    // first (both queries already stop at 10 km, so the 30-item cap below is
+    // the binding limit — the nearest 30 markers within that horizon).
+    final merged = <({double m, OfflineCamera? cam, RoadSign? sign})>[
+      for (final a in aheadCams) (m: a.routeMeters, cam: a.camera, sign: null),
+      for (final a in signAhead) (m: a.routeMeters, cam: null, sign: a.sign),
+    ]..sort((a, b) => a.m.compareTo(b.m));
+    const maxItems = 30;
+    final cap = merged.length > maxItems ? merged.sublist(0, maxItems) : merged;
     setNavState(() {
-      _routeCameras = cams;
-      _routeSigns = signs;
+      _routeCameras = [
+        for (final e in cap)
+          if (e.cam != null) e.cam!,
+      ];
+      _routeSigns = [
+        for (final e in cap)
+          if (e.sign != null) e.sign!,
+      ];
     });
   }
 
@@ -425,13 +436,32 @@ class _NavigationPageState extends State<NavigationPage>
     );
   }
 
-  /// Lazily load the offline camera index (once, cached) — only when the
+  /// Lazily prime the offline camera index (once, cached) — only when the
   /// user turns camera alerts ON or a route is set (the map needs it then).
-  /// Not at boot, so cold start stays fast.
+  /// Not at boot, so cold start stays fast. Also refreshes the bounded
+  /// browse-map near-camera layer.
   Future<void> _ensureCameras() async {
-    final cams = await loadOfflineCameras();
+    await loadOfflineCameras(); // prime the cached loader
+    await _refreshNearCameras();
+  }
+
+  /// Refresh the BROWSE-map camera layer: only cameras within ~6 km of the
+  /// user (capped at 120 markers) instead of all ~70k nationwide. Throttled
+  /// to once per couple of km of movement so a 1 Hz GPS fix never rescans.
+  Future<void> _refreshNearCameras() async {
+    final pos = _current;
+    if (pos == null) return;
+    final last = _nearCamCenter;
+    if (last != null) {
+      final dLat = last.latitude - pos.latitude;
+      final dLng = last.longitude - pos.longitude;
+      if (dLat * dLat + dLng * dLng < 0.02 * 0.02) return; // ~2 km
+    }
+    _nearCamCenter = pos;
+    final near = await camerasNearPoint(pos, maxDistM: 6000);
     if (!mounted) return;
-    setNavState(() => _cameras = cams);
+    final capped = near.length > 120 ? near.sublist(0, 120) : near;
+    setNavState(() => _nearCameras = capped);
   }
 
   // --- nav map: 3D perspective tilt (Google-style) ----------------------
@@ -486,8 +516,10 @@ class _NavigationPageState extends State<NavigationPage>
   // tile cache + downloaded regions are keyed by the ACTIVE source; the
   // provider is recreated per switch so each layer caches under its own folder
   // and styles never mix.
-  String _tileSource = 'carto';
-  OfflineTileProvider _tileProvider = OfflineTileProvider(source: 'carto');
+  String _tileSource = 'esri-street';
+  OfflineTileProvider _tileProvider = OfflineTileProvider(
+    source: 'esri-street',
+  );
   bool _offline = false;
 
   /// Whether to show the transient "Đang ngoại tuyến" banner. Shown briefly
@@ -524,18 +556,30 @@ class _NavigationPageState extends State<NavigationPage>
     'vietmapsat': VietmapConfig.satelliteTiles,
   };
 
-  /// Basemap order the layer button cycles through (online OSM / CARTO /
-  /// topo / ESRI; Vietmap layers only when real tile keys are compiled in).
+  /// Basemap order the layer button cycles through.
+  /// OSM's tile servers block native MapLibre HTTP requests (403 Forbidden)
+  /// due to missing custom User-Agent, causing the 3D map to be a white screen
+  /// outside the offline vector coverage. Therefore, ESRI Street Map is now
+  /// the default.
   List<String> get _layerOrder => [
+    'esri-street',
+    'osm',
     'carto',
     'carto-light',
     'carto-dark',
-    'osm',
     'topo',
     'esri',
-    'esri-street',
     if (VietmapConfig.hasKeys) ...['vietmap', 'vietmapsat'],
   ];
+
+  /// Set the active online basemap layer directly.
+  void _setTileSource(String next) {
+    if (_tileSource == next) return;
+    setNavState(() {
+      _tileSource = next;
+      _tileProvider = OfflineTileProvider(source: next);
+    });
+  }
 
   /// Cycle the online basemap layer. Recreates the tile provider so each
   /// layer caches under its own folder (styles never mix). The nav map's
@@ -544,17 +588,14 @@ class _NavigationPageState extends State<NavigationPage>
     final order = _layerOrder;
     final i = order.indexOf(_tileSource);
     final next = order[(i < 0 ? 0 : i + 1) % order.length];
-    setNavState(() {
-      _tileSource = next;
-      _tileProvider = OfflineTileProvider(source: next);
-    });
+    _setTileSource(next);
   }
 
   // --- multi-stop plan ---
   final List<TripStop> _stops = [];
 
   // --- voice: spoken guidance (Bluetooth speaker) + mic commands --------
-  final VoiceGuide _voice = VoiceGuide();
+  VoiceGuide get _voice => VoiceGuide.instance;
   final VoiceCommands _commands = VoiceCommands();
   bool _listening = false;
 
@@ -582,6 +623,9 @@ class _NavigationPageState extends State<NavigationPage>
   int? _signSpeedLimit; // effective limit from the last speed-limit sign passed
   int?
   _zoneSpeedLimit; // 40 in "khu đông dân cư" (populated) zone; null outside
+  bool _motorwayWarned = false; // xe mô tô cấm cao tốc — warn once per entry
+  bool _fuelWarned = false; // long fuel gap ahead — warn once per gap
+  Timer? _fuelTimer; // periodic fuel-gap watch while navigating
 
   // Speed-limit-change announcement state: speak the limit only once it has
   // been stable for ~2 s and not repeated within ~4 s (avoids boundary spam).
@@ -590,12 +634,39 @@ class _NavigationPageState extends State<NavigationPage>
   DateTime? _pendingSince;
   DateTime? _lastLimitSpoke;
 
-  /// Effective speed limit: the last speed-limit sign (incl. Waze) or the
+  /// Posted limit from the last speed-limit sign, but capped by the VEHICLE's
+  /// statutory class default. OSM/DATMAP/Waze speed signs carry a CAR limit,
+  /// so a motorbike/truck must never inherit a car's 80 km/h posted value
+  /// (Thông tư 38/2024/TT-BGTVT); a posted sign only ever TIGHTENS their
+  /// class ceiling — never lifts it.
+  int? get _vehicleCappedSignLimit {
+    final sign = _signSpeedLimit;
+    if (sign == null || sign <= 0) return null;
+    if (vehicleType == 'car') return sign;
+    final hw = _roadInfo?.highway ?? '';
+    if (hw.isEmpty) return sign; // unknown road type — don't guess a ceiling
+    final capped = effectiveLimit(hw, vehicle: vehicleType, taggedKmh: sign);
+    return capped > 0 ? capped : null;
+  }
+
+  /// Effective speed limit: the last speed-limit sign (vehicle-capped) or the
   /// populated-area zone the car is in, falling back to the road's
   /// tagged/VN-default limit. This is what overspeed alerts + the speed chip
   /// announce.
-  int get _effectiveSpeedLimit =>
-      _signSpeedLimit ?? _zoneSpeedLimit ?? _roadInfo?.speedLimit ?? 0;
+  ///
+  /// Inside a "khu đông dân cư" the statutory built-up limit is a CEILING: a
+  /// posted sign can only tighten it (never raise it), so when both are set
+  /// the LOWER wins. This is why the limit now correctly drops at the start
+  /// of a town (e.g. after Đèo Mimosa on QL20) instead of staying at the
+  /// road's higher posted value.
+  int get _effectiveSpeedLimit {
+    final sign = _vehicleCappedSignLimit;
+    final zone = _zoneSpeedLimit;
+    if (sign != null && zone != null) return sign < zone ? sign : zone;
+    if (sign != null) return sign;
+    if (zone != null) return zone;
+    return _roadInfo?.speedLimit ?? 0;
+  }
 
   /// Reset the sign/zone speed-limit + limit-announce state for a fresh
   /// navigation or simulation session.
@@ -606,6 +677,8 @@ class _NavigationPageState extends State<NavigationPage>
     _pendingLimit = null;
     _pendingSince = null;
     _lastLimitSpoke = null;
+    _speedChangeDedupe.reset();
+    _motorwayWarned = false;
   }
 
   /// Push the floating widget's state to the overlay engine: the next-maneuver
@@ -737,6 +810,7 @@ class _NavigationPageState extends State<NavigationPage>
   List<RoadSign> _routeSigns = []; // map layer: signs near the route
   final _signGate = _PerSecondGate(); // 1 Hz per-fix check throttle
   final _signDedupe = _ZoneDedupe(); // speak each sign far + near only
+  final _speedChangeDedupe = _ZoneDedupe(); // warn once per speed-drop sign
 
   /// Latest NETWORK-matching verdict (see [_networkMatch]): true = the car's
   /// nearest road IS part of the route. Trusted by the raw off-route check in
@@ -872,9 +946,12 @@ class _NavigationPageState extends State<NavigationPage>
       lastBleType = s.lastBleType;
       debugPrint(
         'SETTINGS: cameraAlerts=$cameraAlerts radar=$radarOn '
-        '(persisted=$s.cameraAlerts) bleAuto=$bleAutoConnect',
+        '(persisted=${s.cameraAlerts}) bleAuto=$bleAutoConnect',
       );
       setState(() => _offline = forceOffline ? true : _offline);
+      if (radarOn) {
+        unawaited(_ensureRadar());
+      }
       // If Bluetooth auto-connect is enabled, start the auto-connect hunt.
       if (bleAutoConnect) {
         _autoConnect.rearm();

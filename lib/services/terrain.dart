@@ -40,8 +40,7 @@ const int kTerrainMaxZoom = 13;
 const String _ua = 'navbridge/1.0 (offline terrain)';
 
 /// Decode a Terrarium RGB pixel to elevation in meters.
-double terrariumDecode(int r, int g, int b) =>
-    (r * 256 + g + b / 256) - 32768;
+double terrariumDecode(int r, int g, int b) => (r * 256 + g + b / 256) - 32768;
 
 /// Returns a deep copy of [baseStyle] with (or without) the terrain block
 /// + `raster-dem` source injected, depending on [enabled] and [demSource].
@@ -87,9 +86,7 @@ Map<String, dynamic> applyTerrainToStyle(
     });
   } else {
     src.remove('terrain-dem');
-    layers.removeWhere(
-      (l) => l is Map && l['id'] == 'terrain-hillshade',
-    );
+    layers.removeWhere((l) => l is Map && l['id'] == 'terrain-hillshade');
   }
   return style;
 }
@@ -268,8 +265,8 @@ Future<double?> elevationAt(LatLng p, {int zoom = 12}) async {
     final n = math.pow(2, z).toDouble();
     final px = (((p.longitude + 180.0) / 360.0) * n) % 1.0;
     final latRad = p.latitude * math.pi / 180.0;
-    final py = ((1.0 - math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) /
-                math.pi) /
+    final py =
+        ((1.0 - math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi) /
             2.0 *
             n) %
         1.0;

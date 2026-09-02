@@ -37,6 +37,17 @@ class VoiceCommand {
   const VoiceCommand(this.type, [this.query = '', this.navigate = false]);
 }
 
+/// Strip Vietnamese diacritics while KEEPING word boundaries (1:1 char map),
+/// for matching what the recognizer often returns without tone marks
+/// ("hoi ai" for "hỏi ai"). Uses the same accent map as the wake word.
+String _stripVi(String s) {
+  final b = StringBuffer();
+  for (final ch in s.toLowerCase().split('')) {
+    b.write(VoiceCommands._viMap[ch] ?? ch);
+  }
+  return b.toString();
+}
+
 /// Keyword parser (Vietnamese first, English fallback).
 VoiceCommand parseVoiceCommand(String raw) {
   final s = raw.trim().toLowerCase();
@@ -97,16 +108,33 @@ VoiceCommand parseVoiceCommand(String raw) {
   if (s.contains('giúp') || s.contains('help')) {
     return const VoiceCommand(VoiceCommandType.help);
   }
-  // AI assistant: "hỏi AI …" / "hỏi trợ lý …" / "hỏi …" / "ask ai …". The
-  // rest of the phrase is the question handed to the assistant.
+  // AI assistant: "hỏi AI …" / "hỏi trợ lý …" / "hỏi …" / "ask ai …". The rest
+  // of the phrase is the question handed to the assistant.
   //
-  // NOTE: avoid `\b` after Vietnamese text — Dart's regex `\b` is ASCII-based,
-  // so it never sees "ý" as a word char and the longer "hỏi trợ lý" prefix
-  // fails (falling back to "hỏi"). Match explicit prefixes, longest first,
-  // without a trailing word boundary.
-  final aiPrefixes = ['hỏi trợ lý', 'hỏi ai', 'hỏi', 'ask ai', 'ask'];
+  // Match against a diacritic-STRIPPED copy (the recognizer often returns
+  // "hoi ai" for "hỏi ai" / "cho toi hoi" for "cho tôi hỏi"), longest prefix
+  // first, WITHOUT a trailing `\b` (Dart's `\b` is ASCII-based and fails after
+  // Vietnamese text). The returned query keeps the ORIGINAL phrase.
+  final ai = _stripVi(s);
+  final aiPrefixes = [
+    'cho toi hoi tro ly',
+    'xin hoi tro ly',
+    'lam on hoi tro ly',
+    'cho toi hoi ai',
+    'xin hoi ai',
+    'lam on hoi ai',
+    'hoi tro ly',
+    'hoi ai',
+    'cho toi hoi',
+    'xin hoi',
+    'lam on hoi',
+    'hoi',
+    'ask ai',
+    'ask',
+  ];
   for (final p in aiPrefixes) {
-    if (s.startsWith(p)) {
+    if (ai.startsWith(p)) {
+      // Strip the (ASCII length == original length) prefix from the original.
       return VoiceCommand(VoiceCommandType.askAi, s.substring(p.length).trim());
     }
   }

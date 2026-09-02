@@ -58,8 +58,17 @@ void main() {
       expect(classInfo('secondary'), ('Tỉnh lộ', 60));
       expect(classInfo('tertiary'), ('Đường huyện', 50));
       expect(classInfo('residential'), ('Đường dân sinh', 50));
-      expect(classInfo('service'), ('Đường nội bộ', 30));
       expect(classInfo('unknown_class'), ('Đường', 50));
+    });
+
+    test('non-drivable classes have NO label (not real roads)', () {
+      // service/footway/pedestrian/cycleway aren't roads for motor vehicles —
+      // showing "Đường nội bộ"/"Lối đi bộ" as the road type was misleading.
+      expect(classInfo('service'), ('', 30));
+      expect(classInfo('footway'), ('', 10));
+      expect(classInfo('pedestrian'), ('', 10));
+      expect(classInfo('cycleway'), ('', 20));
+      expect(classInfo('living_street'), ('', 20));
     });
   });
 

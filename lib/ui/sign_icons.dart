@@ -98,10 +98,10 @@ class SignIcon extends StatelessWidget {
           painter: _EndProhibitionsPainter(),
         ),
         RoadSignKind.slowDown => const CustomPaint(
-          painter: _InfoPainter('SLOW'),
+          painter: _InfoPainter('GIẢM TỐC ĐỘ'),
         ),
         RoadSignKind.tollBooth => const CustomPaint(
-          painter: _InfoPainter('THU PHÍ'),
+          painter: _InfoPainter('TRẠM THU PHÍ'),
         ),
         RoadSignKind.railwayCrossing => const CustomPaint(
           painter: _RailwayPainter(),
@@ -160,12 +160,24 @@ class _InfoPainter extends CustomPainter {
         ..strokeWidth = size.width * 0.06
         ..color = Colors.white,
     );
-    _drawText(
+    // Wrap + center so a longer Vietnamese label ("GIẢM TỐC ĐỘ", "TRẠM THU
+    // PHÍ") fits the small sign instead of overflowing.
+    final tp = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w900,
+          fontSize: size.height * 0.22,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      textAlign: TextAlign.center,
+    )..layout(maxWidth: size.width * 0.80);
+    tp.paint(
       canvas,
-      label,
-      Offset(size.width / 2, size.height / 2),
-      size.height * 0.30,
-      color: Colors.white,
+      Offset((size.width - tp.width) / 2, (size.height - tp.height) / 2),
     );
   }
 

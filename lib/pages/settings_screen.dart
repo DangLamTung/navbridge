@@ -18,6 +18,7 @@ import 'package:navbridge/pages/trips_screen.dart';
 import 'package:navbridge/services/offline_tiles.dart';
 import 'package:navbridge/services/overlay_visibility.dart';
 import 'package:navbridge/services/overlay_widget.dart';
+import 'package:navbridge/services/voice_guide.dart';
 import 'package:navbridge/services/vietmap_config.dart' show dataSource;
 import 'package:navbridge/ui/overlay_layout_screen.dart';
 import 'package:navbridge/ui/widgets.dart';
@@ -44,6 +45,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _pipAspect = '34';
   bool _ridingMode = false;
   double _voiceVolume = 1.0;
+  String _ttsVoiceName = '';
   bool _bleAutoConnect = true;
   String _lastBleMac = '';
   String _lastBleName = '';
@@ -75,6 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _pipAspect = pipAspect;
     _ridingMode = ridingMode;
     _voiceVolume = voiceVolume;
+    _ttsVoiceName = ttsVoiceName;
     _bleAutoConnect = bleAutoConnect;
     _lastBleMac = lastBleMac;
     _lastBleName = lastBleName;
@@ -113,6 +116,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     pipAspect: pipAspect,
     ridingMode: ridingMode,
     voiceVolume: voiceVolume,
+    voiceBoostMax: voiceBoostMax,
+    ttsVoiceName: ttsVoiceName,
+    ttsVoiceLocale: ttsVoiceLocale,
     simpleMode: simpleMode,
     wakeWord: wakeWord,
     overlayLayout: overlayLayout,
@@ -238,13 +244,111 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await saveSettings(_currentSettings());
   }
 
-  /// Spoken guidance volume (0..1), persisted.
+  /// Spoken guidance volume (0..1), persisted. One slider drives BOTH the TTS
+  /// engine's relative volume and the media-stream boost cap, so louder =
+  /// louder announcements all the way up.
   Future<void> _setVoiceVolume(double v) async {
     setState(() {
       _voiceVolume = v;
       voiceVolume = v;
+      voiceBoostMax = v; // keep the boost cap in sync with the volume
     });
     await saveSettings(_currentSettings());
+  }
+
+  /// Open the "Giọng đọc" picker: list the platform's installed TTS voices
+  /// (Vietnamese first) and let the user pick one. The chosen voice is applied
+  /// immediately to the engine and persisted so it's used from the next init.
+  Future<void> _pickVoice() async {
+    final voices = await VoiceGuide.instance.getVoices();
+    if (!mounted) return;
+
+    // Put Vietnamese voices first, then the rest (Samsung/Google etc. engines
+    // often expose several locale variants per language).
+    final vi = voices
+        .where((v) => (v['locale'] ?? '').toLowerCase().startsWith('vi'))
+        .toList();
+    final others = voices
+        .where((v) => !(v['locale'] ?? '').toLowerCase().startsWith('vi'))
+        .toList();
+    final ordered = <List<Map<String, String>>>[vi, others];
+
+    final picked = await showModalBottomSheet<Map<String, String>>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: Text(
+                'Chọn giọng đọc',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+            ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.speaker, size: 20),
+                    title: const Text('Mặc định (tự động)'),
+                    trailing: _ttsVoiceName.isEmpty
+                        ? const Icon(Icons.check, color: kAppBlue)
+                        : null,
+                    onTap: () => Navigator.of(ctx).pop(<String, String>{}),
+                  ),
+                  for (final group in ordered)
+                    for (final v in group)
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.record_voice_over, size: 20),
+                        title: Text(
+                          (v['name'] ?? v['identifier'] ?? 'Giọng nói')
+                              .toString(),
+                          style: const TextStyle(fontSize: 13),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          v['locale'] ?? '',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        trailing: _ttsVoiceName == v['name']
+                            ? const Icon(Icons.check, color: kAppBlue)
+                            : null,
+                        onTap: () => Navigator.of(ctx).pop(v),
+                      ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (picked == null || !mounted) return;
+
+    final name = picked['name'] ?? '';
+    final locale = picked['locale'] ?? 'vi-VN';
+    final ok = await VoiceGuide.instance.selectVoice(name, locale);
+    setState(() => _ttsVoiceName = ok ? name : _ttsVoiceName);
+    await saveSettings(_currentSettings());
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            ok && name.isNotEmpty
+                ? 'Đã đổi giọng đọc: $name'
+                : 'Đã trả về giọng mặc định',
+          ),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    }
   }
 
   /// Floating speed-limit / camera widget over other apps (Waze-Mod style):
@@ -749,6 +853,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   max: 1.0,
                   divisions: 10,
                   label: '${(_voiceVolume * 100).round()}%',
+                ),
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.mic, color: kAppBlue, size: 22),
+                  title: const Text(
+                    'Giọng đọc',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'Chọn giọng nói TTS (tiếng Việt). Trống = mặc định.',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                  trailing: Text(
+                    _ttsVoiceName.isEmpty ? 'Mặc định' : _ttsVoiceName,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[700],
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  onTap: _pickVoice,
                 ),
                 const SizedBox(height: 12),
                 const Text(

@@ -47,6 +47,7 @@ class _OverlayLayoutScreenState extends State<OverlayLayoutScreen> {
   void initState() {
     super.initState();
     _sel = switch (widget.selected) {
+      'dial' || 'speedometer' => 'dial',
       'horizontal' || 'pill' => 'horizontal',
       _ => 'vertical',
     };

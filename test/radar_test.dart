@@ -14,7 +14,7 @@ void main() {
       const f = RadarFrame(time: 1000, path: '/v2/radar/abc123');
       expect(
         radarTileUrl(d, f),
-        'https://tilecache.rainviewer.com/v2/radar/abc123/256/{z}/{x}/{y}/4/1_1.png',
+        'https://tilecache.rainviewer.com/v2/radar/abc123/512/{z}/{x}/{y}/4/1_1.png',
       );
     });
   });
@@ -29,7 +29,7 @@ void main() {
       const f = RadarFrame(time: 1000, path: '/v2/satellite/abc123');
       expect(
         satelliteTileUrl(d, f),
-        'https://tilecache.rainviewer.com/v2/satellite/abc123/256/{z}/{x}/{y}/1/1_1.png',
+        'https://tilecache.rainviewer.com/v2/satellite/abc123/512/{z}/{x}/{y}/1/1_1.png',
       );
     });
   });

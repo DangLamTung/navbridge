@@ -707,7 +707,8 @@ extension _NavSearch on _NavigationPageState {
         points,
         profile: _routeProfile.osrm,
         exclude: osrmExclude(
-          avoidHighway: _avoidHighway,
+          avoidHighway:
+              _avoidHighway || _routeProfile == RouteProfile.motorbike,
           avoidFerry: _avoidFerry,
         ),
       );
@@ -814,22 +815,7 @@ extension _NavSearch on _NavigationPageState {
   /// Persist a new speed-limit vehicle (keeps ALL settings fields).
   Future<void> _persistVehicleType(String v) async {
     final s = await loadSettings();
-    await saveSettings(
-      AppSettings(
-        forceOffline: s.forceOffline,
-        dataSource: s.dataSource,
-        vehicleType: v,
-        geocodingProvider: s.geocodingProvider,
-        routingEngine: s.routingEngine,
-        smoothCamera: s.smoothCamera,
-        cameraAlerts: s.cameraAlerts,
-        radar: s.radar,
-        pipAspect: s.pipAspect,
-        ridingMode: s.ridingMode,
-        simpleMode: s.simpleMode,
-        wakeWord: s.wakeWord,
-      ),
-    );
+    await saveSettings(s.copyWith(vehicleType: v));
   }
 
   void _moveStop(int index, int delta) {

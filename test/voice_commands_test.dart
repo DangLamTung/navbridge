@@ -77,5 +77,27 @@ void main() {
       expect(parseVoiceCommand('   ').type, VoiceCommandType.none);
       expect(parseVoiceCommand('xyz abc').type, VoiceCommandType.none);
     });
+
+    test('ask AI — diacritic-insensitive + polite prefixes', () {
+      expect(
+        parseVoiceCommand('hỏi AI trạm xăng gần nhất').type,
+        VoiceCommandType.askAi,
+      );
+      expect(
+        parseVoiceCommand('hỏi trợ lý còn bao nhiêu camera').type,
+        VoiceCommandType.askAi,
+      );
+      // Recognizer drops diacritics (only the query keeps the original).
+      final d = parseVoiceCommand('hoi ai con bao nhieu camera');
+      expect(d.type, VoiceCommandType.askAi);
+      expect(d.query, 'con bao nhieu camera');
+      // Polite leading phrase even when diacritics are dropped.
+      final c = parseVoiceCommand('cho tôi hỏi AI bao giờ hết đèo');
+      expect(c.type, VoiceCommandType.askAi);
+      expect(c.query, 'bao giờ hết đèo');
+      final e = parseVoiceCommand('xin hoi tro ly trang duong co xang khong');
+      expect(e.type, VoiceCommandType.askAi);
+      expect(e.query, 'trang duong co xang khong');
+    });
   });
 }

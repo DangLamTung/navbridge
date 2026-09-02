@@ -54,7 +54,9 @@ class ArrivalCard extends StatelessWidget {
                       const Text(
                         'Bạn đã đến nơi',
                         style: TextStyle(
-                            fontSize: 17, fontWeight: FontWeight.w800),
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                       Text(
                         progress.stopName.isEmpty
@@ -62,8 +64,7 @@ class ArrivalCard extends StatelessWidget {
                             : progress.stopName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style:
-                            TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                       ),
                     ],
                   ),
@@ -78,7 +79,8 @@ class ArrivalCard extends StatelessWidget {
                   backgroundColor: const Color(0xFFEA4335),
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
                 onPressed: onStop,
                 icon: const Icon(Icons.stop_circle, size: 18),

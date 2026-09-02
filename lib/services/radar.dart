@@ -61,7 +61,8 @@ Future<RadarData?> fetchRadarData() async {
           ),
     ];
     List<RadarFrame> satelliteFrames() {
-      final sat = radar['satellite'] as Map<String, dynamic>?;
+      final sat =
+          (j['satellite'] ?? radar['satellite']) as Map<String, dynamic>?;
       return [
         for (final f in ((sat?['infrared']) as List? ?? const []))
           if (f is Map && f['time'] is num && f['path'] is String)
@@ -86,14 +87,17 @@ Future<RadarData?> fetchRadarData() async {
 /// Map-tile URL template for [frame]. `{z}/{x}/{y}` are filled by the map
 /// renderer. Color scheme `4` = "Universal Blue"; options `1_1` = smoothed +
 /// snow colors. Radar tiles are low-zoom (z0–7) and upscale at higher zooms.
-String radarTileUrl(RadarData d, RadarFrame f) =>
-    '${d.host}${f.path}/256/{z}/{x}/{y}/4/1_1.png';
+/// Uses the HIGH-RES 512px tile size ([tileSize]) so the overlay stays crisp
+/// when zoomed (RainViewer serves 512 = 2x the 256px default).
+String radarTileUrl(RadarData d, RadarFrame f, {int tileSize = 512}) =>
+    '${d.host}${f.path}/$tileSize/{z}/{x}/{y}/4/1_1.png';
 
 /// Map-tile URL template for a weather-SATELLITE [frame] (infrared clouds).
 /// Same `{host}{path}/{size}/{z}/{x}/{y}/{color}/{options}` shape as radar;
 /// color scheme `1` = infrared. Satellite tiles are low-zoom (z0–7) too.
-String satelliteTileUrl(RadarData d, RadarFrame f) =>
-    '${d.host}${f.path}/256/{z}/{x}/{y}/1/1_1.png';
+/// Uses the HIGH-RES 512px tile size ([tileSize]).
+String satelliteTileUrl(RadarData d, RadarFrame f, {int tileSize = 512}) =>
+    '${d.host}${f.path}/$tileSize/{z}/{x}/{y}/1/1_1.png';
 
 /// NASA GIBS current cloud-imagery tile URL template (Himawari-9 AHI Band 13
 /// "clean infrared" over Asia-Pacific — covers Việt Nam). Used as a FALLBACK

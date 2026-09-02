@@ -298,26 +298,7 @@ class BleAutoConnectService {
     lastBleType = type;
     final s = await loadSettings();
     await saveSettings(
-      AppSettings(
-        forceOffline: s.forceOffline,
-        dataSource: s.dataSource,
-        vehicleType: s.vehicleType,
-        geocodingProvider: s.geocodingProvider,
-        routingEngine: s.routingEngine,
-        smoothCamera: s.smoothCamera,
-        cameraAlerts: s.cameraAlerts,
-        radar: s.radar,
-        pipAspect: s.pipAspect,
-        ridingMode: s.ridingMode,
-        simpleMode: s.simpleMode,
-        wakeWord: s.wakeWord,
-        overlayLayout: s.overlayLayout,
-        overlayScale: s.overlayScale,
-        bleAutoConnect: s.bleAutoConnect,
-        lastBleMac: mac,
-        lastBleName: name,
-        lastBleType: type,
-      ),
+      s.copyWith(lastBleMac: mac, lastBleName: name, lastBleType: type),
     );
   }
 }

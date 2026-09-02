@@ -9,6 +9,11 @@ extension _NavVoice on _NavigationPageState {
     // questions even before a route starts. Open-Meteo is fast (~1 s).
     await _ensureWeather();
     if (!mounted) return;
+    // Compute the route-aware trip context (cameras/đèo/gas ahead from the
+    // offline DB) so the AI can answer "còn bao nhiêu camera", "bao giờ hết
+    // đèo", "trạm xăng còn xa không" grounded in real data.
+    final aiCtx = await _aiContextAsync();
+    if (!mounted) return;
     // Let the panel use OUR mic (shares permissions/state with the nav
     // screen) instead of spinning up its own recognizer.
     await showModalBottomSheet<void>(
@@ -24,7 +29,7 @@ extension _NavVoice on _NavigationPageState {
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
         child: AiChatPanel(
-          context: _aiContext(),
+          context: aiCtx,
           initialQuestion: question?.trim(),
           // Opened by a voice command → speak the answer aloud while it streams
           // so the driver never has to look at the screen.
@@ -94,7 +99,11 @@ extension _NavVoice on _NavigationPageState {
                 '${cur.longitude.toStringAsFixed(4)}',
       road: road == null
           ? null
-          : '${road.label.isNotEmpty ? road.label : road.highway}'
+          : '${road.label.isNotEmpty
+                    ? road.label
+                    : road.name.isNotEmpty
+                    ? road.name
+                    : road.highway}'
                 '${road.speedLimit > 0 ? ' (${road.speedLimit} km/h)' : ''}',
       speedKmh: _lastSpeedMps > 0
           ? '${(_lastSpeedMps * 3.6).round()} km/h'
@@ -119,6 +128,167 @@ extension _NavVoice on _NavigationPageState {
           : 'Hành trình ${_stops.length} điểm dừng',
       center: _current,
     );
+  }
+
+  /// Async [_aiContext] that ALSO computes route facts from the offline DB:
+  /// cameras ahead (~10 km), đèo (mountain-pass) segments ahead on the route,
+  /// and the nearest fuel station ahead on the route. This lets the AI answer
+  /// "còn bao nhiêu camera", "bao giờ hết đèo", "trạm xăng còn xa không"
+  /// grounded in real data (not a guess).
+  Future<AiContext> _aiContextAsync() async {
+    final cur = _current;
+    final route = _route?.geometry ?? const <LatLng>[];
+    int? camerasAhead;
+    double? gasNextKm;
+    if (cur != null && route.length >= 2) {
+      try {
+        final ahead = await camerasAheadOnRoute(
+          cur,
+          route,
+          maxAheadMeters: 10000,
+        );
+        camerasAhead = ahead.length;
+      } catch (_) {}
+      try {
+        final fuel = await poisInCategory('fuel', near: cur, limit: 24);
+        if (fuel.isNotEmpty) {
+          final startIdx =
+              (_engine?.snappedSegmentIndex ?? 0).clamp(
+                    0,
+                    max(0, route.length - 1),
+                  )
+                  as int;
+          double? ng;
+          for (final p in fuel) {
+            final proj = projectOnRoute(
+              route,
+              LatLng(p.lat, p.lng),
+              startIndex: startIdx,
+            );
+            if (proj.aheadMeters >= -100 &&
+                (ng == null || proj.aheadMeters < ng)) {
+              ng = proj.aheadMeters;
+            }
+          }
+          gasNextKm = ng == null ? null : ng / 1000.0;
+        }
+      } catch (_) {}
+    }
+    // Count đèo (mountain-pass) segments ahead: a route step whose road name
+    // contains "đèo" (e.g. "Đèo Mimosa", "QL20 Đèo Bảo Lộc").
+    var passes = 0;
+    for (final s in _route?.steps ?? const <OsrmStep>[]) {
+      if (s.name.toLowerCase().contains('đèo')) passes++;
+    }
+    final nav = _progress;
+    final base = _aiContext();
+    final hard = await _hardSectionsText();
+    return AiContext(
+      position: base.position,
+      road: base.road,
+      speedKmh: base.speedKmh,
+      destination: base.destination,
+      eta: base.eta,
+      nextManeuver: base.nextManeuver,
+      cameraAhead: base.cameraAhead,
+      weather: base.weather,
+      radar: base.radar,
+      tripNotes: base.tripNotes,
+      routeRemainingKm: nav == null
+          ? null
+          : 'còn ${(nav.remainingMeters / 1000).round()} km đến điểm đến',
+      camerasAhead: camerasAhead,
+      passesAhead: passes > 0 ? passes : null,
+      gasNextKm: gasNextKm,
+      hardSections: hard,
+      center: base.center,
+    );
+  }
+
+  /// Describe the difficult/hazardous section AHEAD: winding curves (computed
+  /// from the route geometry — the non-named "đèo" the driver feels), plus
+  /// tunnel / railway / slow-down / cấm vượt signs, plus any đèo-named road
+  /// segment. Null when the road ahead is easy.
+  Future<String?> _hardSectionsText() async {
+    final cur = _current;
+    final route = _route?.geometry ?? const <LatLng>[];
+    if (cur == null || route.length < 2) return null;
+    final parts = <String>[];
+    // 1) Đèo-named road segments ahead (heuristic — most passes are named in
+    // the road, e.g. "Đèo Mimosa", but it is NOT exact).
+    var passes = 0;
+    for (final s in _route?.steps ?? const <OsrmStep>[]) {
+      if (s.name.toLowerCase().contains('đèo')) passes++;
+    }
+    if (passes > 0) parts.add('$passes đoạn đèo');
+    // 2) Hazard signs ahead (tunnel / railway / slow-down / cấm vượt).
+    try {
+      final ahead = await signsAheadOnRoute(cur, route, maxAheadMeters: 15000);
+      var tunnel = 0, rail = 0, slow = 0, noPass = 0;
+      for (final a in ahead) {
+        switch (a.sign.kind) {
+          case RoadSignKind.tunnel:
+            tunnel++;
+          case RoadSignKind.railwayCrossing:
+            rail++;
+          case RoadSignKind.slowDown:
+            slow++;
+          case RoadSignKind.noPassing:
+            noPass++;
+          default:
+            break;
+        }
+      }
+      if (tunnel > 0) parts.add('$tunnel hầm');
+      if (rail > 0) parts.add('$rail đường ngang giao với đường sắt');
+      if (slow > 0) parts.add('$slow đoạn giảm tốc độ');
+      if (noPass > 0) parts.add('$noPass đoạn cấm vượt');
+    } catch (_) {}
+    // 3) Winding (curvy) stretches — the non-named "đèo" the driver feels.
+    final windingKm = _windingKm(route);
+    if (windingKm != null && windingKm >= 2) {
+      parts.add('$windingKm km đường uốn gắt');
+    }
+    return parts.isEmpty ? null : parts.join(', ');
+  }
+
+  /// Rough "winding km" on the route: count (~2 km) windows where the cumulative
+  /// heading change is >300° (a local geometry heuristic — no sign data, so it
+  /// catches difficult sections not named "đèo").
+  int? _windingKm(List<LatLng> route) {
+    if (route.length < 3) return null;
+    double heading = _bearingDeg(route[0], route[1]);
+    double accum = 0;
+    double km = 0;
+    double since = 0;
+    const windowM = 2000.0;
+    const thresh = 300.0;
+    for (var i = 1; i + 1 < route.length; i++) {
+      final h = _bearingDeg(route[i], route[i + 1]);
+      var d = (h - heading).abs() % 360;
+      if (d > 180) d = 360 - d;
+      accum += d;
+      heading = h;
+      since += fastDistanceMeters(route[i], route[i + 1]);
+      if (since >= windowM) {
+        if (accum >= thresh) km += windowM / 1000.0;
+        accum = 0;
+        since = 0;
+      }
+    }
+    return km >= 1 ? km.round() : null;
+  }
+
+  /// Bearing (deg, 0=N) from [a] to [b] (local equirectangular — fine at city
+  /// scale).
+  double _bearingDeg(LatLng a, LatLng b) {
+    const pi = 3.141592653589793;
+    final dLon = (b.longitude - a.longitude) * pi / 180.0;
+    final lat1 = a.latitude * pi / 180.0;
+    final lat2 = b.latitude * pi / 180.0;
+    final y = sin(dLon) * cos(lat2);
+    final x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+    return (atan2(y, x) * 180.0 / pi + 360) % 360;
   }
 
   /// "30°C, mưa nhẹ" for the AI context (null when no weather yet).
@@ -175,7 +345,10 @@ extension _NavVoice on _NavigationPageState {
           }
         }
       }
-      _voice.speak(side.isEmpty ? 'Bạn đã đến nơi.' : 'Điểm đến$side');
+      _voice.speak(
+        side.isEmpty ? 'Bạn đã đến nơi.' : 'Điểm đến$side',
+        priority: VoiceGuide.priorityCritical,
+      );
       return;
     }
     final m = nav.meter;
@@ -184,7 +357,9 @@ extension _NavVoice on _NavigationPageState {
     // sound ahead of the turn (never after — even with TTS + Bluetooth
     // latency): far ≈ 20 s out, near ≈ 12 s out, final ≈ 8 s out. On a long
     // straight stretch nothing repeats until the next maneuver gets close.
-    final far = max(200.0, speed * 20.0); // first heads-up (20 s out)
+    // The FIRST callout is ~300-400 m out (was 200 m — too late in town); the
+    // driver wants the turn told before the intersection, not on top of it.
+    final far = max(350.0, speed * 20.0); // first heads-up (20 s out)
     final near = max(120.0, speed * 12.0); // closer heads-up (12 s out)
     final finalM = max(80.0, speed * 8.0); // final "rẽ trái" (8 s out)
     // A maneuver is new when the turn instruction changes. The signature
@@ -204,20 +379,28 @@ extension _NavVoice on _NavigationPageState {
       _spokenFar = false;
       _spokenNear = false;
       _spokenFinal = false;
+      // A turn is coming — reload the sign/camera layer for the road we are
+      // heading into so the driver sees what's on the next stretch right away
+      // (instead of waiting for the 5 s refresh). The route-ahead projection
+      // already covers the new segment after the turn.
+      unawaited(_refreshRouteCameras());
     }
     if (isNew && m > far) {
       // Fresh turn → announce it immediately with its distance.
       _spokenFar = true;
-      _voice.speak(_announce(nav, m));
+      _voice.speak(_announce(nav, m), priority: VoiceGuide.priorityCritical);
     } else if (!_spokenFar && m <= far && m > near) {
       _spokenFar = true;
-      _voice.speak(_announce(nav, m));
+      _voice.speak(_announce(nav, m), priority: VoiceGuide.priorityCritical);
     } else if (!_spokenNear && m <= near && m > finalM) {
       _spokenNear = true;
-      _voice.speak(_announce(nav, m));
+      _voice.speak(_announce(nav, m), priority: VoiceGuide.priorityCritical);
     } else if (!_spokenFinal && m <= finalM) {
       _spokenFinal = true;
-      _voice.speak(_announce(nav, m, now: true));
+      _voice.speak(
+        _announce(nav, m, now: true),
+        priority: VoiceGuide.priorityCritical,
+      );
     }
   }
 
@@ -286,7 +469,7 @@ extension _NavVoice on _NavigationPageState {
         final msg = over < 10
             ? 'Vượt quá tốc độ ${over.round()} km/h.'
             : 'Giảm tốc độ! Vượt quá tốc độ.';
-        _voice.speak(msg);
+        _voice.speak(msg, priority: VoiceGuide.priorityHigh);
       }
     } else {
       _speedingSpoken = false;
@@ -326,7 +509,7 @@ extension _NavVoice on _NavigationPageState {
     _lastSpokenLimit = limit;
     _pendingLimit = null;
     _pendingSince = null;
-    _voice.speak('Giới hạn $limit km/h');
+    _voice.speak('Giới hạn $limit km/h', priority: VoiceGuide.priorityHigh);
   }
 
   /// Warn by voice when GPS quality is poor (reported accuracy ≥ 30 m) so the

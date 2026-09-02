@@ -184,8 +184,7 @@ class _ElevationPainter extends CustomPainter {
 
     Offset pt((double, double) p) {
       final x = total <= 0 ? 0.0 : (p.$1 / total) * size.width;
-      final y =
-          size.height - ((p.$2 - lo) / range) * (size.height - 6) - 3;
+      final y = size.height - ((p.$2 - lo) / range) * (size.height - 6) - 3;
       return Offset(x, y.clamp(0.0, size.height));
     }
 

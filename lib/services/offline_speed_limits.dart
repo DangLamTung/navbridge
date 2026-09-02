@@ -57,6 +57,10 @@ _SpeedLimitIndex? _index;
 /// [speedLimitAt]; a Waze point within the window wins over a DATMAP segment.
 _WazeIndex? _waze;
 
+/// VietMap E-DOG posted speed limits as POINTS (22k+ official posted limits).
+/// Queried after Waze; any point within the window beats a DATMAP segment.
+_WazeIndex? _vietmap;
+
 bool _loaded = false;
 Future<void>? _loading;
 
@@ -79,14 +83,17 @@ Future<void> _doLoad() async {
     final raws = await Future.wait(<Future<String>>[
       rootBundle.loadString('assets/offline_map/vietnam_speed_limits.geojson'),
       rootBundle.loadString('assets/offline_map/waze_speed_limits.json'),
+      rootBundle.loadString('assets/offline_map/vietmap_speed_limits.json'),
     ]);
     _index = await compute(_buildIndex, raws[0]);
     _waze = await compute(_buildWazeIndex, raws[1]);
+    _vietmap = await compute(_buildWazeIndex, raws[2]);
     _loaded = true;
   } catch (_) {
     // Keep null on any failure — queries return null (statutory default).
     _index = null;
     _waze = null;
+    _vietmap = null;
   } finally {
     _loading = null;
   }
@@ -202,37 +209,22 @@ Future<int?> speedLimitAt(LatLng p, {double maxDistM = 25}) async {
   await loadOfflineSpeedLimits();
   final idx = _index;
   final waze = _waze;
-  if (idx == null && waze == null) return null;
+  final vm = _vietmap;
+  if (idx == null && waze == null && vm == null) return null;
 
   final lon = p.longitude, lat = p.latitude;
-  final cx = (lon / _cellDeg).floor();
-  final cy = (lat / _cellDeg).floor();
   final cosLat = math.cos(lat * math.pi / 180.0);
   final maxDeg = maxDistM / _mPerDeg;
 
   // 1) WAZE point layer FIRST — the driver trusts Waze's real posted limits.
   if (waze != null) {
-    var best = double.infinity;
-    var bestKmh = 0.0;
-    final pts = waze.pts;
-    for (var dx = -1; dx <= 1; dx++) {
-      for (var dy = -1; dy <= 1; dy++) {
-        final key = (((cx + dx) & 0xFFFF) << 16) | ((cy + dy) & 0xFFFF);
-        final ids = waze.grid[key];
-        if (ids == null) continue;
-        for (var k = 0; k < ids.length; k++) {
-          final i = ids[k] * 3;
-          final kmh = pts[i + 2];
-          if (kmh < 5 || kmh > 200) continue;
-          final d = _ptDistM(pts[i], pts[i + 1], lat, lon, cosLat);
-          if (d < best) {
-            best = d;
-            bestKmh = kmh;
-          }
-        }
-      }
-    }
-    if (best <= maxDistM) return bestKmh.round();
+    final r = _queryPointIndex(waze, lat, lon, cosLat, maxDistM);
+    if (r != null) return r;
+  }
+  // 2) VietMap E-DOG official posted limits — beats the sparse DATMAP segments.
+  if (vm != null) {
+    final r = _queryPointIndex(vm, lat, lon, cosLat, maxDistM);
+    if (r != null) return r;
   }
   if (idx == null) return null;
 
@@ -240,6 +232,8 @@ Future<int?> speedLimitAt(LatLng p, {double maxDistM = 25}) async {
   final coords = idx.coords;
   final offsets = idx.offsets;
   final grid = idx.grid;
+  final cx = (lon / _cellDeg).floor();
+  final cy = (lat / _cellDeg).floor();
 
   var best = double.infinity;
   var bestSpeed = 0.0;
@@ -274,6 +268,41 @@ Future<int?> speedLimitAt(LatLng p, {double maxDistM = 25}) async {
   if (best <= maxDistM && bestSpeed >= 5 && bestSpeed <= 200) {
     return bestSpeed.round();
   }
+  return null;
+}
+
+/// Nearest point limit (km/h) in a [`_WazeIndex`] (Waze or VietMap E-DOG)
+/// within [maxDistM] of (lat, lon), or null. Shared by both point layers.
+int? _queryPointIndex(
+  _WazeIndex idx,
+  double lat,
+  double lon,
+  double cosLat,
+  double maxDistM,
+) {
+  final cx = (lon / _cellDeg).floor();
+  final cy = (lat / _cellDeg).floor();
+  final pts = idx.pts;
+  var best = double.infinity;
+  var bestKmh = 0.0;
+  for (var dx = -1; dx <= 1; dx++) {
+    for (var dy = -1; dy <= 1; dy++) {
+      final key = (((cx + dx) & 0xFFFF) << 16) | ((cy + dy) & 0xFFFF);
+      final ids = idx.grid[key];
+      if (ids == null) continue;
+      for (var k = 0; k < ids.length; k++) {
+        final i = ids[k] * 3;
+        final kmh = pts[i + 2];
+        if (kmh < 5 || kmh > 200) continue;
+        final d = _ptDistM(pts[i], pts[i + 1], lat, lon, cosLat);
+        if (d < best) {
+          best = d;
+          bestKmh = kmh;
+        }
+      }
+    }
+  }
+  if (best <= maxDistM) return bestKmh.round();
   return null;
 }
 

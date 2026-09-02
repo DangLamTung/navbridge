@@ -135,10 +135,11 @@ extension _NavBars on _NavigationPageState {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
+        // Rolls left↔right (marquee) when the window is too narrow to show the
+        // whole road name, instead of cutting it off with "…". Shows full text
+        // statically when there's room.
+        MarqueeText(
           road,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
           style: const TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w800,
@@ -554,22 +555,8 @@ extension _NavBars on _NavigationPageState {
       unawaited(_refreshRouteCameras()); // route-nearby layer back on
     }
     loadSettings().then(
-      (s) => saveSettings(
-        AppSettings(
-          forceOffline: s.forceOffline,
-          dataSource: s.dataSource,
-          vehicleType: s.vehicleType,
-          geocodingProvider: s.geocodingProvider,
-          routingEngine: s.routingEngine,
-          smoothCamera: s.smoothCamera,
-          cameraAlerts: cameraAlerts,
-          radar: radarOn,
-          pipAspect: s.pipAspect,
-          ridingMode: s.ridingMode,
-          simpleMode: s.simpleMode,
-          wakeWord: s.wakeWord,
-        ),
-      ),
+      (s) =>
+          saveSettings(s.copyWith(cameraAlerts: cameraAlerts, radar: radarOn)),
     );
   }
 

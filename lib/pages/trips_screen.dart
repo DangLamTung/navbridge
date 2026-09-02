@@ -42,14 +42,14 @@ class _TripsScreenState extends State<TripsScreen> {
 
   Future<void> _share(File f) async {
     try {
-      await Share.shareXFiles(
-        [XFile(f.path, mimeType: 'application/json')],
-        text: 'Chuyến đi — ${_displayName(f)}',
-      );
+      await Share.shareXFiles([
+        XFile(f.path, mimeType: 'application/json'),
+      ], text: 'Chuyến đi — ${_displayName(f)}');
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Không chia sẻ được: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Không chia sẻ được: $e')));
       }
     }
   }
@@ -94,8 +94,10 @@ class _TripsScreenState extends State<TripsScreen> {
         backgroundColor: Colors.white,
         appBar: AppBar(
           backgroundColor: Colors.white,
-          title: const Text('Chuyến của tôi',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
+          title: const Text(
+            'Chuyến của tôi',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+          ),
           bottom: const TabBar(
             labelColor: kAppBlue,
             unselectedLabelColor: Colors.blueGrey,
@@ -106,12 +108,7 @@ class _TripsScreenState extends State<TripsScreen> {
             ],
           ),
         ),
-        body: TabBarView(
-          children: [
-            _buildLogs(),
-            _buildPlans(),
-          ],
-        ),
+        body: TabBarView(children: [_buildLogs(), _buildPlans()]),
       ),
     );
   }
@@ -150,7 +147,8 @@ class _TripsScreenState extends State<TripsScreen> {
           color: Colors.white,
           child: ListTile(
             shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14)),
+              borderRadius: BorderRadius.circular(14),
+            ),
             leading: const CircleAvatar(
               backgroundColor: Color(0xFFE8F0FE),
               child: Icon(Icons.directions_car, color: kAppBlue, size: 22),
@@ -221,7 +219,8 @@ class _TripsScreenState extends State<TripsScreen> {
           color: Colors.white,
           child: ListTile(
             shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14)),
+              borderRadius: BorderRadius.circular(14),
+            ),
             leading: const CircleAvatar(
               backgroundColor: Color(0xFFE8F0FE),
               child: Icon(Icons.route, color: kAppBlue, size: 22),
@@ -241,11 +240,14 @@ class _TripsScreenState extends State<TripsScreen> {
               children: [
                 TextButton(
                   onPressed: () => Navigator.pop(context, p),
-                  child: const Text('Bắt đầu',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: kAppBlue)),
+                  child: const Text(
+                    'Bắt đầu',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: kAppBlue,
+                    ),
+                  ),
                 ),
                 IconButton(
                   icon: const Icon(Icons.delete_outline, size: 20),

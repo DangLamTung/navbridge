@@ -201,32 +201,69 @@ extension _NavWeather on _NavigationPageState {
     // (~600 m ahead) and once near (~100 m) as the final reminder — never
     // nagged repeatedly in between. The PiP chip (_nextCamera) still updates
     // every fix; only the VOICE is zoned.
+    //
+    // Announcement uses the camera's REAL content (its name + posted speed
+    // limit) rather than a generic "khu vực giám sát": the VietMap/Waze DB
+    // distinguishes speed cameras, phạt nguội (fine) cameras, traffic
+    // cameras and red-light cameras — say what it actually is.
     if (cameraVoice && next != null && next.routeMeters <= 600) {
       final m = next.routeMeters.round();
       final near = next.routeMeters <= 100;
       final zsig = '$sig/${near ? 'near' : 'far'}';
       if (!_cameraDedupe.seen(zsig)) {
-        final phrase = switch (next.camera.focus) {
-          'speed' =>
-            near
-                ? 'Camera tốc độ ngay phía trước'
-                : 'Camera tốc độ phía trước ${formatDistanceSpoken(next.routeMeters)}',
-          'red_light' =>
-            near
-                ? 'Camera đèn đỏ ngay phía trước'
-                : 'Camera đèn đỏ phía trước ${formatDistanceSpoken(next.routeMeters)}',
-          'violations' =>
-            near
-                ? 'Khu vực giám sát ngay phía trước'
-                : 'Khu vực giám sát phía trước ${formatDistanceSpoken(next.routeMeters)}',
-          _ =>
-            near
-                ? 'Camera ngay phía trước'
-                : 'Camera phía trước ${formatDistanceSpoken(next.routeMeters)}',
-        };
+        final cam = next.camera;
+        final dist = formatDistanceSpoken(next.routeMeters);
+        // A lone CSGT (police) phạt nguội point is a manual report — only say
+        // a definite "Camera …" when a Waze/VietMap camera confirms it. An
+        // unconfirmed one is announced as "có thể có camera".
+        final confirmed = await isCameraConfirmed(cam);
+        // Use the REAL camera type (preserved from the raw source) so the
+        // voice says exactly what it is — the flattened `focus` alone can't
+        // tell a phạt nguội camera from a traffic camera.
+        final seg = cam.segmentMeters;
+        final segTxt = seg != null && seg > 0
+            ? ' trên đoạn ${formatDistanceSpoken(seg)}'
+            : '';
+        String head;
+        if (!confirmed) {
+          head = 'Có thể có camera';
+        } else {
+          switch (cam.type) {
+            case 'speed_camera':
+              final lim = cam.speedLimit;
+              head = lim != null && lim > 0
+                  ? 'Camera tốc độ $lim km/h'
+                  : 'Camera tốc độ';
+            case 'traffic_camera':
+              head = 'Camera giám sát giao thông';
+            case 'penalty_camera':
+              head = 'Camera phạt nguội';
+            case 'red_light':
+              head = 'Camera đèn đỏ';
+            default:
+              // No type tag (police/OSM legacy) — fall back to focus + name.
+              switch (cam.focus) {
+                case 'speed':
+                  head = 'Camera tốc độ';
+                case 'red_light':
+                  head = 'Camera đèn đỏ';
+                case 'violations':
+                  head = 'Camera phạt nguội';
+                default:
+                  head = 'Camera';
+              }
+          }
+        }
+        final phrase = near
+            ? '$head$segTxt ngay phía trước'
+            : '$head$segTxt phía trước $dist';
+        // The DATA SOURCE goes in the NOTIFICATION (so the driver knows how
+        // much to trust it) — it is NOT spoken; the voice stays a clean,
+        // short "Camera …". Other alerts (khu dân cư, biển báo…) are already
+        // voiced and don't carry a source either.
         _voice.speak(phrase);
-        unawaited(NavForegroundService.instance.notifyCamera(next.camera, m));
-        debugPrint('CAMERA: $phrase — ${next.camera.name}');
+        unawaited(NavForegroundService.instance.notifyCamera(cam, m));
+        debugPrint('CAMERA: $phrase — ${cam.name} (${cam.source})');
       }
     }
   }

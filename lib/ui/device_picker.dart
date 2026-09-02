@@ -55,6 +55,7 @@ class _DevicePickerSheetState extends State<DevicePickerSheet> {
       if (!widget.clock.isScanning) {
         await widget.clock.startScan();
       }
+      if (!mounted || _closed) return;
       setState(() => _scanning = widget.clock.isScanning);
       await Future<void>.delayed(const Duration(seconds: 3));
     }

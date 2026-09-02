@@ -128,3 +128,114 @@ class OsmAttribution extends StatelessWidget {
     );
   }
 }
+
+/// Text that auto-scrolls left↔right (marquee) when it doesn't fit the
+/// available width, so all of the info is shown instead of being cut off with
+/// "…". Used in the tiny PiP window (which can be any shape the user picks)
+/// for the current-road name that would otherwise truncate in a narrow window.
+/// Render the full text statically when it fits.
+class MarqueeText extends StatefulWidget {
+  const MarqueeText(this.text, {super.key, this.style, this.velocity = 45});
+
+  final String text;
+  final TextStyle? style;
+
+  /// Scroll speed in logical pixels per second.
+  final double velocity;
+
+  @override
+  State<MarqueeText> createState() => _MarqueeTextState();
+}
+
+class _MarqueeTextState extends State<MarqueeText>
+    with SingleTickerProviderStateMixin {
+  final ScrollController _scroll = ScrollController();
+  late final AnimationController _ctrl;
+  double _maxScroll = 0;
+  bool _overflowed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 8),
+    )..addListener(_onTick);
+  }
+
+  void _onTick() {
+    if (_maxScroll <= 0 || !_scroll.hasClients) return;
+    // ping-pong (0 → max → 0) so the text "rolls left right".
+    _scroll.jumpTo(_ctrl.value * _maxScroll);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// Re-measure the text against the available width. Starts/stops the marquee
+  /// based on whether it overflows. Returns true when it overflows.
+  bool _measure(double maxWidth) {
+    final painter = TextPainter(
+      text: TextSpan(text: widget.text, style: widget.style),
+      maxLines: 1,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final textWidth = painter.width;
+    painter.dispose();
+    final overflow = textWidth > maxWidth + 0.5;
+    if (overflow) {
+      // Re-measure every build so a PiP resize updates the scroll range/duration
+      // (not only on the first overflow) — but don't restart the animation if
+      // it's already running.
+      _maxScroll = textWidth - maxWidth;
+      final dist = _maxScroll;
+      _ctrl.duration = Duration(
+        milliseconds: (dist / widget.velocity * 1000).round().clamp(
+          1500,
+          12000,
+        ),
+      );
+      if (!_overflowed || !_ctrl.isAnimating) _ctrl.repeat(reverse: true);
+      _overflowed = true;
+    } else {
+      if (_overflowed) _ctrl.stop();
+      _overflowed = false;
+      _maxScroll = 0;
+    }
+    return overflow;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final overflow = _measure(
+          constraints.maxWidth.isFinite
+              ? constraints.maxWidth
+              : double.infinity,
+        );
+        if (!overflow) {
+          return Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              widget.text,
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+              style: widget.style,
+            ),
+          );
+        }
+        return SingleChildScrollView(
+          controller: _scroll,
+          scrollDirection: Axis.horizontal,
+          physics: const NeverScrollableScrollPhysics(),
+          child: Text(widget.text, maxLines: 1, style: widget.style),
+        );
+      },
+    );
+  }
+}

@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.util.Rational
 import com.graphhopper.util.shapes.GHPoint
 import io.flutter.embedding.android.FlutterActivity
+import kotlin.math.roundToInt
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
@@ -30,6 +31,11 @@ class MainActivity : FlutterActivity() {
     /// Reused audio-focus listener so we can pause media (YouTube/radio) and
     /// later abandon the focus (see "navbridge/audio" channel below).
     private var audioFocusListener: AudioManager.OnAudioFocusChangeListener? = null
+
+    /// The STREAM_MUSIC volume we bump to maximum before an announcement so the
+    /// navigation voice is as loud as Google Maps. Restored to this value once
+    /// the utterance finishes. -1 = no boost active.
+    private var boostedMusicVolume = -1
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -85,6 +91,37 @@ class MainActivity : FlutterActivity() {
                     "resume" -> {
                         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                         audioFocusListener?.let { am.abandonAudioFocus(it) }
+                        result.success(null)
+                    }
+                    // Google-Maps-like loudness: navigation guidance routes to
+                    // STREAM_MUSIC, so a low media volume makes the TTS voice
+                    // quiet. Raise the media stream to the configured boost cap
+                    // (NOT max) for the announcement so it's audible but not
+                    // blasted, remember the user's volume, restore on "restore".
+                    "boost" -> {
+                        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                        val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+                        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        val boostMax = (call.argument<Double>("max") ?: 1.0)
+                            .coerceIn(0.0, 1.0)
+                        // Never lower the user's own volume — only raise to the cap.
+                        val target = maxOf(cur, (boostMax * max).roundToInt())
+                        // Remember the ORIGINAL volume only ONCE so a nested/rapid
+                        // boost (speak interrupted by speak, or queued sentences)
+                        // restores back to the user's real setting, not an
+                        // intermediate boosted value.
+                        if (boostedMusicVolume < 0) boostedMusicVolume = cur
+                        am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                        result.success(cur)
+                    }
+                    "restore" -> {
+                        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                        if (boostedMusicVolume >= 0) {
+                            am.setStreamVolume(
+                                AudioManager.STREAM_MUSIC, boostedMusicVolume, 0
+                            )
+                            boostedMusicVolume = -1
+                        }
                         result.success(null)
                     }
                     else -> result.notImplemented()

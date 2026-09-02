@@ -18,7 +18,7 @@ import 'package:navbridge/core/settings.dart';
 import 'package:navbridge/services/terrain.dart';
 import 'package:navbridge/ui/widgets.dart';
 import 'package:navbridge/services/vietmap_config.dart'
-    show dataSource, graphDownloadBaseUrl;
+    show graphDownloadBaseUrl;
 
 String formatBytes(int b) {
   if (b >= 1 << 30) return '${(b / (1 << 30)).toStringAsFixed(2)} GB';
@@ -95,26 +95,11 @@ class _OfflineScreenState extends State<OfflineScreen> {
     super.dispose();
   }
 
-  /// Snapshot the current globals into a persisted [AppSettings] — keeps ALL
-  /// preference fields so editing one never drops the others.
-  AppSettings _currentSettings() => AppSettings(
-    forceOffline: forceOffline,
-    dataSource: dataSource,
-    vehicleType: vehicleType,
-    geocodingProvider: geocodingProvider,
-    routingEngine: routingEngine,
-    smoothCamera: smoothCamera,
-    cameraAlerts: cameraAlerts,
-    radar: radarOn,
-    pipAspect: pipAspect,
-    ridingMode: ridingMode,
-    simpleMode: simpleMode,
-  );
-
   Future<void> _toggleForceOffline(bool v) async {
     setState(() => _forceOffline = v);
     forceOffline = v;
-    await saveSettings(_currentSettings());
+    final s = await loadSettings();
+    await saveSettings(s.copyWith(forceOffline: v));
     // Tile cache is source-agnostic but network fetches stop/start here.
     setState(() {});
   }
@@ -432,7 +417,23 @@ class _OfflineScreenState extends State<OfflineScreen> {
       );
       return;
     }
-    // Only remember the region if it actually got tiles.
+    // Only remember the region if tiles actually landed — otherwise the
+    // download "completed" but there is nothing on disk to show.
+    final got = _dl!.success;
+    if (got <= 0) {
+      setState(() {
+        _downloading = false;
+        _dl = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Không tải được ô bản đồ nào. Kiểm tra kết nối hoặc nguồn tile.',
+          ),
+        ),
+      );
+      return;
+    }
     final downloaded = [..._regions, region];
     await saveRegions(downloaded);
     setState(() {
@@ -441,11 +442,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
       _regions = downloaded;
     });
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Đã tải xong vùng bản đồ (${region.tileCount} ô).'),
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Đã tải vùng bản đồ ($got ô).')));
     }
   }
 

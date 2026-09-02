@@ -5,7 +5,7 @@ publish_to: 'none'
 # Build 2002: the phone already carries an install with versionCode 2001
 # (from an earlier sideload), so the code must stay above it or Android
 # rejects the install as a downgrade.
-version: 1.0.1+4004
+version: 1.1.0+4005
 
 environment:
   sdk: ^3.12.2
@@ -82,6 +82,8 @@ flutter:
     - assets/offline_map/vietnam_signs.json
     - assets/offline_map/vietnam_speed_limits.geojson
     - assets/offline_map/waze_speed_limits.json
+    - assets/offline_map/vietmap_speed_limits.json
+    - assets/offline_map/overview_tiles.tar.gz
     - assets/offline_map/icons/
     - assets/offline_map/sprite/
     - assets/offline_map/fonts/

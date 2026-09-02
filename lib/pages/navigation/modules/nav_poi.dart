@@ -378,13 +378,24 @@ extension _NavPoi on _NavigationPageState {
         });
         ranked = results;
       } else if (type == PoiType.fuel) {
-        // Trạm xăng: nearest first (Google's distance pass around the car +
-        // corridor coverage ahead).
-        results.sort(
-          (a, b) =>
-              distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos)),
-        );
-        ranked = results;
+        // Trạm xăng: prefer the stations AHEAD on the route (the next place
+        // we're going to reach) — not ones behind, or the app points back. On
+        // a route, ahead-distance + travel-side wins; otherwise nearest.
+        if (route.length > 2) {
+          final startIdx =
+              (_engine?.snappedSegmentIndex ?? 0).clamp(
+                    0,
+                    max(0, route.length - 1),
+                  )
+                  as int;
+          ranked = rankPoisForRoute(results, route, startIndex: startIdx);
+        } else {
+          results.sort(
+            (a, b) =>
+                distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos)),
+          );
+          ranked = results;
+        }
       } else if (route.length > 2) {
         final startIdx =
             (_engine?.snappedSegmentIndex ?? 0).clamp(
@@ -459,11 +470,27 @@ extension _NavPoi on _NavigationPageState {
           if (!results.any((x) => _sameStation(x, r))) results.add(r);
         }
       } catch (_) {}
-      results.sort(
-        (a, b) => distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos)),
-      );
+      // Prefer stations AHEAD on the route (the next place we'll reach), so
+      // "xăng gần nhất" never points back the way we came.
+      List<PoiResult> ranked;
+      final route = _route?.geometry ?? const <LatLng>[];
+      if (route.length > 2) {
+        final startIdx =
+            (_engine?.snappedSegmentIndex ?? 0).clamp(
+                  0,
+                  max(0, route.length - 1),
+                )
+                as int;
+        ranked = rankPoisForRoute(results, route, startIndex: startIdx);
+      } else {
+        results.sort(
+          (a, b) =>
+              distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos)),
+        );
+        ranked = results;
+      }
       if (!mounted) return;
-      setNavState(() => _pois = results.take(8).toList());
+      setNavState(() => _pois = ranked.take(8).toList());
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -473,6 +500,79 @@ extension _NavPoi on _NavigationPageState {
     } finally {
       if (mounted) setNavState(() => _poiBusy = false);
     }
+  }
+
+  /// Start watching for a LONG fuel gap ahead (a section with no gas station)
+  /// while navigating, so the driver can prepare. Runs on a background timer
+  /// (~2 min) — the airport/no-gas warning is only useful when it comes in
+  /// time, not every second.
+  void _startFuelWatch() {
+    _stopFuelWatch();
+    _fuelWarned = false;
+    unawaited(_checkFuelGapAhead());
+    _fuelTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      unawaited(_checkFuelGapAhead());
+    });
+  }
+
+  void _stopFuelWatch() {
+    _fuelTimer?.cancel();
+    _fuelTimer = null;
+  }
+
+  /// Nearest fuel station AHEAD on the route (project each onto the route;
+  /// ignore ones well behind). When the next one is far (>30 km) or there is
+  /// none within ~60 km, warn the driver ONCE per gap to prepare — notified
+  /// so it's seen with the screen off. Re-arms when a station is reached.
+  Future<void> _checkFuelGapAhead() async {
+    if (!_navigating && !_simulating) return;
+    final c = _current ?? _origin;
+    final route = _route?.geometry ?? const <LatLng>[];
+    if (c == null || route.length < 2) return;
+    final results = <PoiResult>[
+      for (final p in await poisInCategory('fuel', near: c, limit: 24))
+        PoiResult(name: p.name, lat: p.lat, lng: p.lng, type: PoiType.fuel),
+    ];
+    try {
+      for (final r in await searchPois(
+        PoiType.fuel,
+        c,
+        radius: 50000,
+        limit: 30,
+      )) {
+        if (!results.any((x) => _sameStation(x, r))) results.add(r);
+      }
+    } catch (_) {}
+    if (results.isEmpty) return;
+    final startIdx =
+        (_engine?.snappedSegmentIndex ?? 0).clamp(0, max(0, route.length - 1))
+            as int;
+    double? nextGas; // nearest station on/near the route, AHEAD of the car
+    for (final r in results) {
+      final proj = projectOnRoute(route, r.pos, startIndex: startIdx);
+      if (proj.aheadMeters >= -100) {
+        if (nextGas == null || proj.aheadMeters < nextGas) {
+          nextGas = proj.aheadMeters;
+        }
+      }
+    }
+    // Within ~1 km of a station → re-arm so the NEXT gap warns again.
+    if (nextGas != null && nextGas < 1000) {
+      _fuelWarned = false;
+      return;
+    }
+    final far = nextGas == null || nextGas > 30000; // >30 km to next fuel
+    if (!far || _fuelWarned) return;
+    _fuelWarned = true;
+    final km = nextGas == null ? null : (nextGas / 1000).round();
+    final title = km == null
+        ? '⛽ Không thấy trạm xăng phía trước'
+        : '⛽ Chuẩn bị đổ xăng';
+    final body = km == null
+        ? 'Quãng đường phía trước không có trạm xăng. Hãy đổ xăng sớm.'
+        : 'Trạm xăng tiếp theo còn khoảng $km km. Hãy chuẩn bị đổ xăng.';
+    unawaited(NavForegroundService.instance.notifyFuelWarning(title, body));
+    debugPrint('FUEL: gap ahead next=$km km — notified');
   }
 
   /// "Điều hướng bằng Google Maps": hand off to the installed Google Maps app

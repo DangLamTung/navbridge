@@ -65,6 +65,29 @@ void main() {
     expect(ranked.last.name, 'behind');
   });
 
+  test('rankPoisForRoute: a station BEHIND the moving car ranks last', () {
+    // Car is already ~2 km in (snapped at vertex 2). A station the car passed
+    // (between 10.70 and 10.71) must read as NEGATIVE ahead and sink to the
+    // bottom — not clamp onto the car's segment and "win" (the old bug that
+    // made "xăng gần nhất" point back the way we came).
+    final behind = PoiResult(
+      name: 'behind',
+      lat: 10.705,
+      lng: 106.60,
+      type: PoiType.fuel,
+    );
+    final proj = projectOnRoute(route, behind.pos, startIndex: 2);
+    expect(proj.aheadMeters, lessThan(0));
+
+    final pois = <PoiResult>[
+      PoiResult(name: 'ahead', lat: 10.73, lng: 106.601, type: PoiType.fuel),
+      behind,
+    ];
+    final ranked = rankPoisForRoute(pois, route, startIndex: 2);
+    expect(ranked.first.name, 'ahead');
+    expect(ranked.last.name, 'behind');
+  });
+
   test('PoiType.cafeVong filters hammock-café names (unit)', () {
     expect(PoiType.cafeVong.nameFilter, isNotNull);
     final rx = RegExp(PoiType.cafeVong.nameFilter!, caseSensitive: false);

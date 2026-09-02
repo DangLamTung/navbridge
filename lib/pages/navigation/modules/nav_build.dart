@@ -38,6 +38,10 @@ extension _NavBuild on _NavigationPageState {
               children: [
                 Positioned.fill(
                   child: VectorNavMap(
+                    // Fresh map per PiP state so the platform view (and zoom)
+                    // is recreated — entering PiP uses the PiP zoom, exiting
+                    // returns to the full-screen zoom instead of keeping it.
+                    key: const ValueKey('navmap-pip'),
                     routeGeometry: route?.geometry ?? const [],
                     routeSteps: route?.steps ?? const [],
                     routeStartIndex: _routeStartIndex,
@@ -72,12 +76,13 @@ extension _NavBuild on _NavigationPageState {
                     showSatellite: _satelliteOn,
                     satelliteUrl: _satelliteLayerUrl,
                     onPoiTap: _onNavPoiTap,
+                    onCameraTap: _showCameraInfo,
                     signs: _routeSigns,
                     controller: _vmFollow,
                     smoothCamera: smoothCamera,
-                    // PiP can't be pinched — start at ~16 so ~1.5–2 km of the route
-                    // is visible in the small window.
-                    defaultZoom: 16,
+                    // PiP can't be pinched — start a bit wider so more of the
+                    // route is visible in the small window (z14 ≈ ~5 km view).
+                    defaultZoom: 14,
                     // No compass in the tiny PiP window — it just eats space.
                     showCompass: false,
                   ),
@@ -151,6 +156,10 @@ extension _NavBuild on _NavigationPageState {
           // ui/navigation_card.dart). Browsing/search keeps the raster map.
           _navigating
               ? VectorNavMap(
+                  // Distinct key from the PiP map so leaving PiP builds a fresh
+                  // map at the full-screen zoom (z19) rather than inheriting the
+                  // PiP zoom.
+                  key: const ValueKey('navmap-full'),
                   routeGeometry: route?.geometry ?? const [],
                   routeSteps: route?.steps ?? const [],
                   routeStartIndex: _routeStartIndex,
@@ -188,6 +197,7 @@ extension _NavBuild on _NavigationPageState {
                   showSatellite: _satelliteOn,
                   satelliteUrl: _satelliteLayerUrl,
                   onPoiTap: _onNavPoiTap,
+                  onCameraTap: _showCameraInfo,
                   signs: _routeSigns,
                   controller: _vmFollow,
                   smoothCamera: smoothCamera,
@@ -396,12 +406,12 @@ extension _NavBuild on _NavigationPageState {
                                           ),
                                         ),
                                         const SizedBox(height: 8),
-                                        // Map layers: 3D / terrain / satellite
-                                        // grouped into ONE picker button.
+                                        // Map layers: Basemap type + 3D / terrain / radar / satellite overlays
+                                        // grouped into ONE comprehensive Google Maps-style picker button.
                                         PopupMenuButton<String>(
                                           tooltip: 'Lớp bản đồ',
                                           position: PopupMenuPosition.under,
-                                          offset: const Offset(-120, 8),
+                                          offset: const Offset(-160, 8),
                                           color: Colors.white,
                                           elevation: 8,
                                           shadowColor: Colors.black38,
@@ -411,7 +421,9 @@ extension _NavBuild on _NavigationPageState {
                                             ),
                                           ),
                                           onSelected: (v) {
-                                            if (v == '3d') {
+                                            if (v.startsWith('type:')) {
+                                              _setTileSource(v.substring(5));
+                                            } else if (v == '3d') {
                                               setNavState(
                                                 () => _tilt3d = !_tilt3d,
                                               );
@@ -419,9 +431,74 @@ extension _NavBuild on _NavigationPageState {
                                               setNavState(
                                                 () => _terrain3d = !_terrain3d,
                                               );
+                                            } else if (v == 'radar') {
+                                              _toggleRadar();
+                                            } else if (v == 'satellite') {
+                                              _toggleSatellite();
+                                            } else if (v == 'night') {
+                                              _toggleNight();
                                             }
                                           },
                                           itemBuilder: (context) => [
+                                            _layerHeader('Loại bản đồ'),
+                                            _layerItem(
+                                              'type:osm',
+                                              Icons.map,
+                                              'OpenStreetMap',
+                                              _tileSource == 'osm',
+                                            ),
+                                            _layerItem(
+                                              'type:esri-street',
+                                              Icons.alt_route,
+                                              'ESRI Đường phố',
+                                              _tileSource == 'esri-street',
+                                            ),
+                                            _layerItem(
+                                              'type:esri',
+                                              Icons.satellite_alt,
+                                              'Vệ tinh (ESRI)',
+                                              _tileSource == 'esri',
+                                            ),
+                                            _layerItem(
+                                              'type:topo',
+                                              Icons.landscape,
+                                              'Địa hình (Topo)',
+                                              _tileSource == 'topo',
+                                            ),
+                                            _layerItem(
+                                              'type:carto',
+                                              Icons.explore,
+                                              'CARTO Voyager',
+                                              _tileSource == 'carto',
+                                            ),
+                                            _layerItem(
+                                              'type:carto-light',
+                                              Icons.light_mode_outlined,
+                                              'CARTO Sáng',
+                                              _tileSource == 'carto-light',
+                                            ),
+                                            _layerItem(
+                                              'type:carto-dark',
+                                              Icons.dark_mode_outlined,
+                                              'CARTO Tối',
+                                              _tileSource == 'carto-dark',
+                                            ),
+                                            if (VietmapConfig.hasKeys) ...[
+                                              _layerItem(
+                                                'type:vietmap',
+                                                Icons.navigation,
+                                                'VietMap Vector',
+                                                _tileSource == 'vietmap',
+                                              ),
+                                              _layerItem(
+                                                'type:vietmapsat',
+                                                Icons.satellite,
+                                                'VietMap Vệ tinh',
+                                                _tileSource == 'vietmapsat',
+                                              ),
+                                            ],
+                                            const PopupMenuDivider(height: 12),
+                                            _layerHeader('Lớp phủ & Hiệu ứng'),
                                             _layerItem(
                                               '3d',
                                               Icons.threed_rotation,
@@ -431,8 +508,26 @@ extension _NavBuild on _NavigationPageState {
                                             _layerItem(
                                               'terrain',
                                               Icons.terrain,
-                                              'Địa hình',
+                                              'Địa hình 3D',
                                               _terrain3d,
+                                            ),
+                                            _layerItem(
+                                              'radar',
+                                              Icons.water_drop,
+                                              'Radar mưa (RainViewer)',
+                                              radarOn,
+                                            ),
+                                            _layerItem(
+                                              'satellite',
+                                              Icons.cloud,
+                                              'Mây vệ tinh (GIBS)',
+                                              _satelliteOn,
+                                            ),
+                                            _layerItem(
+                                              'night',
+                                              Icons.nightlight_round,
+                                              'Chế độ ban đêm',
+                                              _nightMode,
                                             ),
                                           ],
                                           child: Material(
@@ -448,7 +543,9 @@ extension _NavBuild on _NavigationPageState {
                                                 color:
                                                     (_tilt3d ||
                                                         _terrain3d ||
-                                                        _satellite)
+                                                        radarOn ||
+                                                        _satelliteOn ||
+                                                        _nightMode)
                                                     ? kAppBlue
                                                     : const Color(0xFF5F6368),
                                                 size: 22,
@@ -877,6 +974,23 @@ extension _NavBuild on _NavigationPageState {
     );
   }
 
+  /// A non-selectable category header for the layer menu.
+  PopupMenuEntry<String> _layerHeader(String title) {
+    return PopupMenuItem<String>(
+      enabled: false,
+      height: 28,
+      child: Text(
+        title.toUpperCase(),
+        style: const TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.8,
+          color: Color(0xFF80868B),
+        ),
+      ),
+    );
+  }
+
   /// A styled layer-menu row (icon + label + active checkmark).
   PopupMenuItem<String> _layerItem(
     String value,
@@ -886,26 +1000,26 @@ extension _NavBuild on _NavigationPageState {
   ) {
     return PopupMenuItem<String>(
       value: value,
-      height: 46,
+      height: 40,
       child: Row(
         children: [
           Icon(
             icon,
-            size: 20,
+            size: 18,
             color: active ? kAppBlue : const Color(0xFF5F6368),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
               label,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF202124),
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                color: active ? kAppBlue : const Color(0xFF202124),
               ),
             ),
           ),
-          if (active) const Icon(Icons.check, size: 18, color: kAppBlue),
+          if (active) const Icon(Icons.check, size: 16, color: kAppBlue),
         ],
       ),
     );

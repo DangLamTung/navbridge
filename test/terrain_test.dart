@@ -4,7 +4,8 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_map/flutter_map.dart' show LatLngBounds;
 import 'package:latlong2/latlong.dart';
-import 'package:navbridge/services/offline_tiles.dart' show lonToTileX, latToTileY;
+import 'package:navbridge/services/offline_tiles.dart'
+    show lonToTileX, latToTileY;
 import 'package:navbridge/services/terrain.dart';
 
 void main() {
@@ -40,9 +41,9 @@ void main() {
       final src = style['sources'] as Map<String, dynamic>;
       expect(src['terrain-dem'], same(dem));
       final layers = style['layers'] as List<dynamic>;
-      final hs = layers.firstWhere(
-        (l) => l is Map && l['id'] == 'terrain-hillshade',
-      ) as Map<String, dynamic>;
+      final hs =
+          layers.firstWhere((l) => l is Map && l['id'] == 'terrain-hillshade')
+              as Map<String, dynamic>;
       expect(hs['type'], 'hillshade');
       expect(hs['source'], 'terrain-dem');
       final paint = hs['paint'] as Map<String, dynamic>;

@@ -68,6 +68,20 @@ class AppSettings {
   /// at init and before every utterance.
   final double voiceVolume;
 
+  /// Cap on the Android media-stream volume the app pushes during an
+  /// announcement's loudness boost (0.0–1.0, default 0.7). The boost raises
+  /// the media stream to at least this fraction of its max so the nav voice is
+  /// audible over engine/wind noise — but never above it (or the user's own
+  /// volume) so it doesn't blast.
+  final double voiceBoostMax;
+
+  /// Selected TextToSpeech voice name (empty = engine default). Picked on the
+  /// settings "Giọng đọc" picker from the platform's installed voices.
+  final String ttsVoiceName;
+
+  /// BCP-47 locale for [(ttsVoiceName)] (e.g. 'vi-VN').
+  final String ttsVoiceLocale;
+
   /// Bluetooth auto-connect: automatically scan & reconnect to external display
   /// (E-ink clock / ESP display) when in range or app launches.
   final bool bleAutoConnect;
@@ -98,6 +112,9 @@ class AppSettings {
     this.overlayLayout = 'vertical',
     this.overlayScale = 1.0,
     this.voiceVolume = 1.0,
+    this.voiceBoostMax = 0.7,
+    this.ttsVoiceName = '',
+    this.ttsVoiceLocale = 'vi-VN',
     this.bleAutoConnect = true,
     this.lastBleMac = '',
     this.lastBleName = '',
@@ -121,11 +138,66 @@ class AppSettings {
     'overlayLayout': overlayLayout,
     'overlayScale': overlayScale,
     'voiceVolume': voiceVolume,
+    'voiceBoostMax': voiceBoostMax,
+    'ttsVoiceName': ttsVoiceName,
+    'ttsVoiceLocale': ttsVoiceLocale,
     'bleAutoConnect': bleAutoConnect,
     'lastBleMac': lastBleMac,
     'lastBleName': lastBleName,
     'lastBleType': lastBleType,
   };
+
+  AppSettings copyWith({
+    bool? forceOffline,
+    String? dataSource,
+    String? vehicleType,
+    String? geocodingProvider,
+    String? routingEngine,
+    bool? smoothCamera,
+    bool? cameraAlerts,
+    bool? gpsFilter,
+    bool? radar,
+    String? pipAspect,
+    bool? ridingMode,
+    bool? simpleMode,
+    String? wakeWord,
+    String? overlayLayout,
+    double? overlayScale,
+    double? voiceVolume,
+    double? voiceBoostMax,
+    String? ttsVoiceName,
+    String? ttsVoiceLocale,
+    bool? bleAutoConnect,
+    String? lastBleMac,
+    String? lastBleName,
+    String? lastBleType,
+  }) {
+    return AppSettings(
+      forceOffline: forceOffline ?? this.forceOffline,
+      dataSource: dataSource ?? this.dataSource,
+      vehicleType: vehicleType ?? this.vehicleType,
+      geocodingProvider: geocodingProvider ?? this.geocodingProvider,
+      routingEngine: routingEngine ?? this.routingEngine,
+      smoothCamera: smoothCamera ?? this.smoothCamera,
+      cameraAlerts: cameraAlerts ?? this.cameraAlerts,
+      gpsFilter: gpsFilter ?? this.gpsFilter,
+      radar: radar ?? this.radar,
+      pipAspect: pipAspect ?? this.pipAspect,
+      ridingMode: ridingMode ?? this.ridingMode,
+      simpleMode: simpleMode ?? this.simpleMode,
+      wakeWord: wakeWord ?? this.wakeWord,
+      overlayLayout: overlayLayout ?? this.overlayLayout,
+      overlayScale: overlayScale ?? this.overlayScale,
+      voiceVolume: voiceVolume ?? this.voiceVolume,
+      voiceBoostMax: voiceBoostMax ?? this.voiceBoostMax,
+      ttsVoiceName: ttsVoiceName ?? this.ttsVoiceName,
+      ttsVoiceLocale: ttsVoiceLocale ?? this.ttsVoiceLocale,
+      bleAutoConnect: bleAutoConnect ?? this.bleAutoConnect,
+      lastBleMac: lastBleMac ?? this.lastBleMac,
+      lastBleName: lastBleName ?? this.lastBleName,
+      lastBleType: lastBleType ?? this.lastBleType,
+    );
+  }
 }
 
 /// Global BLE auto-connect preference + remembered target device.
@@ -133,6 +205,15 @@ bool bleAutoConnect = true;
 String lastBleMac = '';
 String lastBleName = '';
 String lastBleType = 'auto';
+
+/// Selected TextToSpeech voice (from the platform TTS voice list). Empty =
+/// the engine default. `ttsVoiceLocale` is the BCP-47 locale of the voice.
+String ttsVoiceName = '';
+String ttsVoiceLocale = 'vi-VN';
+
+/// Cap on the media-stream volume pushed during an announcement's loudness
+/// boost (see [voiceBoostMax] on [AppSettings]).
+double voiceBoostMax = 0.7;
 
 Future<File> _settingsFile() async {
   final sup = await getApplicationSupportDirectory();
@@ -148,8 +229,9 @@ Future<AppSettings> loadSettings() async {
     // takes effect on existing installs instead of silently keeping 9:16/4:3.
     final rawPip = (j['pipAspect'] ?? '34') as String;
     final rawLayout = (j['overlayLayout'] ?? 'vertical') as String;
-    // Map legacy layout names to vertical / horizontal.
+    // Map legacy layout names to vertical / horizontal / dial.
     final mappedLayout = switch (rawLayout) {
+      'dial' || 'speedometer' => 'dial',
       'pill' || 'horizontal' => 'horizontal',
       _ => 'vertical',
     };
@@ -157,11 +239,20 @@ Future<AppSettings> loadSettings() async {
     final mac = (j['lastBleMac'] ?? '') as String;
     final name = (j['lastBleName'] ?? '') as String;
     final type = (j['lastBleType'] ?? 'auto') as String;
+    final voiceName = (j['ttsVoiceName'] ?? '') as String;
+    final voiceLocale = (j['ttsVoiceLocale'] ?? 'vi-VN') as String;
+    final boostMax = ((j['voiceBoostMax'] ?? 0.7) as num).toDouble().clamp(
+      0.0,
+      1.0,
+    );
 
     bleAutoConnect = autoConnect;
     lastBleMac = mac;
     lastBleName = name;
     lastBleType = type;
+    ttsVoiceName = voiceName;
+    ttsVoiceLocale = voiceLocale;
+    voiceBoostMax = boostMax;
 
     return AppSettings(
       forceOffline: (j['forceOffline'] ?? false) as bool,
@@ -188,6 +279,9 @@ Future<AppSettings> loadSettings() async {
         0.0,
         1.0,
       ),
+      voiceBoostMax: boostMax,
+      ttsVoiceName: voiceName,
+      ttsVoiceLocale: voiceLocale,
       bleAutoConnect: autoConnect,
       lastBleMac: mac,
       lastBleName: name,
@@ -200,6 +294,9 @@ Future<AppSettings> loadSettings() async {
 
 Future<void> saveSettings(AppSettings s) async {
   try {
+    ttsVoiceName = s.ttsVoiceName;
+    ttsVoiceLocale = s.ttsVoiceLocale;
+    voiceBoostMax = s.voiceBoostMax;
     bleAutoConnect = s.bleAutoConnect;
     lastBleMac = s.lastBleMac;
     lastBleName = s.lastBleName;

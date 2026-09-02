@@ -430,6 +430,7 @@ extension _NavNavigation on _NavigationPageState {
       _routeStartIndex = 0;
       _gpsWindow.clear();
       _startWeather();
+      _startFuelWatch();
       if (radarOn) unawaited(_ensureRadar());
       unawaited(WakelockPlus.enable());
       unawaited(NavForegroundService.instance.start());
@@ -460,6 +461,7 @@ extension _NavNavigation on _NavigationPageState {
     _routeStartIndex = 0; // full route at the start of navigation
     _gpsWindow.clear();
     _startWeather();
+    _startFuelWatch();
     if (radarOn) unawaited(_ensureRadar());
     unawaited(_refreshRouteCameras()); // nav-map camera layer for the route
     unawaited(WakelockPlus.enable()); // keep the screen on while navigating
@@ -503,6 +505,7 @@ extension _NavNavigation on _NavigationPageState {
     _offRouteSince = null;
     _gpsWindow.clear();
     _startWeather();
+    _startFuelWatch();
     unawaited(_refreshRouteCameras()); // nav-map camera layer for the route
     unawaited(WakelockPlus.enable());
     unawaited(NavForegroundService.instance.start());
@@ -657,6 +660,7 @@ extension _NavNavigation on _NavigationPageState {
     _offRouteSince = null;
     _gpsWindow.clear();
     _stopWeather();
+    _stopFuelWatch();
     _weatherAhead = null; // PiP weather-ahead is nav-only
     unawaited(WakelockPlus.disable()); // screen can sleep again
     unawaited(NavForegroundService.instance.stop()); // stop background nav
@@ -731,22 +735,7 @@ extension _NavNavigation on _NavigationPageState {
       lastBleType = isMap ? 'map' : 'clock';
       final s = await loadSettings();
       await saveSettings(
-        AppSettings(
-          forceOffline: s.forceOffline,
-          dataSource: s.dataSource,
-          vehicleType: s.vehicleType,
-          geocodingProvider: s.geocodingProvider,
-          routingEngine: s.routingEngine,
-          smoothCamera: s.smoothCamera,
-          cameraAlerts: s.cameraAlerts,
-          radar: s.radar,
-          pipAspect: s.pipAspect,
-          ridingMode: s.ridingMode,
-          simpleMode: s.simpleMode,
-          wakeWord: s.wakeWord,
-          overlayLayout: s.overlayLayout,
-          overlayScale: s.overlayScale,
-          bleAutoConnect: s.bleAutoConnect,
+        s.copyWith(
           lastBleMac: device.id,
           lastBleName: device.name,
           lastBleType: isMap ? 'map' : 'clock',

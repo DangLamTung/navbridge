@@ -142,6 +142,7 @@ class VectorNavMap extends StatefulWidget {
     this.showCompass = true,
     this.defaultZoom = 19,
     this.onPoiTap,
+    this.onCameraTap,
     this.signs = const [],
   });
 
@@ -281,6 +282,10 @@ class VectorNavMap extends StatefulWidget {
   /// (gas/food/hotel/…) — lets the page select it and offer navigation there.
   final void Function(PoiResult poi)? onPoiTap;
 
+  /// Called when the driver taps one of the camera markers shown on the nav
+  /// map — lets the page show what the camera is + its data source.
+  final void Function(OfflineCamera cam)? onCameraTap;
+
   /// Road signs near the route (stop / give-way / traffic lights) drawn as
   /// small colored dots on the nav map.
   final List<RoadSign> signs;
@@ -297,6 +302,10 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// Parsed nav style with file:// paths resolved — terrain is injected on
   /// top of this per [_buildStyleString].
   Map<String, dynamic>? _baseStyle;
+
+  /// Root of the offline raster tile store (`.../offline_tiles`), or null
+  /// before [_prepare] runs. Used to build the offline basemap tile URLs.
+  String? _offlineTilesRoot;
 
   /// Offline `raster-dem` source (bundled pmtiles or downloaded terrarium
   /// tiles), or null when no DEM data is present.
@@ -448,6 +457,10 @@ class _VectorNavMapState extends State<VectorNavMap>
       final sup = await getApplicationSupportDirectory();
       final dir = Directory('${sup.path}/nav_map');
       if (!dir.existsSync()) dir.createSync(recursive: true);
+      // Root of the offline raster tile store (browse-map downloads), used as
+      // the nav map's basemap when offline so a zoomed-out / outside-coverage
+      // view shows the downloaded tiles instead of a flat white background.
+      _offlineTilesRoot = '${sup.path}/offline_tiles';
 
       // --- manifest-driven copy of bundled assets -----------------------
       final manifest =
@@ -540,10 +553,12 @@ class _VectorNavMapState extends State<VectorNavMap>
       // Rain-radar overlay (RainViewer, free/no key): a translucent raster
       // layer above the basemap. The tile URL is set per-frame in
       // [_buildStyleString]; an empty tiles list renders nothing when off.
+      // High-res 512px tiles (RainViewer serves 512 = 2x the 256 default) so
+      // the overlay stays crisp when zoomed in.
       src['radar'] = <String, dynamic>{
         'type': 'raster',
         'tiles': <String>[],
-        'tileSize': 256,
+        'tileSize': 512,
         'maxzoom': 7,
         'attribution': '© RainViewer',
       };
@@ -560,7 +575,7 @@ class _VectorNavMapState extends State<VectorNavMap>
       src['satellite'] = <String, dynamic>{
         'type': 'raster',
         'tiles': <String>[],
-        'tileSize': 256,
+        'tileSize': 512,
         'maxzoom': 6,
         'attribution': '© NASA GIBS / RainViewer',
       };
@@ -656,9 +671,33 @@ class _VectorNavMapState extends State<VectorNavMap>
         layers.removeWhere((l) => l is Map && l['id'] == 'building-3d');
       }
     }
-    // No raster fallback — the nav map is ONE consistent vector style (see
-    // _prepare). Satellite / night / Vietmap basemaps are not applied here.
+    // Online raster basemap BELOW the vector tiles so a zoomed-out view (or an
+    // area the vector tiles don't cover) shows a real map instead of the flat
+    // background. Vector tiles paint over it where they exist; at low zoom /
+    // outside coverage the basemap fills the view — no more white.
     final src = style['sources'] as Map<String, dynamic>;
+    src['basemap'] = <String, dynamic>{
+      'type': 'raster',
+      'tiles': _basemapTiles(),
+      'tileSize': 256,
+      'attribution': '© OpenStreetMap contributors © CARTO',
+    };
+    final layers = style['layers'] as List<dynamic>;
+    // Insert right after the background layer so it's the bottom-most visible
+    // layer (everything else renders above it).
+    var insertAt = 0;
+    for (var i = 0; i < layers.length; i++) {
+      if (layers[i] is Map && (layers[i] as Map)['id'] == 'background') {
+        insertAt = i + 1;
+        break;
+      }
+    }
+    layers.insert(insertAt, <String, dynamic>{
+      'id': 'basemap',
+      'type': 'raster',
+      'source': 'basemap',
+      'paint': <String, dynamic>{'raster-opacity': 1.0},
+    });
     // Rain-radar overlay (RainViewer): wire the selected frame's tile URL and
     // toggle the layer visibility. Empty tiles render nothing when off.
     final radarSrc = src['radar'] as Map<String, dynamic>?;
@@ -705,33 +744,90 @@ class _VectorNavMapState extends State<VectorNavMap>
   String _rasterFallbackStyle() {
     final dark = widget.nightMode;
     final tiles = _fallbackTiles();
-    final style = <String, dynamic>{
-      'version': 8,
-      'sources': <String, dynamic>{
-        'basemap': <String, dynamic>{
-          'type': 'raster',
-          'tiles': tiles,
-          'tileSize': 256,
-          'attribution': '© OpenStreetMap contributors © CARTO',
+    final sources = <String, dynamic>{
+      'basemap': <String, dynamic>{
+        'type': 'raster',
+        'tiles': tiles,
+        'tileSize': 256,
+        'attribution': '© OpenStreetMap contributors © CARTO',
+      },
+    };
+    final layers = <dynamic>[
+      <String, dynamic>{
+        'id': 'bg',
+        'type': 'background',
+        'paint': <String, dynamic>{
+          'background-color': dark ? '#16181d' : '#f2efe9',
         },
       },
-      'layers': <dynamic>[
-        <String, dynamic>{
-          'id': 'bg',
-          'type': 'background',
-          'paint': <String, dynamic>{
-            'background-color': dark ? '#16181d' : '#f2efe9',
-          },
-        },
-        <String, dynamic>{
-          'id': 'basemap',
-          'type': 'raster',
-          'source': 'basemap',
-          'paint': <String, dynamic>{'raster-opacity': 1.0},
-        },
-      ],
+      <String, dynamic>{
+        'id': 'basemap',
+        'type': 'raster',
+        'source': 'basemap',
+        'paint': <String, dynamic>{'raster-opacity': 1.0},
+      },
+    ];
+
+    if (widget.showRadar && widget.radarUrl != null) {
+      sources['radar'] = <String, dynamic>{
+        'type': 'raster',
+        'tiles': [widget.radarUrl!],
+        'tileSize': 512,
+        'attribution': '© RainViewer',
+      };
+      layers.add(<String, dynamic>{
+        'id': 'radar',
+        'type': 'raster',
+        'source': 'radar',
+        'layout': <String, dynamic>{'visibility': 'visible'},
+        'paint': <String, dynamic>{'raster-opacity': 0.55},
+      });
+    }
+
+    if (widget.showSatellite && widget.satelliteUrl != null) {
+      sources['satellite'] = <String, dynamic>{
+        'type': 'raster',
+        'tiles': [widget.satelliteUrl!],
+        'tileSize': 512,
+        'attribution': '© NASA GIBS / RainViewer',
+      };
+      layers.add(<String, dynamic>{
+        'id': 'satellite',
+        'type': 'raster',
+        'source': 'satellite',
+        'layout': <String, dynamic>{'visibility': 'visible'},
+        'paint': <String, dynamic>{'raster-opacity': 0.55},
+      });
+    }
+
+    final style = <String, dynamic>{
+      'version': 8,
+      'sources': sources,
+      'layers': layers,
     };
     return jsonEncode(style);
+  }
+
+  /// Basemap tile URLs for the nav map's bottom raster layer. Online → the
+  /// user's chosen online basemap ([_fallbackTiles]); OFFLINE → the downloaded
+  /// browse-map tiles (file://) so a zoomed-out / outside-coverage view shows
+  /// real map instead of a flat white background.
+  List<String> _basemapTiles() {
+    final root = _offlineTilesRoot;
+    if (widget.offline && root != null) {
+      // Map the active source to its offline folder, matching `_sourceDir` in
+      // offline_tiles.dart: OSM tiles live in the ROOT (''), every other
+      // source under '<source>/'. Fall back to the bulk-download 'carto' dir
+      // (which also holds the bundled overview tiles) when the source has no
+      // tiles on disk.
+      final sub = widget.tileSource == 'osm' ? '' : widget.tileSource;
+      final sourceDir = Directory('$root/$sub');
+      if (sub.isEmpty || sourceDir.existsSync()) {
+        return ['file://$root/$sub/{z}/{x}/{y}.png'];
+      }
+      return ['file://$root/carto/{z}/{x}/{y}.png'];
+    }
+    return _fallbackTiles();
   }
 
   /// Tile URL templates for the online raster fallback basemap — mirrors the
@@ -1798,7 +1894,12 @@ class _VectorNavMapState extends State<VectorNavMap>
     // the map never goes blank outside HCMC (e.g. QL1A).
     final curPos = widget.current;
     final outside = curPos != null && !_insideNavCoverage(curPos);
-    if (outside != _outsideCoverage) {
+    final wasNull = old.current == null;
+    final isNull = curPos == null;
+
+    // Also trigger style update if we just got our first GPS fix (or lost it),
+    // because the null position forces the raster fallback.
+    if (outside != _outsideCoverage || wasNull != isNull) {
       _outsideCoverage = outside;
       _styleString = _buildStyleString();
       final ctrl = _controller;
@@ -1965,6 +2066,36 @@ class _VectorNavMapState extends State<VectorNavMap>
     }
   }
 
+  /// A map tap at [point]: if it lands on one of the shown camera markers
+  /// (within a finger-sized radius of its on-screen position) call
+  /// [onCameraTap] so the page can show the camera's type + source.
+  Future<void> _maybeTapCamera(math.Point<double> point) async {
+    final ctrl = _controller;
+    final camCb = widget.onCameraTap;
+    final cams = widget.cameras;
+    if (ctrl == null || camCb == null || cams.isEmpty) return;
+    try {
+      final pts = await ctrl.toScreenLocationBatch([
+        for (final c in cams) LatLng(c.lat, c.lng),
+      ]);
+      var best = 30.0 * 30.0; // compact circle markers → tighter tap radius
+      var bestIdx = -1;
+      for (var i = 0; i < pts.length; i++) {
+        final s = pts[i];
+        final dx = s.x - point.x;
+        final dy = s.y - point.y;
+        final d = dx * dx + dy * dy;
+        if (d < best) {
+          best = d;
+          bestIdx = i;
+        }
+      }
+      if (bestIdx >= 0) camCb(cams[bestIdx]);
+    } catch (_) {
+      // Best-effort.
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final style = (_styleString == null || _styleString!.isEmpty)
@@ -2000,9 +2131,12 @@ class _VectorNavMapState extends State<VectorNavMap>
           },
           onCameraMove: _onCamMove,
           onCameraIdle: _onCamIdle,
-          // Tap a POI (gas/food/hotel) shown on the map → notify the page so
-          // it can select it and offer "Đi đến" (choose where to navigate).
-          onMapClick: (point, _) => _maybeTapPoi(point),
+          // Tap a POI (gas/food/hotel) or a camera marker shown on the map →
+          // notify the page so it can act on it (navigate / show details).
+          onMapClick: (point, _) {
+            _maybeTapPoi(point);
+            _maybeTapCamera(point);
+          },
           onStyleLoadedCallback: () async {
             debugPrint('VECTORMAP: style loaded — adding route');
             _routeGen++;

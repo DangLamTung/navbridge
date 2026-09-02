@@ -284,6 +284,9 @@ extension _NavGps on _NavigationPageState {
         if (cur != null) _map.move(cur, 16);
       }
       if (mounted) setNavState(() {});
+      // Browse: keep the near-camera layer bounded to the user (throttled to
+      // a couple of km of movement) so the map never renders all ~70k markers.
+      unawaited(_refreshNearCameras());
       return;
     }
     // Keep a short trace for online OSRM /match road-snapping.
@@ -441,6 +444,7 @@ extension _NavGps on _NavigationPageState {
           // REAL posted limit on 93k road segments — overwrite the statutory
           // estimate whenever a segment is right under the car.
           unawaited(_correctSpeedFromDatmap(pos));
+          _maybeWarnMotorwayProhibited();
           return;
         }
       } catch (_) {
@@ -453,6 +457,7 @@ extension _NavGps on _NavigationPageState {
       final r = await fetchRoadInfo(pos, vehicle: vehicleType);
       if (!mounted) return;
       setNavState(() => _roadInfo = r);
+      _maybeWarnMotorwayProhibited();
     } catch (_) {
       // keep the last known road on failure
     } finally {
@@ -511,6 +516,34 @@ extension _NavGps on _NavigationPageState {
         speedLimit: v,
       );
     });
+  }
+
+  /// Xe mô tô is PROHIBITED on đường cao tốc (VN road law). The route planner
+  /// still lets a motorbike ride the car network (OSRM has no motorbike
+  /// profile), so when the current road is a motorway the driver must be told
+  /// they can't be there. Warn once per entry; re-arm once back on a normal
+  /// road.
+  void _maybeWarnMotorwayProhibited() {
+    if (!_voiceOn || !_voice.ready) return;
+    if (!_navigating && !_simulating) return;
+    final hw = _roadInfo?.highway ?? '';
+    final onMotorway = hw == 'motorway' || hw == 'motorway_link';
+    if (vehicleType == 'motorbike' && onMotorway) {
+      if (_motorwayWarned) return;
+      _motorwayWarned = true;
+      const phrase =
+          'Chú ý! Xe mô tô không được phép đi vào đường cao tốc. Xin thoát cao tốc khi có thể.';
+      _voice.speak(phrase, priority: VoiceGuide.priorityHigh);
+      unawaited(
+        NavForegroundService.instance.notifyProhibition(
+          '🚫 Cấm xe mô tô',
+          phrase,
+        ),
+      );
+      debugPrint('MOTORWAY: motorbike prohibited — warned once');
+    } else if (!onMotorway) {
+      _motorwayWarned = false; // back on a normal road — re-arm
+    }
   }
 
   /// Road info straight from the on-device graph (nearest edge), with the

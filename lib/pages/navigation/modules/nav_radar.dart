@@ -129,23 +129,6 @@ extension _NavRadar on _NavigationPageState {
   }
 
   void _persistRadar() {
-    loadSettings().then(
-      (s) => saveSettings(
-        AppSettings(
-          forceOffline: s.forceOffline,
-          dataSource: s.dataSource,
-          vehicleType: s.vehicleType,
-          geocodingProvider: s.geocodingProvider,
-          routingEngine: s.routingEngine,
-          smoothCamera: s.smoothCamera,
-          cameraAlerts: s.cameraAlerts,
-          radar: radarOn,
-          pipAspect: s.pipAspect,
-          ridingMode: s.ridingMode,
-          simpleMode: s.simpleMode,
-          wakeWord: s.wakeWord,
-        ),
-      ),
-    );
+    loadSettings().then((s) => saveSettings(s.copyWith(radar: radarOn)));
   }
 }

@@ -25,6 +25,17 @@ class OfflineCamera implements OfflinePoint {
   /// `speed` | `red_light` | `violations` | `sign` — the alert focus.
   final String focus;
 
+  /// REAL camera type when known (preserves the raw-source distinction the
+  /// flattened `focus` loses): `speed_camera` | `traffic_camera` |
+  /// `penalty_camera` | `red_light` | `speed_limit` | null. The voice uses
+  /// this to say exactly what the camera is (e.g. "Camera phạt nguội" vs
+  /// "Camera giám sát giao thông"), which `focus` alone can't tell apart.
+  final String? type;
+
+  /// Enforcement SEGMENT length in metres (Waze speed cameras are road
+  /// segments — `dist_m` ≈ 300 m, not a single point). Null for points.
+  final int? segmentMeters;
+
   /// Optional road-sign label (Waze tiles): no_passing, no_left_turn,
   /// residential_start, end_of_prohibitions, …
   final String? sign;
@@ -49,6 +60,8 @@ class OfflineCamera implements OfflinePoint {
     required this.lat,
     required this.lng,
     required this.focus,
+    this.type,
+    this.segmentMeters,
     this.sign,
     this.speedLimit,
     this.devices,
@@ -67,6 +80,8 @@ class OfflineCamera implements OfflinePoint {
     lat: ((j['lat'] ?? 0) as num).toDouble(),
     lng: ((j['lng'] ?? 0) as num).toDouble(),
     focus: (j['focus'] ?? 'violations') as String,
+    type: j['type'] as String?,
+    segmentMeters: (j['segment_m'] as num?)?.toInt(),
     sign: j['sign'] as String?,
     speedLimit: (j['speed_limit'] as num?)?.toInt(),
     devices: (j['devices'] as num?)?.toInt(),
@@ -174,6 +189,30 @@ Future<List<OfflineCamera>> camerasNearPoint(
     if (d.as(LengthUnit.Meter, pos, c.pos) <= maxDistM) out.add(c);
   }
   return out;
+}
+
+/// Result cache for [isCameraConfirmed] (keyed by source + lat,lng) so the
+/// overlap scan only runs once per police camera, not every nav fix.
+final Map<String, bool> _cameraConfirmCache = {};
+
+/// Is this camera CONFIRMED enough to call out as a definite "Camera …"?
+///
+/// A police (CSGT) phạt nguội point is a MANUAL report — lots of them are
+/// stale or estimated. It's only treated as confirmed when a Waze or VietMap
+/// camera sits at the same spot (those come from official / community
+/// databases). A lone CSGT point is announced as "có thể có camera" instead.
+/// Non-police points (Waze / VietMap / OSM) are always confirmed.
+Future<bool> isCameraConfirmed(OfflineCamera cam) async {
+  if (cam.source != 'police') return true;
+  final key = '${cam.source}:${cam.lat},${cam.lng}';
+  final cached = _cameraConfirmCache[key];
+  if (cached != null) return cached;
+  final near = await camerasNearPoint(cam.pos, maxDistM: 150);
+  final confirmed = near.any(
+    (o) => o.source == 'vietmap' || o.source == 'waze',
+  );
+  _cameraConfirmCache[key] = confirmed;
+  return confirmed;
 }
 
 /// Camera distances (metres) for the floating widget: EVERY camera within

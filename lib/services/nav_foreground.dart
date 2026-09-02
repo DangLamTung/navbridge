@@ -34,6 +34,16 @@ const int kNavManeuverNotificationBase = 200;
 /// Heads-up camera alert notification id (reused — only one at a time).
 const int kNavCameraNotificationBase = 300;
 
+/// Human label for a camera/point data source (shown in the alert so the
+/// driver knows how much to trust it). Matches the map source-ring colours.
+String cameraSourceLabel(String source) => switch (source) {
+  'waze' => 'Waze',
+  'police' => 'CSGT',
+  'osm' => 'OSM',
+  'vietmap' => 'Vietmap',
+  _ => 'Không rõ',
+};
+
 /// Global navigator key so a notification tap (foreground-service task or a
 /// heads-up maneuver/camera banner) can pop any pushed screen (e.g. the
 /// OfflineScreen settings hub) and reopen the navigation page.
@@ -240,7 +250,9 @@ class NavForegroundService {
 
   /// Post a heads-up banner for a speed/red-light camera ahead (phạt nguội
   /// DB). Uses a high-priority channel so it's visible even with the screen
-  /// off / app backgrounded — the driver just needs the warning.
+  /// off / app backgrounded — the driver just needs the warning. The body now
+  /// names the DATA SOURCE (Waze / Vietmap / CSGT / OSM) so the driver knows
+  /// how much to trust the alert.
   Future<void> notifyCamera(OfflineCamera cam, int metersAhead) async {
     if (!_lnpReady) return;
     final emoji = switch (cam.focus) {
@@ -254,7 +266,7 @@ class NavForegroundService {
       _ => 'Camera',
     };
     final title = '$emoji $label phía trước ${metersAhead}m';
-    final body = cam.name;
+    final body = '${cam.name}\n· Nguồn: ${cameraSourceLabel(cam.source)}';
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
         'navbridge_cameras',
@@ -269,6 +281,48 @@ class NavForegroundService {
       await _lnp.show(kNavCameraNotificationBase, title, body, details);
     } catch (e) {
       debugPrint('[navfg] camera notify failed: $e');
+    }
+  }
+
+  /// Post a high-priority alert for a vehicle prohibition (e.g. xe mô tô
+  /// không được vào cao tốc). Seen even with the screen off.
+  Future<void> notifyProhibition(String title, String body) async {
+    if (!_lnpReady) return;
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'navbridge_prohibitions',
+        'Prohibition alerts',
+        channelDescription: 'Vehicle not permitted on this road',
+        importance: Importance.max,
+        priority: Priority.high,
+        category: AndroidNotificationCategory.alarm,
+      ),
+    );
+    try {
+      await _lnp.show(kNavCameraNotificationBase + 1, title, body, details);
+    } catch (e) {
+      debugPrint('[navfg] prohibition notify failed: $e');
+    }
+  }
+
+  /// Heads-up that a LONG fuel gap is ahead — tell the driver to prepare
+  /// (refuel soon). Seen with the screen off.
+  Future<void> notifyFuelWarning(String title, String body) async {
+    if (!_lnpReady) return;
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'navbridge_fuel',
+        'Fuel alerts',
+        channelDescription: 'Long stretch with no gas station ahead',
+        importance: Importance.max,
+        priority: Priority.high,
+        category: AndroidNotificationCategory.alarm,
+      ),
+    );
+    try {
+      await _lnp.show(kNavCameraNotificationBase + 2, title, body, details);
+    } catch (e) {
+      debugPrint('[navfg] fuel notify failed: $e');
     }
   }
 

@@ -255,8 +255,17 @@ Future<String> routingGraphPath() async {
 Future<bool> routingGraphPresent() async {
   final dir = await routingGraphDir();
   final d = Directory(dir);
-  return (d.existsSync() && d.listSync().isNotEmpty) ||
-      File('$dir.ghz').existsSync();
+  // listSync() on the main isolate with a multi-GB graph dir would block the
+  // first frames — check cheaply instead (the graph exists iff the dir is
+  // non-empty, which list() confirms without materialising names).
+  var nonEmpty = false;
+  try {
+    await for (final _ in d.list(followLinks: false)) {
+      nonEmpty = true;
+      break;
+    }
+  } catch (_) {}
+  return nonEmpty || File('$dir.ghz').existsSync();
 }
 
 /// Download the GraphHopper routing graph (`.ghz`) from
@@ -420,6 +429,9 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
   bool avoidFerry = false,
   RoutePreference preference = RoutePreference.fastest,
 }) async {
+  // Xe mô tô is PROHIBITED on VN motorways — always avoid them for this
+  // profile, regardless of the user's car-oriented "avoid highway" toggle.
+  final effAvoidHighway = avoidHighway || profile == RouteProfile.motorbike;
   if (dataSource == 'google' && !forceOffline) {
     try {
       return rankByPreference(
@@ -472,7 +484,10 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
     await fetchOsrmRoutes(
       points,
       profile: profile.osrm,
-      exclude: osrmExclude(avoidHighway: avoidHighway, avoidFerry: avoidFerry),
+      exclude: osrmExclude(
+        avoidHighway: effAvoidHighway,
+        avoidFerry: avoidFerry,
+      ),
       maxAlternatives: maxAlternatives,
     ),
     preference,
