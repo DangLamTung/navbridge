@@ -67,6 +67,18 @@ Future<void>? _loading;
 /// Whether the speed-limit layer is ready to answer queries.
 bool get speedLimitsLoaded => _index != null;
 
+/// Whether the speed-limit layer actually has DATA. The public repo ships
+/// empty placeholder files for the enforcement DBs (real DATMAP/Waze/Vietmap
+/// data is generated locally and bundled only on the build machine), so tests
+/// use this to skip assertions that need real crawled/posted limits.
+bool get speedLimitsPopulated {
+  if (!speedLimitsLoaded) return false;
+  if (_index != null && _index!.offsets.length > 1) return true;
+  if (_waze != null && _waze!.pts.isNotEmpty) return true;
+  if (_vietmap != null && _vietmap!.pts.isNotEmpty) return true;
+  return false;
+}
+
 /// Load (and index) the bundled speed-limit layer once. Idempotent + cached;
 /// the heavy parse runs in a background isolate so the first call never
 /// janks the UI.
