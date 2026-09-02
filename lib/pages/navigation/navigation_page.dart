@@ -191,6 +191,11 @@ class _NavigationPageState extends State<NavigationPage>
   int _routeStartIndex = 0;
   LatLng? _current;
 
+  /// Last-known GPS position, used to open the nav map centered on the
+  /// driver's current place (instead of a fixed HCMC fallback) before the
+  /// first live fix arrives.
+  LatLng? _initialCenter;
+
   /// Strict GPS-heading filter ([StrictHeading]): holds the heading while the
   /// car is stationary and only applies a big change after two agreeing fixes,
   /// so the car arrow never spins in place. Exposes the filtered value via
@@ -511,14 +516,12 @@ class _NavigationPageState extends State<NavigationPage>
   TripLogger? _trip;
 
   // --- offline mode ---
-  // Basemap layer is changeable via the layer button ([_cycleTileSource]). The
-  // tile cache + downloaded regions are keyed by the ACTIVE source; the
-  // provider is recreated per switch so each layer caches under its own folder
-  // and styles never mix.
-  String _tileSource = 'esri-street';
-  OfflineTileProvider _tileProvider = OfflineTileProvider(
-    source: 'esri-street',
-  );
+  // Basemap layer is chosen from the "Lớp bản đồ" menu. The tile cache +
+  // downloaded regions are keyed by the ACTIVE source; the provider is
+  // recreated per switch so each layer caches under its own folder and styles
+  // never mix.
+  String _tileSource = 'osm';
+  OfflineTileProvider _tileProvider = OfflineTileProvider(source: 'osm');
   bool _offline = false;
 
   /// Whether to show the transient "Đang ngoại tuyến" banner. Shown briefly
@@ -555,39 +558,16 @@ class _NavigationPageState extends State<NavigationPage>
     'vietmapsat': VietmapConfig.satelliteTiles,
   };
 
-  /// Basemap order the layer button cycles through.
-  /// OSM's tile servers block native MapLibre HTTP requests (403 Forbidden)
-  /// due to missing custom User-Agent, causing the 3D map to be a white screen
-  /// outside the offline vector coverage. Therefore, ESRI Street Map is now
-  /// the default.
-  List<String> get _layerOrder => [
-    'esri-street',
-    'osm',
-    'carto',
-    'carto-light',
-    'carto-dark',
-    'topo',
-    'esri',
-    if (VietmapConfig.hasKeys) ...['vietmap', 'vietmapsat'],
-  ];
-
-  /// Set the active online basemap layer directly.
+  /// Set the active online basemap layer directly (from the "Lớp bản đồ"
+  /// menu). The local tile server sends a proper User-Agent and re-encodes
+  /// every tile to PNG, so OSM/CARTO/ESRI all load even on MapLibre builds
+  /// that reject the provider's raw HTTP tiles.
   void _setTileSource(String next) {
     if (_tileSource == next) return;
     setNavState(() {
       _tileSource = next;
       _tileProvider = OfflineTileProvider(source: next);
     });
-  }
-
-  /// Cycle the online basemap layer. Recreates the tile provider so each
-  /// layer caches under its own folder (styles never mix). The nav map's
-  /// raster fallback follows via `tileSource`.
-  void _cycleTileSource() {
-    final order = _layerOrder;
-    final i = order.indexOf(_tileSource);
-    final next = order[(i < 0 ? 0 : i + 1) % order.length];
-    _setTileSource(next);
   }
 
   // --- multi-stop plan ---
@@ -678,6 +658,21 @@ class _NavigationPageState extends State<NavigationPage>
     _lastLimitSpoke = null;
     _speedChangeDedupe.reset();
     _motorwayWarned = false;
+  }
+
+  /// Fetch the last-known GPS position so the nav map opens centered on the
+  /// driver's current place (not the fixed HCMC fallback). Best-effort.
+  Future<void> _loadInitialCenter() async {
+    try {
+      final p = await Geolocator.getLastKnownPosition();
+      if (p != null && mounted) {
+        setNavState(() {
+          _initialCenter = LatLng(p.latitude, p.longitude);
+        });
+      }
+    } catch (_) {
+      // Best-effort — fall back to the default center.
+    }
   }
 
   /// Push the floating widget's state to the overlay engine: the next-maneuver
@@ -850,6 +845,9 @@ class _NavigationPageState extends State<NavigationPage>
     // swap to the compact layout whenever the OS PiP window appears.
     PipService.instance.init();
     PipService.instance.isPipMode.addListener(_onPipChanged);
+    // Open the map centered on the driver's current/last-known place (from
+    // the last GPS fix), not the fixed HCMC fallback.
+    unawaited(_loadInitialCenter());
 
     _autoConnect = BleAutoConnectService(
       clock: _clock,

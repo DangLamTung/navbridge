@@ -5,7 +5,7 @@ publish_to: 'none'
 # Build 2002: the phone already carries an install with versionCode 2001
 # (from an earlier sideload), so the code must stay above it or Android
 # rejects the install as a downgrade.
-version: 1.1.0+4005
+version: 1.1.1+4006
 
 environment:
   sdk: ^3.12.2

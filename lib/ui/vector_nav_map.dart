@@ -21,6 +21,7 @@ import 'package:latlong2/latlong.dart' as ll;
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'package:navbridge/services/nav_tile_server.dart';
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/offline_cameras.dart';
 import 'package:navbridge/services/offline_geo.dart';
@@ -140,6 +141,7 @@ class VectorNavMap extends StatefulWidget {
     this.controller,
     this.showCompass = true,
     this.defaultZoom = 19,
+    this.initialCenter,
     this.onPoiTap,
     this.onCameraTap,
     this.signs = const [],
@@ -163,6 +165,11 @@ class VectorNavMap extends StatefulWidget {
 
   /// Live position to follow.
   final ll.LatLng? current;
+
+  /// Initial camera center (the driver's current / last-known place). Used so
+  /// the map opens centered on their location instead of the fixed HCMC
+  /// fallback, until the first GPS fix makes [current] non-null.
+  final ll.LatLng? initialCenter;
 
   /// Live GPS speed (m/s) from the receiver. The Kalman fuses it as a second
   /// measurement channel (with its own noise) so the velocity estimate is
@@ -300,6 +307,12 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// Root of the offline raster tile store (`.../offline_tiles`), or null
   /// before [_prepare] runs. Used to build the offline basemap tile URLs.
   String? _offlineTilesRoot;
+
+  /// Loopback port of the local tile server ([NavTileServer]), once started.
+  /// When set, the `basemap` source points at the server so every tile (online
+  /// or cached) is delivered as a decodable PNG — the itel's MapLibre can't
+  /// decode tiles it fetches itself over HTTP.
+  int? _tileServerPort;
 
   /// Offline `raster-dem` source (bundled pmtiles or downloaded terrarium
   /// tiles), or null when no DEM data is present.
@@ -455,6 +468,9 @@ class _VectorNavMapState extends State<VectorNavMap>
       // the nav map's basemap when offline so a zoomed-out / outside-coverage
       // view shows the downloaded tiles instead of a flat white background.
       _offlineTilesRoot = '${sup.path}/offline_tiles';
+      // Start the local tile server so the basemap is served as decodable
+      // PNGs (MapLibre's own HTTP fetch can't decode tiles on this device).
+      unawaited(_startTileServer());
 
       // --- manifest-driven copy of bundled assets -----------------------
       final manifest =
@@ -603,6 +619,45 @@ class _VectorNavMapState extends State<VectorNavMap>
         });
       }
     }
+  }
+
+  /// Start (once) the loopback tile server for the nav basemap and rebuild the
+  /// style so the `basemap` source points at the server. MapLibre then reads
+  /// every tile (online or cached) as a decodable PNG — its own HTTP fetch
+  /// can't decode tiles on this device.
+  Future<void> _startTileServer() async {
+    try {
+      final port = await NavTileServer.instance.ensureStarted(
+        templates: _fallbackTiles(),
+        sourceName: widget.tileSource,
+      );
+      if (_tileServerPort == port) return;
+      _tileServerPort = port;
+      debugPrint('VECTORMAP: tile server on 127.0.0.1:$port');
+      if (!mounted) return;
+      // Rebuild the style so the basemap now points at the loopback server.
+      final s = _baseStyle != null
+          ? _buildStyleString()
+          : _rasterFallbackStyle();
+      _styleString = s;
+      final ctrl = _controller;
+      if (ctrl != null) {
+        unawaited(_reloadStyle(ctrl, s));
+      } else {
+        setState(() {});
+      }
+    } catch (e) {
+      debugPrint('VECTORMAP: tile server start failed: $e');
+    }
+  }
+
+  /// Refresh the active source templates the tile server uses (source toggled,
+  /// night mode, Vietmap base, online/offline).
+  void _refreshTileServer() {
+    NavTileServer.instance.update(
+      templates: _fallbackTiles(),
+      sourceName: widget.tileSource,
+    );
   }
 
   /// Offline DEM source for 3D terrain: a bundled `terrain.pmtiles` wins;
@@ -802,11 +857,18 @@ class _VectorNavMapState extends State<VectorNavMap>
     return jsonEncode(style);
   }
 
-  /// Basemap tile URLs for the nav map's bottom raster layer. Online → the
-  /// user's chosen online basemap ([_fallbackTiles]); OFFLINE → the downloaded
-  /// browse-map tiles (file://) so a zoomed-out / outside-coverage view shows
-  /// real map instead of a flat white background.
+  /// Basemap tile URLs for the nav map's bottom raster layer. When the local
+  /// tile server is up, ALWAYS serve from it (it resolves cache → online →
+  /// synthetic and normalises to PNG, so MapLibre gets decodable tiles).
+  /// Otherwise fall back to the legacy behaviour: online → the user's chosen
+  /// online basemap ([_fallbackTiles]); OFFLINE → the downloaded browse-map
+  /// tiles (file://) so a zoomed-out / outside-coverage view shows real map
+  /// instead of a flat white background.
   List<String> _basemapTiles() {
+    final port = _tileServerPort;
+    if (port != null) {
+      return ['http://127.0.0.1:$port/tiles/{z}/{x}/{y}.png'];
+    }
     final root = _offlineTilesRoot;
     if (widget.offline && root != null) {
       // Map the active source to its offline folder, matching `_sourceDir` in
@@ -1924,6 +1986,8 @@ class _VectorNavMapState extends State<VectorNavMap>
         old.radarUrl != widget.radarUrl ||
         old.showSatellite != widget.showSatellite ||
         old.satelliteUrl != widget.satelliteUrl) {
+      // Keep the local tile server aligned with the active basemap source.
+      _refreshTileServer();
       // Rebuild the style (3D buildings / terrain / night / satellite /
       // basemap layer) and hot-swap it via setStyle — much lighter than
       // re-creating the whole platform view (which reset the camera and
@@ -2095,6 +2159,7 @@ class _VectorNavMapState extends State<VectorNavMap>
         ? _rasterFallbackStyle()
         : _styleString!;
     final c = widget.current;
+    final start = c ?? widget.initialCenter;
     // No pointer wrapper around MapLibreMap — an ancestor Listener interferes
     // with the platform view's multitouch. Follow uses MapLibre's native
     // `animateCamera` (auto-cancelled on user touch) and user takeover is
@@ -2105,9 +2170,9 @@ class _VectorNavMapState extends State<VectorNavMap>
         MapLibreMap(
           styleString: style,
           initialCameraPosition: CameraPosition(
-            target: c == null
+            target: start == null
                 ? const LatLng(10.8231, 106.6297)
-                : LatLng(c.latitude, c.longitude),
+                : LatLng(start.latitude, start.longitude),
             zoom: _zoom,
           ),
           minMaxZoomPreference: const MinMaxZoomPreference(

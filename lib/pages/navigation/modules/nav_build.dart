@@ -46,6 +46,7 @@ extension _NavBuild on _NavigationPageState {
                     routeSteps: route?.steps ?? const [],
                     routeStartIndex: _routeStartIndex,
                     current: current,
+                    initialCenter: _initialCenter,
                     speedMps: _progress?.speedMps,
                     gpsAccuracy: _lastGpsAccuracy,
                     bearing: _routeBearing,
@@ -163,6 +164,7 @@ extension _NavBuild on _NavigationPageState {
                   routeSteps: route?.steps ?? const [],
                   routeStartIndex: _routeStartIndex,
                   current: current,
+                  initialCenter: _initialCenter,
                   speedMps: _progress?.speedMps,
                   gpsAccuracy: _lastGpsAccuracy,
                   bearing: _routeBearing,
@@ -372,38 +374,6 @@ extension _NavBuild on _NavigationPageState {
                                           ),
                                         ),
                                         const SizedBox(height: 8),
-                                        // Rain-radar overlay toggle
-                                        // (RainViewer, free) — live rain map
-                                        // over the basemap while driving.
-                                        Tooltip(
-                                          message: radarOn
-                                              ? 'Radar: bật'
-                                              : 'Radar: tắt',
-                                          child: RoundActionButton(
-                                            icon: Icons.water_drop,
-                                            color: radarOn
-                                                ? const Color(0xFF1A73E8)
-                                                : const Color(0xFF5F6368),
-                                            onTap: _toggleRadar,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        // Weather-satellite overlay toggle
-                                        // (RainViewer infrared clouds) — a
-                                        // distinct layer from the radar.
-                                        Tooltip(
-                                          message: _satelliteOn
-                                              ? 'Vệ tinh thời tiết: bật'
-                                              : 'Vệ tinh thời tiết: tắt',
-                                          child: RoundActionButton(
-                                            icon: Icons.cloud,
-                                            color: _satelliteOn
-                                                ? const Color(0xFF7B1FA2)
-                                                : const Color(0xFF5F6368),
-                                            onTap: _toggleSatellite,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
                                         // Map layers: Basemap type + 3D / terrain / radar / satellite overlays
                                         // grouped into ONE comprehensive Google Maps-style picker button.
                                         PopupMenuButton<String>(
@@ -560,14 +530,6 @@ extension _NavBuild on _NavigationPageState {
                                               ? kAppBlue
                                               : const Color(0xFF5F6368),
                                           onTap: _toggleNight,
-                                        ),
-                                        const SizedBox(height: 8),
-                                        // Basemap layer cycle (online OSM /
-                                        // CARTO / topo / ESRI / Vietmap).
-                                        RoundActionButton(
-                                          icon: Icons.map_outlined,
-                                          color: const Color(0xFF1A73E8),
-                                          onTap: _cycleTileSource,
                                         ),
                                         const SizedBox(height: 8),
                                         RoundActionButton(
@@ -860,33 +822,6 @@ extension _NavBuild on _NavigationPageState {
                               ),
                             ),
                           ),
-                          const SizedBox(height: 8),
-                          // Rain-radar overlay toggle (RainViewer, free).
-                          Tooltip(
-                            message: radarOn ? 'Radar: bật' : 'Radar: tắt',
-                            child: RoundActionButton(
-                              icon: Icons.water_drop,
-                              color: radarOn
-                                  ? const Color(0xFF1A73E8)
-                                  : const Color(0xFF5F6368),
-                              onTap: _toggleRadar,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          // Weather-satellite overlay toggle (RainViewer
-                          // infrared clouds) — distinct from the radar.
-                          Tooltip(
-                            message: _satelliteOn
-                                ? 'Vệ tinh thời tiết: bật'
-                                : 'Vệ tinh thời tiết: tắt',
-                            child: RoundActionButton(
-                              icon: Icons.cloud,
-                              color: _satelliteOn
-                                  ? const Color(0xFF7B1FA2)
-                                  : const Color(0xFF5F6368),
-                              onTap: _toggleSatellite,
-                            ),
-                          ),
                         ],
                       ),
                     ),
@@ -924,10 +859,10 @@ extension _NavBuild on _NavigationPageState {
   Widget _autoCenterButton() {
     const button = 46.0; // RoundActionButton-ish size
     final size = MediaQuery.of(context).size;
-    // Default: bottom-right (was right:14 / bottom:230).
-    final pos =
-        _centerBtnOffset ??
-        Offset(size.width - 14 - button, size.height - 230 - button);
+    // Default: pinned to the LEFT edge, raised above the bottom action bar /
+    // route card so it never overlaps them (it's draggable if the driver wants
+    // it elsewhere).
+    final pos = _centerBtnOffset ?? Offset(14, size.height - 330 - button);
     return Positioned(
       left: pos.dx,
       top: pos.dy,

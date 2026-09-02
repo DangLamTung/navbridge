@@ -309,17 +309,21 @@ class VoiceCommands {
         ? stt.ListenMode.search
         : stt.ListenMode.confirmation,
     partialResults: true,
-    cancelOnError: true,
+    // Don't cancel on a mid-session error: on the low-end itel the recognizer
+    // fires spurious `error_no_match`/`error_speech_timeout` for clear speech,
+    // and cancelOnError would kill the whole window. Let the loop bridge it.
+    cancelOnError: false,
     // VAD silence detection: after the driver stops speaking, this much
-    // silence finalizes the result. RIDING uses a much longer pause so a
-    // wind burst / engine gap between words can't cut the command short;
-    // NORMAL stays short so commands feel instant.
-    // MINIMUM 20 s listen window in BOTH modes — the itel's recognizer tries
-    // to bail after ~1 s, so we force it to keep the mic open.
-    listenFor: const Duration(seconds: 30),
+    // silence finalizes the result. The itel's "AiAi" recognizer tends to
+    // finalize after a very short silence — too fast, cutting the command
+    // off. Generous tolerance in BOTH modes so a pause between words (or a
+    // wind/engine gap while riding) can't end the phrase.
+    // Long listen window in BOTH modes — the itel's recognizer tries to bail
+    // after ~1 s, so we force it to keep the mic open.
+    listenFor: const Duration(seconds: 45),
     pauseFor: ridingMode
-        ? const Duration(milliseconds: 4000)
-        : const Duration(milliseconds: 2500),
+        ? const Duration(milliseconds: 7000)
+        : const Duration(milliseconds: 5000),
   );
 
   /// One-shot listen (tap the mic): returns one phrase. [onPartial] fires
