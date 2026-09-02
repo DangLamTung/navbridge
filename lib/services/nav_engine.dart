@@ -364,9 +364,14 @@ class TurnByTurnEngine {
     _curIdx = _nearestIndex(pos);
     final cum = _cum[_curIdx];
 
-    // Advance to the first step whose maneuver is still ahead of us.
+    // Advance to the first step whose maneuver is still ahead of us. The
+    // advance margin scales with speed: at 60 km/h a fixed 3 m lead is only
+    // ~180 ms of travel, so a GPS fix that lands a second late could mark a
+    // maneuver passed before the UI/voice delivered the final instruction.
+    // Give ~0.8 s of travel (min 3 m) based on the car's real pace.
+    final advanceMargin = math.max(3.0, speedMps * 0.8);
     while (_nextStep < route.steps.length - 1 &&
-        _stepCum[_nextStep] < cum + 3) {
+        _stepCum[_nextStep] < cum + advanceMargin) {
       _nextStep++;
     }
     // The upcoming maneuver is the step AFTER the one we're on: step

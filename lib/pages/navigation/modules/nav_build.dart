@@ -54,7 +54,6 @@ extension _NavBuild on _NavigationPageState {
                     tilt3D: _tilt3d,
                     terrain3D: _terrain3d,
                     nightMode: _nightMode,
-                    satellite: _satellite,
                     vietmapBase:
                         dataSource == 'vietmap' &&
                         !_offline &&
@@ -172,7 +171,6 @@ extension _NavBuild on _NavigationPageState {
                   tilt3D: _tilt3d,
                   terrain3D: _terrain3d,
                   nightMode: _nightMode,
-                  satellite: _satellite,
                   // Vietmap light basemap in nav mode when the Vietmap data
                   // source is active, online, and real keys are compiled in.
                   vietmapBase:

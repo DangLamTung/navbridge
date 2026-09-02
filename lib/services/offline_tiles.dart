@@ -531,6 +531,14 @@ Future<void> ensureOverviewTilesExtracted() async {
           ? file.name.substring(2)
           : file.name;
       if (!name.endsWith('.png')) continue;
+      // Defense-in-depth: the tar is a bundled, trusted app asset, but never
+      // let an entry escape the target dirs (no parent `..`, no absolute
+      // path, no backslash) — a future user-supplied archive must not be able
+      // to write outside `<support>/offline_tiles` (path traversal / zip-slip).
+      final segs = name.split('/');
+      if (segs.any((s) => s == '..' || s.isEmpty || s.contains('\\'))) {
+        continue;
+      }
 
       for (final dir in [overviewDir, cartoDir, osmDir]) {
         final outFile = File('${dir.path}/$name');
