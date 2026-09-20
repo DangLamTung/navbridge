@@ -78,6 +78,22 @@ android/app/*.keystore
 tools/poi/*.osm.pbf
 tools/poi/*.geojson
 
+# Vietmap E-DOG source extracts for the sign build (large; re-download first).
+tools/data/vietmap_kc01/
+
+# Update-server release payload + pulled device trips (local data, not source).
+update/
+docs/trips/
+
+# Continuous trip-log spools (written on device; a `.part` means a drive that
+# was killed mid-way and will be rebuilt by recoverSpooledTrips at next launch).
+*.part
+
+# Local scratch / backups (never commit).
+*.orig
+.tmp_*.png
+assets/offline_map/_bak_*/
+
 # Android build outputs
 android/build/
 
