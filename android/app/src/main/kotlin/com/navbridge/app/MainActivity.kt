@@ -5,11 +5,14 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Rect
+import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
 import com.graphhopper.util.shapes.GHPoint
+import io.flutter.FlutterInjector
 import io.flutter.embedding.android.FlutterActivity
 import kotlin.math.roundToInt
 import io.flutter.embedding.engine.FlutterEngine
@@ -36,6 +39,26 @@ class MainActivity : FlutterActivity() {
     /// navigation voice is as loud as Google Maps. Restored to this value once
     /// the utterance finishes. -1 = no boost active.
     private var boostedMusicVolume = -1
+
+    /// The ONE voice clip currently playing. A new `playAsset` stops it first,
+    /// so two clips can never talk over each other (a fresh MediaPlayer used to
+    /// be created per call with nothing stopping the previous one — that is why
+    /// announcements overlapped).
+    private var activePlayer: MediaPlayer? = null
+
+    /// Set while a Dart caller is awaiting `playAsset(wait: true)`. `stopAsset`
+    /// must complete it, or the Dart voice queue would hang forever.
+    private var pendingWaitResult: MethodChannel.Result? = null
+
+    /// Stop and release the active voice clip, if any.
+    private fun stopActivePlayer() {
+        val p = activePlayer
+        activePlayer = null
+        if (p != null) {
+            try { p.stop() } catch (_: Throwable) {}
+            try { p.release() } catch (_: Throwable) {}
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -124,6 +147,83 @@ class MainActivity : FlutterActivity() {
                         }
                         result.success(null)
                     }
+                    "playAsset" -> {
+                        val assetPath = call.argument<String>("asset")
+                        if (assetPath == null) {
+                            result.error("ARG", "Missing asset argument", null)
+                            return@setMethodCallHandler
+                        }
+                        // `wait` = resolve this call only when the clip has
+                        // actually FINISHED. The Dart side serialises voice
+                        // clips through a queue and needs completion, otherwise
+                        // two clips overlap (a new MediaPlayer used to be
+                        // created per call with nothing stopping the old one).
+                        val wait = call.argument<Boolean>("wait") ?: false
+                        // Never let two voice clips talk over each other: stop
+                        // whatever is still playing first.
+                        stopActivePlayer()
+                        var mp: MediaPlayer? = null
+                        try {
+                            val assetKey = FlutterInjector.instance()
+                                .flutterLoader().getLookupKeyForAsset(assetPath)
+                            val afd = assets.openFd(assetKey)
+                            var resultSent = false
+                            mp = MediaPlayer().apply {
+                                setAudioAttributes(
+                                    AudioAttributes.Builder()
+                                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                        .build()
+                                )
+                                setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                                afd.close()
+                                setOnCompletionListener {
+                                    it.release()
+                                    if (activePlayer === it) activePlayer = null
+                                    if (pendingWaitResult === result) pendingWaitResult = null
+                                    if (!resultSent) {
+                                        resultSent = true
+                                        result.success(true)
+                                    }
+                                }
+                                setOnErrorListener { player, _, _ ->
+                                    player.release()
+                                    if (activePlayer === player) activePlayer = null
+                                    if (pendingWaitResult === result) pendingWaitResult = null
+                                    if (!resultSent) {
+                                        resultSent = true
+                                        result.success(false)
+                                    }
+                                    true
+                                }
+                                prepare()
+                                start()
+                            }
+                            activePlayer = mp
+                            if (wait) {
+                                pendingWaitResult = result
+                            } else if (!resultSent) {
+                                resultSent = true
+                                result.success(true)
+                            }
+                        } catch (e: Exception) {
+                            try { mp?.release() } catch (_: Throwable) {}
+                            if (activePlayer === mp) activePlayer = null
+                            try { result.error("PLAY_ERR", e.message, null) } catch (_: Throwable) {}
+                        }
+                    }
+                    // Interrupt the current voice clip (priority preemption).
+                    // Any Dart caller waiting on it is completed so the queue
+                    // can move on instead of hanging forever.
+                    "stopAsset" -> {
+                        stopActivePlayer()
+                        val pending = pendingWaitResult
+                        pendingWaitResult = null
+                        if (pending != null) {
+                            try { pending.success(false) } catch (_: Throwable) {}
+                        }
+                        result.success(null)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -135,13 +235,17 @@ class MainActivity : FlutterActivity() {
                         val dir = call.argument<String>("dir") ?: ""
                         routing.load(dir, result)
                     }
+                    "unload" -> {
+                        routing.unload(result)
+                    }
                     "route" -> {
                         val flat = call.argument<List<Double>>("points") ?: emptyList()
                         val points = flat.chunked(2).map { GHPoint(it[0], it[1]) }
                         val maxPaths = (call.argument<Int>("alternatives") ?: 1).coerceAtLeast(1)
                         val avoidMotorway = call.argument<Boolean>("avoidMotorway") ?: false
                         val avoidFerry = call.argument<Boolean>("avoidFerry") ?: false
-                        routing.route(points, maxPaths, avoidMotorway, avoidFerry, result)
+                        val heading = call.argument<Double>("heading")
+                        routing.route(points, maxPaths, avoidMotorway, avoidFerry, heading, result)
                     }
                     "isLoaded" -> result.success(routing.isLoaded())
                     "roadInfo" -> {

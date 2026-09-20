@@ -62,6 +62,7 @@ int? _lastCameras;
 String? _lastLayout;
 double? _lastScale;
 double? _lastSpeedKmh;
+String? _lastLimitSrc;
 String? _lastSigns;
 
 /// Push the overlay's state (hidden flag + next maneuver + speed limit +
@@ -86,6 +87,10 @@ Future<void> syncOverlayState({
   /// keeps whatever the overlay currently shows.
   List<int>? cameras,
   double? speedKmh,
+
+  /// Short badge for WHERE the limit came from ('WAZE' / 'SIGN' / 'CITY' …),
+  /// drawn under the dial. Null keeps whatever the overlay currently shows.
+  String? limitSrc,
 
   /// Nearby sign chips to show (every sign within 600 m). Null keeps whatever
   /// the overlay currently shows.
@@ -121,6 +126,7 @@ Future<void> syncOverlayState({
       overlayLayout == _lastLayout &&
       overlayScale == _lastScale &&
       speedKmh == _lastSpeedKmh &&
+      limitSrc == _lastLimitSrc &&
       signSig == _lastSigns) {
     return;
   }
@@ -133,6 +139,7 @@ Future<void> syncOverlayState({
   _lastLayout = overlayLayout;
   _lastScale = overlayScale;
   _lastSpeedKmh = speedKmh;
+  _lastLimitSrc = limitSrc;
   _lastSigns = signSig;
   try {
     unawaited(
@@ -142,6 +149,7 @@ Future<void> syncOverlayState({
         'mMeters': meters,
         'mText': maneuver?.text ?? '',
         'limit': limit,
+        'lsrc': limitSrc,
         'cameras': cameras,
         'layout': overlayLayout,
         'scale': overlayScale,

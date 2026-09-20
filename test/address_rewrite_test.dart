@@ -40,6 +40,16 @@ void main() {
       expect(splitHouseNumber('Đường 30/4'), isNull);
       expect(splitHouseNumber('Chợ Bến Thành'), isNull);
     });
+
+    test(
+      'does not strip date street names as house numbers (30/4 Tân Bình)',
+      () {
+        expect(splitHouseNumber('30/4 Tân Bình'), isNull);
+        expect(splitHouseNumber('30/4 Đà Nẵng'), isNull);
+        expect(splitHouseNumber('30/4, Quận 1'), isNull);
+        expect(splitHouseNumber('2/9 Hải Châu Đà Nẵng'), isNull);
+      },
+    );
   });
 
   group('rewriteDateStreet', () {
@@ -55,6 +65,24 @@ void main() {
     test('accepts - and . separators', () {
       expect(rewriteDateStreet('đường 30-4'), 'đường 30 Tháng 4');
       expect(rewriteDateStreet('đường 30.4'), 'đường 30 Tháng 4');
+    });
+
+    test('rewrites standalone historical date streets', () {
+      expect(rewriteDateStreet('30/4'), '30 Tháng 4');
+      expect(rewriteDateStreet('30/4 Tân Bình'), '30 Tháng 4 Tân Bình');
+      expect(rewriteDateStreet('2/9 Đà Nẵng'), '2 Tháng 9 Đà Nẵng');
+      expect(rewriteDateStreet('19/5'), '19 Tháng 5');
+    });
+
+    test('preserves real alley / house numbers without mangling', () {
+      // 15/4 is not in the historical date street whitelist -> preserved as alley
+      expect(rewriteDateStreet('15/4 Lê Lợi'), isNull);
+      expect(rewriteDateStreet('12/3 Nguyễn Trãi'), isNull);
+      expect(rewriteDateStreet('25/6 Hai Bà Trưng'), isNull);
+      // Preceded by alley keywords -> never rewritten
+      expect(rewriteDateStreet('Hẻm 30/4'), isNull);
+      expect(rewriteDateStreet('Ngõ 30/4'), isNull);
+      expect(rewriteDateStreet('Số 30/4'), isNull);
     });
 
     test('ignores non-date numbers (alley 130/21, day > 31)', () {

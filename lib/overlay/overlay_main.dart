@@ -22,6 +22,7 @@ import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/offline_router.dart';
 import 'package:navbridge/services/offline_speed_limits.dart';
 import 'package:navbridge/services/overpass.dart';
+import 'package:navbridge/services/urban_area.dart';
 import 'package:navbridge/ui/sign_icons.dart';
 import 'package:navbridge/ui/speed_dial.dart' show SpeedDialPainter;
 import 'package:navbridge/ui/widgets.dart';
@@ -46,11 +47,16 @@ class _OverlayAppState extends State<OverlayApp> {
   double _kmh = 0;
   int? _limit;
 
+  /// Short badge for WHERE [_limit] came from ('WAZE' / 'SIGN' / 'CITY' …),
+  /// pushed by the main app and drawn under the dial so the number can be
+  /// judged at a glance instead of guessed.
+  String? _limitSrc;
+
   /// The configured vehicle ('car' | 'motorbike' | 'truck'), loaded from
   /// settings so the standalone floating widget caps the posted limit to the
   /// vehicle's statutory class default — the raw DATMAP/Waze/VietMap value is
   /// a CAR limit, so a motorbike must never show 80 km/h.
-  String _vehicle = 'car';
+  String _vehicle = 'motorbike';
 
   /// Last raw fix — used to DERIVE speed from the distance travelled between
   /// fixes when the phone GPS reports speed = 0 (common on cheap devices).
@@ -133,6 +139,8 @@ class _OverlayAppState extends State<OverlayApp> {
         _mMeters = m['mMeters'] as int?;
         _mText = (m['mText'] ?? '') as String;
         _limit = m['limit'] as int?;
+        final rawSrc = m['lsrc'];
+        if (rawSrc is String) _limitSrc = rawSrc;
         final rawCams = m['cameras'];
         if (rawCams is List) {
           _nearCams = [
@@ -351,19 +359,42 @@ class _OverlayAppState extends State<OverlayApp> {
         if (gh.isNotEmpty) hw = gh;
       } catch (_) {}
 
-      int? limit = await speedLimitAt(pos);
+      final posted = await speedLimitAt(pos);
+      // Which layer answered, before the fallback overwrites the variable.
+      final postedLayer = posted != null ? lastLimitLayer() : null;
+      int? limit = posted;
+      // Nothing posted anywhere: the class default on its own is the RURAL one
+      // (mô tô primary/tertiary = 60), which is wrong inside a town. The
+      // POI-density built-up test picks the road-FORM table instead — exactly
+      // like the main nav's _refreshRoad. Without it the standalone widget (its
+      // main use, over Google Maps / Waze) showed 60 on every 2-lane city
+      // street while the app itself showed 50.
+      final urban = (limit == null || limit <= 0) && await isUrbanArea(pos);
       if (limit == null || limit <= 0) {
         // No posted sign within range → fall back to the statutory VN default
         // for this road class (so the widget shows a real limit instead of "--"
         // when stopped between signs / slightly off the road segment). Same
         // rule as the main nav's _effectiveSpeedLimit.
-        limit = effectiveLimit(hw, vehicle: _vehicle);
+        limit = effectiveLimit(hw, vehicle: _vehicle, urban: urban);
       } else if (_vehicle != 'car') {
         // Cap a (car) posted limit to the vehicle's statutory class default.
         limit = effectiveLimit(hw, vehicle: _vehicle, taggedKmh: limit);
       }
       if (mounted && limit > 0 && limit != _limit) {
         setState(() => _limit = limit);
+      }
+      if (mounted) {
+        // Self-computed path (no main app pushing): name the source ourselves,
+        // so the badge is never misleading on the standalone widget.
+        final label = posted == null
+            ? (urban ? 'CITY' : 'CLASS')
+            : switch (postedLayer) {
+                'segment' => 'WAZE',
+                'waze' => 'WAZE pt',
+                'vietmap' => 'VIETMAP',
+                _ => 'CLASS',
+              };
+        if (label != _limitSrc) setState(() => _limitSrc = label);
       }
     } catch (_) {}
     try {
@@ -505,6 +536,26 @@ class _OverlayAppState extends State<OverlayApp> {
 
               // Overlapping Speed Limit Sign (P.127) at Top-Right
               Positioned(top: 0, right: 0, child: _limitBadgeCircle(size: 46)),
+
+              // Data-source badge (which layer the limit came from), tucked
+              // under the dial where the wrong street name used to sit.
+              if (_limitSrc != null && _limitSrc!.isNotEmpty)
+                Positioned(
+                  left: 0,
+                  bottom: -2,
+                  width: dialSize,
+                  child: Text(
+                    _limitSrc!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Color(0xFFB0BEC5),
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.6,
+                      height: 1.0,
+                    ),
+                  ),
+                ),
             ],
           ),
         ),

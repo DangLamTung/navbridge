@@ -19,8 +19,13 @@ Waze point-notice type -> VN standard kind key + label:
   35         | end_prohibitions  | P.133 Hết mọi lệnh cấm
   (speed cams 12/13 become 'speed' limit signs with value=kmh)
 
-Reads Decode_Waze/point_notices_all.tsv, dedups ~100 m, and merges into
-assets/offline_map/vietnam_signs.json with 5dp coord dedup.
+Reads Decode_Waze/point_notices_v2.tsv (the corrected DB), dedups ~100 m, and
+merges into assets/offline_map/vietnam_signs.json with 5dp coord dedup.
+
+NOTE: This script is superseded by tools/signs/rebuild_waze_assets.py, which
+also fixes the camera asset (types 12/13 are SPEED LIMITS, not cameras) and
+writes the corrected waze_speed_limits.json. This file is kept for reference
+only; prefer rebuild_waze_assets.py for a complete, correct rebuild.
 """
 import json
 import os
@@ -28,7 +33,7 @@ import sys
 
 sys.path.insert(0, "/Users/tungdl/Documents/Eink/navbridge/tool")
 
-SRC = "/Users/tungdl/Documents/Eink/Decode_Waze/point_notices_all.tsv"
+SRC = "/Users/tungdl/Documents/Eink/Decode_Waze/point_notices_v2.tsv"
 ASSET = "/Users/tungdl/Documents/Eink/navbridge/assets/offline_map/vietnam_signs.json"
 
 # Waze type -> (vn kind key, vn label)

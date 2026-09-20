@@ -16,6 +16,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import 'osrm.dart' show distanceMeters;
+import 'urban_area.dart';
 
 /// Road info resolved from OSM tags at a position.
 class RoadInfo {
@@ -42,6 +43,30 @@ class RoadInfo {
   /// only usable signal.
   final bool divided;
 
+  /// WHERE [speedLimit] came from, for the widget's source badge:
+  ///   'segment'  the Waze/WME per-segment posted limit under the car
+  ///   'waze'     a Waze posted-limit POINT
+  ///   'vietmap'  a VietMap E-DOG posted-limit point
+  ///   'osm'      the OSM `maxspeed` tag on the way
+  ///   'city'     statutory value chosen by the POI-density built-up test
+  ///   'class'    statutory class default (no posted data at all)
+  final String src;
+
+  /// True when the value came from the built-up ("khu đông dân cư") rule: the
+  /// POI-density test said this is a town AND nothing was posted, so the limit
+  /// is the road-FORM one (50 hai chiều / 60 đường đôi) instead of the class
+  /// default — which is a RURAL figure (mô tô primary/tertiary = 60).
+  ///
+  /// Logged per fix so a recorded drive can be audited against the vehicle
+  /// class law afterwards: class + vehicle + oneway/lanes/divided + urban is
+  /// the complete set of inputs [effectiveLimit] used.
+  final bool urban;
+
+  /// True for the three posted-limit LAYER sources. While this is true the
+  /// layer is authority: a speed sign may only tighten the limit, never raise
+  /// it — see [signLimitInForce].
+  bool get fromLayer => src == 'segment' || src == 'waze' || src == 'vietmap';
+
   RoadInfo({
     required this.name,
     required this.highway,
@@ -51,6 +76,8 @@ class RoadInfo {
     this.oneway,
     this.lanes,
     this.divided = false,
+    this.urban = false,
+    this.src = 'class',
   });
 }
 
@@ -105,6 +132,7 @@ int statutoryLimit(
   bool? oneway,
   int? lanes,
   bool divided = false,
+  bool urban = false,
 }) {
   const car = {
     'motorway': 120,
@@ -179,11 +207,36 @@ int statutoryLimit(
     _ => car,
   };
   final base = table[highway] ?? 50;
+  // Inside a built-up area the limit is set by the road's FORM, not its class
+  // (Thông tư 38/2024/TT-BGTVT): đường đôi / một chiều từ hai làn = 60, đường
+  // hai chiều / một làn = 50 (ô tô, mô tô); xe tải 50/40. `urban` comes from
+  // the POI-density test in urban_area.dart — NOT from the removed boundary
+  // signs. Cao tốc and the non-motor classes keep their own stricter value,
+  // and this branch is only reached when nothing is posted (a tagged maxspeed
+  // or a Waze segment value always wins).
+  if (urban) {
+    switch (highway) {
+      case 'motorway':
+      case 'motorway_link':
+      case 'living_street':
+      case 'service':
+      case 'pedestrian':
+      case 'footway':
+      case 'cycleway':
+        return base;
+    }
+    return urbanLimit(
+      vehicle: vehicle,
+      oneway: oneway,
+      lanes: lanes,
+      divided: divided,
+    );
+  }
   // `residential` / `unclassified` are built-up street classes by definition,
-  // so the "khu đông dân cư" rule applies whether or not a boundary sign was
-  // crossed: đường đôi / một chiều ≥2 làn → 60, hai chiều → 50. Higher classes
-  // keep the class default (their limit depends on urban/rural, which OSM
-  // cannot tell us), and living_street / service keep their stricter value.
+  // so the "khu đông dân cư" rule applies whether or not the POI test agreed:
+  // đường đôi / một chiều ≥2 làn → 60, hai chiều → 50. Higher classes keep the
+  // class default (their limit depends on urban/rural), and living_street /
+  // service keep their stricter value.
   if (highway == 'residential' || highway == 'unclassified') {
     return urbanLimit(
       vehicle: vehicle,
@@ -211,6 +264,7 @@ int effectiveLimit(
   bool? oneway,
   int? lanes,
   bool divided = false,
+  bool urban = false,
 }) {
   final statutory = statutoryLimit(
     highway,
@@ -218,6 +272,9 @@ int effectiveLimit(
     oneway: oneway,
     lanes: lanes,
     divided: divided,
+    // A posted value IS the authority; the built-up rule only fills the gap
+    // when nothing is posted (taggedKmh == 0).
+    urban: urban && taggedKmh <= 0,
   );
   if (taggedKmh <= 0) return statutory;
   return vehicle == 'car' ? taggedKmh : math.min(statutory, taggedKmh);
@@ -410,6 +467,10 @@ Future<RoadInfo?> fetchRoadInfo(
   // "Đường đôi" detection: another way of the SAME street running roughly the
   // opposite way, close enough to be the other carriageway of a dải phân cách.
   final divided = _hasOppositeCarriageway(pos, best, pool);
+  // Nothing tagged → decide the urban table from POI density, so a class
+  // default meant for the countryside (primary = 80/60) does not stand inside
+  // a town (50, or 60 on a divided road).
+  final urban = taggedKmh <= 0 && await isUrbanArea(pos);
   final info = RoadInfo(
     name: (tags['name'] ?? '') as String,
     highway: highway,
@@ -426,10 +487,15 @@ Future<RoadInfo?> fetchRoadInfo(
       oneway: oneway,
       lanes: lanes,
       divided: divided,
+      urban: urban,
     ),
+    // Provenance for the widget badge: a real posted `maxspeed` beats the
+    // statutory tables; otherwise it is the built-up or the class default.
+    src: taggedKmh > 0 ? 'osm' : (urban ? 'city' : 'class'),
     oneway: oneway,
     lanes: lanes,
     divided: divided,
+    urban: urban,
   );
   _cache.last = info;
   _cache.at = pos;

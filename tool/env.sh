@@ -13,6 +13,13 @@ set -u
 
 ENV_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env"
 
+if [[ -d "$HOME/Documents/Eink/flutter_sdk/bin" ]]; then
+  export PATH="$HOME/Documents/Eink/flutter_sdk/bin:$PATH"
+fi
+if [[ -d "$HOME/Library/Android/sdk/platform-tools" ]]; then
+  export PATH="$HOME/Library/Android/sdk/platform-tools:$PATH"
+fi
+
 DART_DEFINES=()
 
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -37,7 +44,7 @@ fi
 
 for key in VIETMAP_API_KEY VIETMAP_TILE_KEY GOOGLE_GEOCODE_KEY \
   GOOGLE_PLACES_KEY WINDY_API_KEY ACCUWEATHER_API_KEY GRAPH_URL \
-  DEEPSEEK_API_KEY GEMINI_API_KEY TAVILY_API_KEY; do
+  DATA_URL DEEPSEEK_API_KEY GEMINI_API_KEY TAVILY_API_KEY CARTO_API_KEY; do
   val="${!key:-}"
   if [[ -n "$val" ]]; then
     DART_DEFINES+=("--dart-define=$key=$val")

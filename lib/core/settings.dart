@@ -13,6 +13,8 @@ class AppSettings {
   final String dataSource;
 
   /// Vehicle used for speed-limit defaults: 'car' | 'motorbike' | 'truck'.
+  /// Defaults to 'motorbike' — the statutory tables differ per class outside
+  /// town (mô tô primary/tertiary = 60 where the car law says 80/50).
   final String vehicleType;
 
   /// Online geocoding provider: 'photon' (Komoot, default) | 'nominatim' |
@@ -147,7 +149,7 @@ class AppSettings {
   const AppSettings({
     this.forceOffline = false,
     this.dataSource = 'osm',
-    this.vehicleType = 'car',
+    this.vehicleType = 'motorbike',
     this.geocodingProvider = 'photon',
     this.routingEngine = 'auto',
     this.smoothCamera = true,
@@ -408,12 +410,11 @@ Future<AppSettings> _loadSettingsOnce() async {
     final gpsStrength = (j['gpsFilterStrength'] ?? 'standard') as String;
     final customPrompt = (j['aiCustomPrompt'] ?? '') as String;
     final placeSuggestions = (j['aiPlaceSuggestions'] ?? true) as bool;
-    final speechRate = ((j['ttsSpeechRate'] ?? 0.55) as num)
-        .toDouble()
-        .clamp(0.0, 1.0);
-    final pitch = ((j['ttsPitch'] ?? 1.0) as num)
-        .toDouble()
-        .clamp(0.5, 2.0);
+    final speechRate = ((j['ttsSpeechRate'] ?? 0.55) as num).toDouble().clamp(
+      0.0,
+      1.0,
+    );
+    final pitch = ((j['ttsPitch'] ?? 1.0) as num).toDouble().clamp(0.5, 2.0);
     final aiProv = (j['aiProvider'] ?? 'auto') as String;
     final aiBase = (j['aiDeepSeekBaseUrl'] ?? '') as String;
     final aiModel = (j['aiDeepSeekModel'] ?? '') as String;
@@ -440,7 +441,7 @@ Future<AppSettings> _loadSettingsOnce() async {
     return AppSettings(
       forceOffline: (j['forceOffline'] ?? false) as bool,
       dataSource: (j['dataSource'] ?? 'osm') as String,
-      vehicleType: (j['vehicleType'] ?? 'car') as String,
+      vehicleType: (j['vehicleType'] ?? 'motorbike') as String,
       geocodingProvider: (j['geocodingProvider'] ?? 'photon') as String,
       routingEngine: (j['routingEngine'] ?? 'auto') as String,
       smoothCamera: (j['smoothCamera'] ?? true) as bool,

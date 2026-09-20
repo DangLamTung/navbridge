@@ -41,7 +41,8 @@ bool _loaded = false;
 Future<void>? _loading;
 
 /// Whether the speed-limit layer is ready to answer queries.
-bool get speedLimitsLoaded => _segs != null || _waze != null || _vietmap != null;
+bool get speedLimitsLoaded =>
+    _segs != null || _waze != null || _vietmap != null;
 
 /// Whether the speed-limit layer actually has DATA. The public repo ships
 /// empty placeholder files for the enforcement DBs (real Waze/VietMap data is
@@ -70,9 +71,7 @@ Future<void> loadOfflineSpeedLimits() {
 Future<void> _doLoad() async {
   // 1) Waze WME per-SEGMENT limits — the dense layer (95% of HCMC segments).
   try {
-    final bytes = await rootBundle.load(
-      'assets/offline_map/waze_segments.bin',
-    );
+    final bytes = await rootBundle.load('assets/offline_map/waze_segments.bin');
     final raw = bytes.buffer.asUint8List(
       bytes.offsetInBytes,
       bytes.lengthInBytes,
@@ -172,18 +171,28 @@ Future<int?> speedLimitAt(
   // 1) Waze per-SEGMENT limits.
   if (segs != null) {
     final r = _querySegIndex(segs, lat, lon, cosLat, maxDistM, headingDeg);
-    if (r != null) return r;
+    if (r != null) {
+      _lastLayer = 'segment';
+      return r;
+    }
   }
   // 2) Waze point layer — the driver trusts Waze's real posted limits.
   if (waze != null) {
     final r = _queryPointIndex(waze, lat, lon, cosLat, maxDistM);
-    if (r != null) return r;
+    if (r != null) {
+      _lastLayer = 'waze';
+      return r;
+    }
   }
   // 3) VietMap E-DOG official posted limits.
   if (vm != null) {
     final r = _queryPointIndex(vm, lat, lon, cosLat, maxDistM);
-    if (r != null) return r;
+    if (r != null) {
+      _lastLayer = 'vietmap';
+      return r;
+    }
   }
+  _lastLayer = null;
   return null;
 }
 
@@ -302,6 +311,14 @@ Int32List _segPts = Int32List(2 * 64);
 /// the limit — the whole point of the v3 street table. -1 when nothing hit.
 int _lastSegS = -1;
 
+/// Which LAYER produced the most recent [speedLimitAt] result:
+/// 'segment' | 'waze' | 'vietmap', or null when nothing matched. Read it
+/// immediately after `speedLimitAt` (the next lookup overwrites it) — it is
+/// what the widget's source badge shows.
+String? lastLimitLayer() => _lastLayer;
+
+String? _lastLayer;
+
 /// Street name of the Waze segment that produced the most recent
 /// [speedLimitAt] result, or null when that segment carries no name (most
 /// don't) or nothing matched.
@@ -403,7 +420,10 @@ _SegIndex _buildSegIndex(Uint8List raw) {
   for (var s = 0; s < nSegs; s++) {
     final n = _decodeSeg(idx, s);
     if (n < 2) continue;
-    var minLat = 1 << 30, maxLat = -(1 << 30), minLng = 1 << 30, maxLng = -(1 << 30);
+    var minLat = 1 << 30,
+        maxLat = -(1 << 30),
+        minLng = 1 << 30,
+        maxLng = -(1 << 30);
     for (var k = 0; k < n; k++) {
       final la = _segPts[k * 2], ln = _segPts[k * 2 + 1];
       if (la < minLat) minLat = la;
@@ -427,9 +447,7 @@ _SegIndex _buildSegIndex(Uint8List raw) {
     offsets: offsets,
     fwd: fwd,
     rev: rev,
-    grid: {
-      for (final e in grid.entries) e.key: Uint32List.fromList(e.value),
-    },
+    grid: {for (final e in grid.entries) e.key: Uint32List.fromList(e.value)},
     views: bd,
     segStreetBase: segStreetBase,
     segClassBase: segClassBase,

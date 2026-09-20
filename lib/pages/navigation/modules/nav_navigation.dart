@@ -106,6 +106,14 @@ extension _NavNavigation on _NavigationPageState {
       unawaited(_refreshRouteCameras());
     }
     _refreshRoad(snapped);
+    // Waze parity: the posted limit AND the street name come from the layer
+    // under the car, so refresh them on EVERY fix — at the RAW position, with
+    // the route-snapped point only as a fallback (see _correctSpeedFromWaze).
+    // This used to ride inside _refreshRoad's throttle (600 ms + 15 m, 2 s
+    // idle), which is why turning onto a new street left the old limit on
+    // screen, and why the snapped point silently missed the segment that
+    // exists under the car.
+    unawaited(_correctSpeedFromWaze(pos, snapped: snapped));
     // Speak when the posted limit changes (crossing onto another road / a new
     // posted sign).
     _maybeSpeakLimitChange();

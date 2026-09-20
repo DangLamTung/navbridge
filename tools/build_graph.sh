@@ -11,7 +11,16 @@ PBF="$1"
 NAME="$2"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT="$(cd "$(dirname "$PBF")" && pwd)/${NAME}"
-JAVA="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}/bin/java"
+if [[ -n "${JAVA_HOME:-}" && -x "$JAVA_HOME/bin/java" ]]; then
+  JAVA="$JAVA_HOME/bin/java"
+elif [[ -x "/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java" ]]; then
+  JAVA="/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java"
+elif command -v java >/dev/null 2>&1; then
+  JAVA="$(command -v java)"
+else
+  echo "Error: Java 17+ not found. Set JAVA_HOME or install Android Studio." >&2
+  exit 1
+fi
 
 # Classpath: every non-sources jar already fetched by Gradle, excluding
 # GraphHopper 8.x/9.x/10.x (we build/run with 7.0 — the Android-compatible line).

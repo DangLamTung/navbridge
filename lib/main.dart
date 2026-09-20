@@ -6,6 +6,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:navbridge/overlay/overlay_main.dart';
 import 'package:navbridge/pages/navigation/navigation_page.dart';
 import 'package:navbridge/services/nav_foreground.dart';
+import 'package:navbridge/services/trip_logger.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,6 +18,9 @@ Future<void> main() async {
   // nav service is only used once the user starts navigating, by which time
   // init has long finished.
   unawaited(NavForegroundService.instance.init());
+  // A left-over `.part` spool means a drive that was killed mid-way: rebuild it
+  // into a normal trip file before the user looks for it (see TripSpool).
+  unawaited(recoverSpooledTrips());
   runApp(const NavBridgeApp());
 }
 

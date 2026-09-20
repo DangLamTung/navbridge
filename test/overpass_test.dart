@@ -135,4 +135,84 @@ void main() {
       expect(effectiveLimit('trunk', vehicle: 'truck'), 70);
     });
   });
+
+  group('parseOneway / parseLanes', () {
+    test('oneway tag → true / false / unknown', () {
+      expect(parseOneway('yes'), true);
+      expect(parseOneway('true'), true);
+      expect(parseOneway('1'), true);
+      expect(parseOneway('-1'), true); // reverse one-way — still one-way
+      expect(parseOneway('reverse'), true);
+      expect(parseOneway('no'), false);
+      expect(parseOneway('false'), false);
+      expect(parseOneway('0'), false);
+      expect(parseOneway(null), null);
+      expect(parseOneway('alternating'), null); // no usable signal
+    });
+
+    test('lanes tag → per-carriageway count, junk ignored', () {
+      expect(parseLanes('2'), 2);
+      expect(parseLanes(3), 3);
+      expect(parseLanes('2;3'), 2); // multi-value → first
+      expect(parseLanes('1'), 1);
+      expect(parseLanes('0'), null);
+      expect(parseLanes('99'), null); // typo, not a real road
+      expect(parseLanes('n/a'), null);
+      expect(parseLanes(null), null);
+    });
+  });
+
+  group('urbanLimit (khu đông dân cư — Thông tư 38/2024)', () {
+    test('đường đôi / một chiều ≥2 làn → 60', () {
+      expect(urbanLimit(vehicle: 'motorbike', oneway: true, lanes: 2), 60);
+      expect(urbanLimit(vehicle: 'car', oneway: true, lanes: 3), 60);
+      // lanes untagged on a one-way street → assumed ≥2 (one-way through
+      // street). Keeps the value stable across a road's mixed tagging.
+      expect(urbanLimit(vehicle: 'motorbike', oneway: true), 60);
+      // An explicit opposite carriageway alongside = đường đôi.
+      expect(urbanLimit(vehicle: 'car', oneway: false, divided: true), 60);
+    });
+
+    test('đường hai chiều / một chiều một làn → 50', () {
+      expect(urbanLimit(vehicle: 'motorbike', oneway: false), 50);
+      expect(urbanLimit(vehicle: 'car', oneway: false, lanes: 2), 50);
+      expect(urbanLimit(vehicle: 'car'), 50); // both tags unknown
+      expect(urbanLimit(vehicle: 'car', oneway: true, lanes: 1), 50);
+    });
+
+    test('truck is one step lower (50 / 40)', () {
+      expect(urbanLimit(vehicle: 'truck', oneway: true, lanes: 2), 50);
+      expect(urbanLimit(vehicle: 'truck', oneway: false), 40);
+    });
+  });
+
+  group('built-up street classes use the road-form rule', () {
+    test(
+      'residential is 50 two-way, 60 on a divided / one-way ≥2 làn road',
+      () {
+        // Regression: this is the Lũy Bán Bích case — a secondary/residential
+        // street that is a 60 km/h đường đôi read 50 everywhere, because the
+        // built-up limit was frozen at the boundary regardless of road form.
+        expect(statutoryLimit('residential', vehicle: 'car'), 50);
+        expect(statutoryLimit('residential', vehicle: 'motorbike'), 50);
+        expect(
+          statutoryLimit('residential', vehicle: 'motorbike', oneway: true),
+          60,
+        );
+        expect(
+          statutoryLimit('residential', vehicle: 'car', divided: true),
+          60,
+        );
+        expect(
+          statutoryLimit('tertiary', vehicle: 'car', oneway: true),
+          50, // higher classes keep their class default (urban/rural unknown)
+        );
+      },
+    );
+
+    test('effectiveLimit forwards the road-form signals', () {
+      expect(effectiveLimit('residential', vehicle: 'car', oneway: true), 60);
+      expect(effectiveLimit('residential', vehicle: 'car', oneway: false), 50);
+    });
+  });
 }

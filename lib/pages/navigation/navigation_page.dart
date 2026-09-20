@@ -57,6 +57,7 @@ import 'package:navbridge/services/osm_api.dart';
 import 'package:navbridge/services/search_history.dart';
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/overpass.dart';
+import 'package:navbridge/services/urban_area.dart';
 import 'package:navbridge/services/overlay_visibility.dart';
 import 'package:navbridge/services/overlay_widget.dart' show startOverlay;
 import 'package:navbridge/services/radar.dart';
@@ -532,6 +533,12 @@ class _NavigationPageState extends State<NavigationPage>
   /// different street, not merely when 2 s have passed — see [_refreshRoad].
   LatLng? _lastRoadQueryPos;
 
+  /// True while the Waze segment correction is in flight. Its street name is
+  /// read from a module-global (`lastWazeStreetName`) that the NEXT segment
+  /// lookup overwrites, so two overlapping corrections would pair one
+  /// segment's limit with another segment's street. Re-entry is refused.
+  bool _wazeCorrecting = false;
+
   // --- trip logging (Google Takeout) ---
   TripLogger? _trip;
 
@@ -685,6 +692,65 @@ class _NavigationPageState extends State<NavigationPage>
   /// does land on one.
   int get _effectiveSpeedLimit => _effectiveLimit.limit;
 
+  /// Short badge naming WHERE the displayed limit came from — shown under the
+  /// dial in the floating widget and the nav chip. 'SIGN' when a posted sign is
+  /// in force, else the layer behind the road value ('WAZE' segment, 'WAZE pt',
+  /// 'VIETMAP', 'OSM' maxspeed, 'CITY' built-up rule, 'CLASS' default).
+  String get _limitSourceLabel {
+    if (_effectiveLimit.source == 'sign') return 'SIGN';
+    return switch (_roadInfo?.src) {
+      'segment' => 'WAZE',
+      'waze' => 'WAZE pt',
+      'vietmap' => 'VIETMAP',
+      'osm' => 'OSM',
+      'city' => 'CITY',
+      _ => 'CLASS',
+    };
+  }
+
+  /// True once the emulator-replay harness has started navigation.
+  bool _autoSimStarted = false;
+
+  /// EMULATOR-REPLAY HARNESS — active only when the app is built with
+  /// `--dart-define=SIM_ROUTE=lat,lng` (String.fromEnvironment is compiled in,
+  /// so a normal build has an empty string and this returns immediately).
+  ///
+  /// It waits for the first GPS fix, plans a route to that point and starts
+  /// navigation, then prints `AUTOTEST: navigation STARTED` — the marker
+  /// [tool/emulator_gps_replay.py] waits for before pushing the recorded track.
+  /// That is what lets a recorded drive be replayed against the real limit
+  /// chain (road lookup → posted-limit layer → sign adoption → announcements)
+  /// without driving or touching the UI.
+  void _maybeAutoSim() {
+    const spec = String.fromEnvironment('SIM_ROUTE');
+    if (spec.isEmpty) return;
+    final parts = spec.split(',');
+    if (parts.length != 2) return;
+    final lat = double.tryParse(parts[0].trim());
+    final lng = double.tryParse(parts[1].trim());
+    if (lat == null || lng == null) return;
+    debugPrint('AUTOTEST: sim route armed → $lat,$lng');
+    Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      if (_autoSimStarted || _current == null) return;
+      _autoSimStarted = true;
+      t.cancel();
+      unawaited(() async {
+        await _planToPoint('sim', lat, lng);
+        // Let the route build (OSRM round-trip or the offline graph).
+        for (var i = 0; i < 30 && mounted && _route == null; i++) {
+          await Future<void>.delayed(const Duration(seconds: 1));
+        }
+        if (!mounted) return;
+        _startNavigation();
+        debugPrint('AUTOTEST: navigation STARTED');
+      }());
+    });
+  }
+
   /// True when the effective limit comes from a sign the car has NOT reached
   /// yet (adopted early), so it is the NEXT limit rather than the current one.
   bool get _limitIsUpcoming =>
@@ -708,6 +774,10 @@ class _NavigationPageState extends State<NavigationPage>
       signAheadM: _signAheadM,
       signRoad: _signSpeedLimitRoad,
       currentRoad: _roadInfo?.name,
+      // A value that came from the segment layer is authority: a sign may only
+      // tighten it, never raise it. This is what stops a 60 sign standing on
+      // Lũy Bán Bích from lifting Tân Thành / Vườn Lài (50) to 60.
+      layerKmh: (_roadInfo?.fromLayer ?? false) ? (_roadInfo!.speedLimit) : 0,
     );
     final sign = applies ? _vehicleCappedSignLimit : null;
     if (sign != null) return (limit: sign, source: 'sign');
@@ -811,6 +881,7 @@ class _NavigationPageState extends State<NavigationPage>
           ? null
           : OverlayManeuver(nav.iconCode, nav.meter, nav.nextText),
       limit: limit > 0 ? limit : null,
+      limitSrc: _limitSourceLabel,
       // Always send the list (even empty) so the overlay CLEARS a stale
       // camera chip once the car is out of range — not just when there's one.
       cameras: cameraMeters,
@@ -968,6 +1039,12 @@ class _NavigationPageState extends State<NavigationPage>
     // server (DATA_URL) in the background — no APK needed to refresh these
     // DBs. No-op (and no network) when DATA_URL is not set.
     unawaited(OfflineDataUpdater.instance.autoUpdate());
+    // Emulator-replay harness: with --dart-define=SIM_ROUTE=lat,lng the app
+    // plans that route and starts navigation by itself once a GPS fix exists,
+    // so tool/emulator_gps_replay.py can exercise the whole limit chain (road
+    // lookup, layer lookup, sign adoption, announcements) with no UI driving.
+    // No define in a normal build → the constant is empty and this is a no-op.
+    _maybeAutoSim();
     // Auto-show the floating speed/limit widget if the user left it enabled —
     // it runs in its own engine and keeps working over other apps when this
     // app is backgrounded. Best-effort; a missing permission just no-ops.

@@ -88,6 +88,37 @@ void main() {
     expect(ranked.last.name, 'behind');
   });
 
+  test(
+    'rankPoisForRoute: a station JUST behind the car never tops an ahead one',
+    () {
+      // Old bug: rankPoisForRoute only penalised ahead < -50 m, so a station
+      // 0–50 m behind the car scored 0 and ranked ABOVE a genuinely ahead one.
+      // Any negative ahead (station already passed) must sink.
+      final justBehind = PoiResult(
+        name: 'justBehind',
+        lat: 10.6995, // ~5 m behind the car (car at 10.70)
+        lng: 106.60,
+        type: PoiType.fuel,
+      );
+      final ahead = PoiResult(
+        name: 'ahead',
+        lat: 10.73,
+        lng: 106.60,
+        type: PoiType.fuel,
+      );
+      final proj = projectOnRoute(route, justBehind.pos, startIndex: 0);
+      expect(proj.aheadMeters, lessThan(0));
+
+      final ranked = rankPoisForRoute(
+        [ahead, justBehind],
+        route,
+        startIndex: 0,
+      );
+      expect(ranked.first.name, 'ahead');
+      expect(ranked.last.name, 'justBehind');
+    },
+  );
+
   test('PoiType.cafeVong filters hammock-café names (unit)', () {
     expect(PoiType.cafeVong.nameFilter, isNotNull);
     final rx = RegExp(PoiType.cafeVong.nameFilter!, caseSensitive: false);

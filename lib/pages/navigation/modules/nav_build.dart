@@ -284,6 +284,7 @@ extension _NavBuild on _NavigationPageState {
                                     limitOverride: _effectiveSpeedLimit > 0
                                         ? _effectiveSpeedLimit
                                         : null,
+                                    limitSrc: _limitSourceLabel,
                                     fromEsp: _espActive(),
                                   )
                                 else

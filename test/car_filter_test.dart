@@ -102,5 +102,25 @@ void main() {
       // 6 fixes).
       expect(f.bearing, closeTo(90, 15));
     });
+
+    test('ticker predict calls do not cause double-advance upon update', () {
+      final f = CarFilter();
+      f.update(const LatLng(10.82, 106.62), routeBearing: 90);
+      for (var i = 1; i <= 5; i++) {
+        final lng = 106.62 + (i * 10.0) / mPerLng;
+        f.update(LatLng(10.82, lng), dt: 1.0, routeBearing: 90);
+      }
+      // Predict 1.0 s of movement in 20 frame ticks of 0.05 s.
+      for (var i = 0; i < 20; i++) {
+        f.predict(0.05);
+      }
+      // Fresh fix arrives for exactly that 1.0 s interval at +10m east.
+      final freshFix = LatLng(10.82, 106.62 + 60.0 / mPerLng);
+      f.update(freshFix, dt: 1.0, routeBearing: 90);
+      // Position should be fused close to the fresh fix, not double-advanced ahead.
+      final distToFix =
+          (f.position.longitude - freshFix.longitude).abs() * mPerLng;
+      expect(distToFix, lessThan(3.0));
+    });
   });
 }

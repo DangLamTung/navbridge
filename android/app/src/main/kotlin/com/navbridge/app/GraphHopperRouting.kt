@@ -27,6 +27,15 @@ import java.util.concurrent.Executors
 class GraphHopperRouting {
     private var hopper: GraphHopper? = null
     private val executor = Executors.newSingleThreadExecutor()
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private fun postSuccess(result: MethodChannel.Result, value: Any?) {
+        mainHandler.post { result.success(value) }
+    }
+
+    private fun postError(result: MethodChannel.Result, code: String, msg: String?, details: Any? = null) {
+        mainHandler.post { result.error(code, msg, details) }
+    }
 
     fun isLoaded(): Boolean = hopper != null
 
@@ -34,35 +43,75 @@ class GraphHopperRouting {
     private fun carProfile(): Profile =
         Profile("car").setVehicle("car").setWeighting("fastest")
 
-    /** Load a pre-built graph folder (or a `.ghz` zip) at [graphPath]. */
+    /** Load a pre-built graph folder, or convert a `.ghz` zip / `.osm.pbf` on-device at [graphPath]. */
     fun load(graphPath: String, result: MethodChannel.Result) {
         executor.execute {
             try {
-                if (hopper == null) {
-                    val gh = GraphHopper()
-                    val loc = prepareLocation(graphPath)
-                    // MMAP data access: maps graph files lazily instead of
-                    // loading them into the Java heap. Needed for the
-                    // whole-Vietnam graph (~450 MB) on phone-size heaps.
-                    val config = GraphHopperConfig()
-                    config.putObject("graph.dataaccess", "MMAP")
-                    config.putObject("graph.location", loc)
-                    // init() hard-requires these keys even for pure loading.
-                    config.putObject("import.osm.ignored_highways", "")
-                    config.putObject("graph.vehicles", "car")
-                    config.putObject("graph.encoded_values", "")
-                    config.setProfiles(listOf(carProfile()))
-                    gh.init(config)
-                    gh.importOrLoad()
-                    hopper = gh
+                // If a graph was already loaded, close it first so the new file is actually loaded
+                try {
+                    hopper?.close()
+                } catch (_: Throwable) {}
+                hopper = null
+
+                val f = java.io.File(graphPath)
+                if (!f.exists()) throw IllegalStateException("Không tìm thấy dữ liệu: $graphPath")
+
+                val isPbf = f.isFile && (f.name.endsWith(".pbf", ignoreCase = true) ||
+                                        f.name.endsWith(".osm", ignoreCase = true))
+                val loc = prepareLocation(graphPath)
+                val destDir = java.io.File(loc)
+
+                val gh = GraphHopper()
+                val config = GraphHopperConfig()
+                config.putObject("graph.dataaccess", "MMAP")
+                config.putObject("graph.location", loc)
+                config.putObject("import.osm.ignored_highways", "")
+                config.putObject("graph.vehicles", "car")
+                config.putObject("graph.encoded_values", "")
+                config.setProfiles(listOf(carProfile()))
+
+                if (isPbf) {
+                    android.util.Log.i("NavBridgeRouter", "Converting OSM on device: ${f.absolutePath} -> $loc...")
+                    // If destDir existed from an older/different graph, delete it so GraphHopper
+                    // actually runs import rather than skipping it with load()
+                    if (destDir.exists()) {
+                        destDir.deleteRecursively()
+                    }
+                    gh.setOSMFile(f.absolutePath)
                 }
-                result.success(true)
+
+                gh.init(config)
+                gh.importOrLoad()
+
+                // Once conversion on the phone completes, delete the downloaded PBF to free phone storage
+                if (isPbf && f.exists() && f.absolutePath != destDir.absolutePath) {
+                    try {
+                        f.delete()
+                        android.util.Log.i("NavBridgeRouter", "OSM graph converted on device; deleted download ${f.name}")
+                    } catch (e: Throwable) {
+                        android.util.Log.w("NavBridgeRouter", "Could not delete ${f.name}", e)
+                    }
+                }
+
+                hopper = gh
+                postSuccess(result, true)
             } catch (e: Throwable) {
                 // Catch Errors too (e.g. NoSuchMethodError) so the app never
                 // crashes from a graph problem.
                 android.util.Log.e("NavBridgeRouter", "load failed", e)
-                result.error("load_error", e.message ?: "load failed", null)
+                postError(result, "load_error", e.message ?: "load failed")
             }
+        }
+    }
+
+    /** Unload the routing engine and release open file descriptors. */
+    fun unload(result: MethodChannel.Result? = null) {
+        executor.execute {
+            try {
+                hopper?.close()
+            } catch (_: Throwable) {}
+            hopper = null
+            if (result != null) postSuccess(result, true)
         }
     }
 
@@ -81,6 +130,7 @@ class GraphHopperRouting {
         maxPaths: Int,
         avoidMotorway: Boolean,
         avoidFerry: Boolean,
+        heading: Double?,
         result: MethodChannel.Result
     ) {
         executor.execute {
@@ -90,6 +140,21 @@ class GraphHopperRouting {
                 val req = GHRequest()
                 for (p in points) req.addPoint(p)
                 req.setProfile("car")
+                // Depart along the car's travel heading so an off-route
+                // reroute continues forward instead of U-turning back onto the
+                // original road (Google-Maps-style "find the next good road").
+                // Heading only applies on the flex (Dijkstra) algorithm — a
+                // CH-prepared graph ignores it — so disable CH when set.
+                if (heading != null) {
+                    val h = heading % 360.0
+                    if (GHRequest.isAzimuthValue(h)) {
+                        val headings = ArrayList<Double>()
+                        headings.add(h)
+                        for (i in 1 until points.size) headings.add(Double.NaN)
+                        req.setHeadings(headings)
+                        req.putHint("ch.disable", true)
+                    }
+                }
                 if (maxPaths > 1) {
                     req.putHint("alternative_route.max_paths", maxPaths)
                     req.putHint("alternative_route.max_weight_factor", 3)
@@ -118,9 +183,9 @@ class GraphHopperRouting {
                 // List / Map — NOT JSONObject. Send a plain list of maps.
                 val out = ArrayList<Map<String, Any?>>()
                 for (path in rsp.all) out.add(toMap(path))
-                result.success(out)
+                postSuccess(result, out)
             } catch (e: Throwable) {
-                result.error("route_error", e.message ?: "route failed", null)
+                postError(result, "route_error", e.message ?: "route failed")
             }
         }
     }
@@ -156,7 +221,7 @@ class GraphHopperRouting {
                 }
                 val snap = gh.locationIndex.findClosest(lat, lng, EdgeFilter.ALL_EDGES)
                 if (snap == null || !snap.isValid) {
-                    result.success(null)
+                    postSuccess(result, null)
                     return@execute
                 }
                 val edge = snap.closestEdge
@@ -168,17 +233,39 @@ class GraphHopperRouting {
                 val out = HashMap<String, Any?>()
                 out["name"] = edge.name ?: ""
                 out["highway"] = edge.get(roadClass)?.name?.lowercase() ?: ""
+                // One-way flag — the VN built-up speed limit (Thông tư
+                // 38/2024/TT-BGTVT) splits "đường đôi / đường một chiều có từ
+                // hai làn xe cơ giới" (60) from "đường hai chiều / một làn"
+                // (50), and OSM has NO median tag in Vietnam (0 of 9,011
+                // highway ways sampled in HCMC/Đà Nẵng carry one), so `oneway`
+                // is the only usable signal. Read it defensively: a graph built
+                // without the encoded value must not break road info — the Dart
+                // side treats a missing value as "unknown".
+                var oneway: String? = null
+                try {
+                    if (em.hasEncodedValue("oneway")) {
+                        val ow = em.getBooleanEncodedValue("oneway")
+                        oneway = if (edge.get(ow)) "yes" else "no"
+                    }
+                } catch (_: Throwable) {
+                    oneway = null
+                }
+                out["oneway"] = oneway
+                // GraphHopper's default encodings carry no `lanes`; the Dart
+                // side then treats a one-way street as >= 2 lanes (a one-way
+                // through street), which is what the rule keys on.
+                out["lanes"] = null
                 // GraphHopper encodes `maxspeed=none` (no posted limit) as
                 // +Infinity — that means "no limit", so send null and let the
                 // Dart side apply the statutory class default.
                 out["maxspeed"] = if (ms.isFinite() && ms > 0) ms else null
                 android.util.Log.i(
                     "NavBridgeRouter",
-                    "roadInfo: name=${edge.name} highway=${out["highway"]} maxspeed=$ms"
+                    "roadInfo: name=${edge.name} highway=${out["highway"]} maxspeed=$ms oneway=$oneway"
                 )
-                result.success(out)
+                postSuccess(result, out)
             } catch (e: Throwable) {
-                result.error("road_info_error", e.message ?: "road info failed", null)
+                postError(result, "road_info_error", e.message ?: "road info failed")
             }
         }
     }
@@ -194,7 +281,7 @@ class GraphHopperRouting {
                     ?: throw IllegalStateException("Chưa tải bộ dữ liệu")
                 val snap = gh.locationIndex.findClosest(lat, lng, EdgeFilter.ALL_EDGES)
                 if (snap == null || !snap.isValid) {
-                    result.success(null)
+                    postSuccess(result, null)
                     return@execute
                 }
                 val sp = snap.snappedPoint
@@ -207,25 +294,49 @@ class GraphHopperRouting {
                     "NavBridgeRouter",
                     "snap: d=${snap.queryDistance} edge=${snap.closestEdge.edge}"
                 )
-                result.success(out)
+                postSuccess(result, out)
             } catch (e: Throwable) {
-                result.error("snap_error", e.message ?: "snap failed", null)
+                postError(result, "snap_error", e.message ?: "snap failed")
             }
         }
     }
 
     /** If [graphPath] is a `.ghz` zip, extract it next to itself and return
-     *  the extracted folder; otherwise return the path unchanged. */
+     *  the extracted folder; if it is a `.pbf`, return the target folder;
+     *  otherwise return the path unchanged. */
     private fun prepareLocation(graphPath: String): String {
         val f = java.io.File(graphPath)
         if (!f.exists()) throw IllegalStateException("Không tìm thấy dữ liệu: $graphPath")
         if (f.isDirectory) return f.absolutePath
-        val dest = java.io.File(f.parentFile, f.nameWithoutExtension)
-        if (!dest.exists()) {
+
+        val isZip = f.name.endsWith(".ghz", ignoreCase = true) ||
+                    f.name.endsWith(".zip", ignoreCase = true)
+
+        val baseName = if (f.name.endsWith(".osm.pbf", ignoreCase = true)) {
+            f.name.substring(0, f.name.length - 8)
+        } else {
+            f.nameWithoutExtension
+        }
+        val dest = java.io.File(f.parentFile, baseName)
+
+        if (isZip) {
+            if (dest.exists()) {
+                android.util.Log.i("NavBridgeRouter", "Cleaning previous destination $dest...")
+                dest.deleteRecursively()
+            }
+            android.util.Log.i("NavBridgeRouter", "Extracting $f -> $dest...")
+            dest.mkdirs()
             java.util.zip.ZipFile(f).use { zip ->
                 val entries = zip.entries()
                 while (entries.hasMoreElements()) {
                     val e = entries.nextElement()
+                    // Zip-slip guard: reject entries that traverse outside the
+                    // target directory (a malicious/corrupted archive must not
+                    // write arbitrary files on the device).
+                    if (e.name.contains("..")) {
+                        android.util.Log.w("NavBridgeRouter", "Skipping suspicious archive entry: ${e.name}")
+                        continue
+                    }
                     val out = java.io.File(dest, e.name)
                     if (e.isDirectory) {
                         out.mkdirs()
@@ -236,6 +347,15 @@ class GraphHopperRouting {
                         }
                     }
                 }
+            }
+            // Auto-delete the downloaded zip/ghz archive after extraction!
+            try {
+                if (dest.exists() && dest.list()?.isNotEmpty() == true) {
+                    f.delete()
+                    android.util.Log.i("NavBridgeRouter", "Converted archive on device; deleted download archive ${f.name}")
+                }
+            } catch (e: Throwable) {
+                android.util.Log.w("NavBridgeRouter", "Could not delete archive ${f.name}", e)
             }
         }
         return dest.absolutePath

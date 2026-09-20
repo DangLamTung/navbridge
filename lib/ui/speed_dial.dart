@@ -226,6 +226,7 @@ class SpeedDialChip extends StatelessWidget {
     this.info,
     this.speedMps,
     this.limitOverride,
+    this.limitSrc,
     this.fromEsp = false,
     this.dialSize = 72,
   });
@@ -236,6 +237,10 @@ class SpeedDialChip extends StatelessWidget {
   /// Sign-aware effective limit (sign/index value) — same input the compact
   /// chip takes, so switching styles never changes the NUMBER shown.
   final int? limitOverride;
+
+  /// Short badge for WHERE the limit came from ('WAZE' / 'SIGN' / 'CITY' …),
+  /// shown under the dial. Replaces the street name that used to sit here.
+  final String? limitSrc;
 
   final bool fromEsp;
   final double dialSize;
@@ -287,22 +292,49 @@ class SpeedDialChip extends StatelessWidget {
             // No street name here: the road label/name this widget used to
             // print was frequently the wrong street (the graph and the Waze
             // segment layer disagree at junctions), and next to a speed dial it
-            // only invites doubt about the numbers. The dial + limit badge are
-            // the data that matters; the source dot says where it came from.
+            // only invites doubt about the numbers. In its place: WHERE the
+            // number came from (WAZE segment / SIGN / CITY rule / CLASS
+            // default), which is what actually needs checking on the road.
             const SizedBox(width: 6),
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(shape: BoxShape.circle, color: srcColor),
-            ),
-            const SizedBox(width: 3),
-            Text(
-              srcTxt,
-              style: TextStyle(
-                fontSize: 8,
-                fontWeight: FontWeight.w700,
-                color: srcColor,
-              ),
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (limitSrc != null && limitSrc!.isNotEmpty)
+                  Text(
+                    limitSrc!,
+                    style: const TextStyle(
+                      fontSize: 9,
+                      height: 1.0,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.4,
+                      color: Color(0xFFB0BEC5),
+                    ),
+                  ),
+                const SizedBox(height: 3),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: srcColor,
+                      ),
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      srcTxt,
+                      style: TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.w700,
+                        color: srcColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ],
         ),

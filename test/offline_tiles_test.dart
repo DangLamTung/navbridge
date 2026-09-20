@@ -1,6 +1,10 @@
 /// Tests for the slippy-map math and region sizing (`offline_tiles.dart`).
 library;
 
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:navbridge/services/offline_tiles.dart';
 
@@ -83,6 +87,42 @@ void main() {
 
     test('estimatedBytes is positive', () {
       expect(singleTile().estimatedBytes, greaterThan(0));
+    });
+  });
+
+  group('archive decompression with buffer offset', () {
+    test('GZipDecoder handles ByteData slices with non-zero byte offsets', () {
+      final sample = [1, 2, 3, 4, 5, 6, 7, 8];
+      final compressed = GZipEncoder().encode(sample);
+      // Prepend 100 bytes of dummy padding to simulate an asset bundle slice
+      final padded = Uint8List(100 + compressed.length);
+      padded.setRange(100, 100 + compressed.length, compressed);
+
+      final byteData = ByteData.sublistView(
+        padded,
+        100,
+        100 + compressed.length,
+      );
+      expect(byteData.offsetInBytes, 100);
+
+      // Sliced extraction must succeed without FormatException
+      final rawBytes = byteData.buffer.asUint8List(
+        byteData.offsetInBytes,
+        byteData.lengthInBytes,
+      );
+      final decompressed = GZipDecoder().decodeBytes(rawBytes);
+      expect(decompressed, sample);
+    });
+
+    test('overview_tiles.tar.gz unpacks cleanly with TarDecoder', () {
+      final file = File('assets/offline_map/overview_tiles.tar.gz');
+      expect(file.existsSync(), isTrue);
+      final gzBytes = file.readAsBytesSync();
+      final tarBytes = GZipDecoder().decodeBytes(gzBytes);
+      final archive = TarDecoder().decodeBytes(tarBytes);
+      expect(archive.isNotEmpty, isTrue);
+      final pngs = archive.where((f) => f.name.endsWith('.png')).toList();
+      expect(pngs.length, 171);
     });
   });
 }

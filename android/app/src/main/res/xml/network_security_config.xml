@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network security config.
+
+  The navigation map (MapLibre) loads its raster basemap from the app's OWN
+  loopback tile server at http://127.0.0.1:<port>/tiles/... (see
+  NavTileServer). Android blocks cleartext (non-HTTPS) traffic by default on
+  API 28+, so MapLibre's renderer refused those tiles with
+  "CLEARTEXT communication to 127.0.0.1 not permitted by network security
+  policy" — which left the nav basemap blank even though the tile server was
+  working.
+
+  Only loopback (127.0.0.1 / localhost) is whitelisted; every other host still
+  requires HTTPS. This never leaks cleartext to the public network.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

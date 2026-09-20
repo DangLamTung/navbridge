@@ -9,11 +9,14 @@ cd "$(dirname "$0")/.."
 source tool/env.sh
 
 mode="debug"
-case "${1:-}" in
-  --release) mode="release" ;;
-  --profile) mode="profile" ;;
-  "") ;;
-  *) echo "Unknown arg: $1 (use --release or --profile)" >&2; exit 1 ;;
-esac
+extra_args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --release) mode="release"; shift ;;
+    --profile) mode="profile"; shift ;;
+    --debug) mode="debug"; shift ;;
+    *) extra_args+=("$1"); shift ;;
+  esac
+done
 
-exec flutter build apk --"$mode" "${DART_DEFINES[@]}"
+exec flutter build apk --"$mode" ${DART_DEFINES[@]+"${DART_DEFINES[@]}"} ${extra_args[@]+"${extra_args[@]}"}

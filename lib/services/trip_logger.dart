@@ -18,11 +18,19 @@
 /// vehicle was stationary long enough to count as a stop (Google-Timeline
 /// style) — and records them so the trips screen can show the places you
 /// visited on a given date.
+///
+/// CONTINUOUS WRITE: the Takeout document can only be written whole, and
+/// [saveTrip] runs when navigation STOPS — so a drive killed mid-way (force
+/// stop, OOM, crash, battery pull) used to be lost completely. Every fix /
+/// announcement / place is therefore ALSO appended to a `<trip>.part` spool as
+/// one JSON line and flushed immediately ([TripSpool]); [recoverSpooledTrips]
+/// rebuilds a normal trip from it at the next launch, up to the final second.
 library;
 
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -54,6 +62,29 @@ class TripFix {
   /// Which layer produced [limitEffective]: 'sign' | 'road'.
   final String? limitSource;
 
+  /// The badge layer behind the ROAD's value — the chain the limit came from:
+  /// 'segment' (Waze posted limit under the car) | 'waze' | 'vietmap' (VN
+  /// posted-limit points) | 'osm' (the way's `maxspeed` tag) | 'city' (built-up
+  /// rule) | 'class' (statutory class default). See [RoadInfo.src].
+  final String? limitLayer;
+
+  /// Vehicle class the limit was computed for: 'car' | 'motorbike' | 'truck'.
+  /// The statutory tables differ per class (mô tô primary/tertiary = 60 where
+  /// the car law says 80/50), so a logged limit cannot be audited without it.
+  final String? vehicle;
+
+  /// Inputs of the statutory / built-up decision, logged so every recorded
+  /// value can be re-derived offline: OSM class ([highway]) + [vehicle] +
+  /// these three + [urban].
+  final bool? oneway;
+  final int? lanes;
+  final bool? divided;
+
+  /// True when the built-up ("khu đông dân cư") rule chose the value — the
+  /// POI-density test said town and nothing was posted, so the road-FORM limit
+  /// applied (50 hai chiều / 60 đường đôi) instead of the rural class default.
+  final bool? urban;
+
   TripFix({
     required this.time,
     required this.lat,
@@ -67,6 +98,12 @@ class TripFix {
     this.speedLimit,
     this.limitEffective,
     this.limitSource,
+    this.limitLayer,
+    this.vehicle,
+    this.oneway,
+    this.lanes,
+    this.divided,
+    this.urban,
   });
 
   Map<String, dynamic> toTakeout() {
@@ -85,6 +122,13 @@ class TripFix {
       if (speedLimit != null) 'speedLimit': speedLimit,
       if (limitEffective != null) 'limitEffective': limitEffective,
       if (limitSource != null) 'limitSource': limitSource,
+      // Which layer / vehicle class / road tags decided that number.
+      if (limitLayer != null) 'limitLayer': limitLayer,
+      if (vehicle != null) 'vehicle': vehicle,
+      if (oneway != null) 'oneway': oneway,
+      if (lanes != null) 'lanes': lanes,
+      if (divided != null) 'divided': divided,
+      if (urban != null) 'urban': urban,
       'activity': [
         {
           'timestampMs': ms,
@@ -179,8 +223,17 @@ class TripLogger {
   /// position + time so they can be compared against the fixes / street data.
   final List<TripAnnouncement> announcements = [];
 
-  TripLogger({required this.name, DateTime? startedAt})
-    : startedAt = startedAt ?? DateTime.now();
+  TripLogger({required this.name, DateTime? startedAt, this.spoolDir})
+    : startedAt = startedAt ?? DateTime.now() {
+    _spool = TripSpool(fileName: defaultFileName, dir: spoolDir);
+  }
+
+  /// Where the continuous spool is written. Tests inject a temp dir; the app
+  /// passes null and the spool uses [tripsDirectory].
+  final Directory? spoolDir;
+
+  /// The continuous writer — see [TripSpool].
+  late final TripSpool _spool;
 
   // Record at ~1 Hz (1 s / 5 m): standard steady rate — enough that slow
   // heading flips still show in the log without bloating the file.
@@ -196,6 +249,18 @@ class TripLogger {
   static const double _stopMaxSpeedMps = 1.0; // ~3.6 km/h — parked/stopped
 
   int get fixCount => fixes.length;
+
+  /// Records spooled to disk so far (0 while spooling is unavailable).
+  int get spooledRecords => _spool.written;
+
+  /// Stop spooling and delete the `.part` files — called by [saveTrip] once the
+  /// finished trip is safely on disk. Nothing else may call it: keeping the
+  /// spool is the whole point when a save fails.
+  Future<void> discardSpool() => _spool.discard();
+
+  /// Stop spooling but KEEP the file (graceful shutdown, tests). Everything
+  /// already spooled is on disk; [recoverSpooledTrips] can rebuild from it.
+  Future<void> closeSpool() => _spool.close();
 
   bool get hasEnoughData => fixes.length >= 2;
 
@@ -214,6 +279,12 @@ class TripLogger {
     int? speedLimit,
     int? limitEffective,
     String? limitSource,
+    String? limitLayer,
+    String? vehicle,
+    bool? oneway,
+    int? lanes,
+    bool? divided,
+    bool? urban,
   }) {
     if (fixes.isNotEmpty) {
       final last = fixes.last;
@@ -237,10 +308,19 @@ class TripLogger {
         speedLimit: speedLimit,
         limitEffective: limitEffective,
         limitSource: limitSource,
+        limitLayer: limitLayer,
+        vehicle: vehicle,
+        oneway: oneway,
+        lanes: lanes,
+        divided: divided,
+        urban: urban,
       ),
     );
     // Track for place (stop) detection.
     _trackStop(pos, speedMps);
+    // Continuous write: this fix is on disk NOW, so a kill / crash / battery
+    // pull mid-drive loses at most the last second instead of the whole drive.
+    _spool.add('f', fixes.last.toTakeout());
   }
 
   /// Record a voice announcement at [pos] (the car's current position).
@@ -254,6 +334,7 @@ class TripLogger {
         text: text,
       ),
     );
+    _spool.add('a', announcements.last.toJson());
   }
 
   _TripStopCluster? _pendingStop;
@@ -281,14 +362,14 @@ class TripLogger {
       if (pending != null &&
           pending.last.difference(pending.first) >= _stopMinStillSeconds) {
         final mid = LatLng(pending.anchor.latitude, pending.anchor.longitude);
-        places.add(
-          TripPlace(
-            enteredAt: pending.first,
-            leftAt: pending.last,
-            lat: mid.latitude,
-            lng: mid.longitude,
-          ),
+        final place = TripPlace(
+          enteredAt: pending.first,
+          leftAt: pending.last,
+          lat: mid.latitude,
+          lng: mid.longitude,
         );
+        places.add(place);
+        _spool.add('p', place.toJson());
       }
       _pendingStop = null;
     }
@@ -403,11 +484,250 @@ Future<Directory> tripsDirectory() async {
   return dir;
 }
 
+/// CONTINUOUS WRITE — what keeps a drive that gets cut off mid-way.
+///
+/// The Takeout trip is ONE JSON document, so it can only be written whole, and
+/// [saveTrip] runs when navigation STOPS. A trip killed before that (force
+/// stop, OOM kill, crash, battery pull, phone reboot) was lost entirely.
+///
+/// Every record is therefore appended to `<trip>.part` as one JSON LINE and
+/// flushed the moment it happens:
+///
+/// ```
+/// ["f", {"timestampMs":"…","latitudeE7":…}]   fix
+/// ["a", {"text":"Giới hạn 50 km/h",…}]       announcement
+/// ["p", {"enteredAt":"…",…}]                   place (stop)
+/// ```
+///
+/// Append-only + one record per line means a cutoff leaves every COMPLETE line
+/// intact (a torn last line is simply dropped), and [recoverSpooledTrips]
+/// turns it back into a normal trip file at the next launch. At ~1 Hz that is a
+/// few hundred bytes and one flush per fix — negligible, and the only way the
+/// last minutes of a killed drive survive.
+class TripSpool {
+  TripSpool({required this.fileName, this.dir});
+
+  /// Finished trip file name (`…_name.json`); the spool is that + `.part`.
+  final String fileName;
+
+  /// Where to spool (tests inject a temp dir; the app uses [tripsDirectory]).
+  final Directory? dir;
+
+  Future<void> _chain = Future<void>.value();
+  List<IOSink> _sinks = const [];
+  List<String> _paths = const [];
+  bool _closed = false;
+
+  /// True when the spool could not be opened (no path_provider in unit tests,
+  /// read-only storage, …). The app then keeps working from memory and
+  /// [saveTrip] still writes the whole trip at the end.
+  bool failed = false;
+
+  /// Records spooled so far.
+  int written = 0;
+
+  bool get active => !_closed && !failed;
+
+  /// Queue one record. Order is preserved (writes are chained) and the caller
+  /// never awaits — a GPS fix must never block on the disk.
+  void add(String kind, Map<String, dynamic> record) {
+    if (!active) return;
+    _chain = _chain.then((_) => _write(kind, record));
+  }
+
+  Future<void> _write(String kind, Map<String, dynamic> record) async {
+    // NOTE: no `_closed` guard here — records queued before close() must still
+    // reach the disk (close() awaits this chain before closing the sinks).
+    // [add] is what refuses new work once the spool is closed.
+    try {
+      if (_sinks.isEmpty) _sinks = await _open();
+      final line = jsonEncode([kind, record]);
+      for (final s in _sinks) {
+        s.writeln(line);
+      }
+      for (final s in _sinks) {
+        // Flush every record: a buffered line is exactly what a kill loses.
+        await s.flush();
+      }
+      written++;
+    } catch (_) {
+      // Spooling is best-effort — it must never break the in-memory trip or
+      // the final save.
+      failed = true;
+    }
+  }
+
+  Future<List<IOSink>> _open() async {
+    final base = dir ?? await tripsDirectory();
+    if (!base.existsSync()) base.createSync(recursive: true);
+    final paths = <String>['${base.path}/$fileName.part'];
+    // Mirror the spool to the external files dir too: same reason as the
+    // finished trip (readable over adb without a debug build), same one line
+    // per fix.
+    try {
+      final ext = await _externalTripsDir(create: true);
+      if (ext != null && ext.path != base.path) {
+        paths.add('${ext.path}/$fileName.part');
+      }
+    } catch (_) {}
+    _paths = paths;
+    return [
+      for (final p in paths) File(p).openWrite(mode: FileMode.writeOnlyAppend),
+    ];
+  }
+
+  /// Stop writing and close the sinks. The files are KEPT — [discard] removes
+  /// them, and only once the finished trip is on disk.
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    await _chain;
+    for (final s in _sinks) {
+      try {
+        await s.close();
+      } catch (_) {}
+    }
+  }
+
+  /// Close and delete the spool files (after a successful [saveTrip]).
+  Future<void> discard() async {
+    await close();
+    for (final p in _paths) {
+      try {
+        final f = File(p);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
+  }
+}
+
+/// The app's EXTERNAL files dir (`/sdcard/Android/data/<pkg>/files/trips`), or
+/// null when unavailable. No permission is needed for an app's own external
+/// dir and it IS readable over USB/adb, unlike the private documents dir.
+Future<Directory?> _externalTripsDir({bool create = false}) async {
+  try {
+    final ext = await getExternalStorageDirectory();
+    if (ext == null) return null;
+    final dir = Directory('${ext.path}/trips');
+    if (create && !dir.existsSync()) dir.createSync(recursive: true);
+    return dir;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Rebuild a trip (Takeout shape) from a `.part` spool: every complete line is
+/// one record, so the drive is recovered up to the cutoff and a torn last line
+/// is dropped. Returns null when no fix survived.
+Map<String, dynamic>? decodeSpoolFile(File f) {
+  final fixes = <Map<String, dynamic>>[];
+  final places = <Map<String, dynamic>>[];
+  final announcements = <Map<String, dynamic>>[];
+  for (final raw in f.readAsStringSync().split('\n')) {
+    final line = raw.trim();
+    if (line.isEmpty) continue;
+    Object? rec;
+    try {
+      rec = jsonDecode(line);
+    } catch (_) {
+      continue; // torn tail line — everything before it is still good
+    }
+    if (rec is! List || rec.length != 2 || rec[1] is! Map) continue;
+    final body = Map<String, dynamic>.from(rec[1] as Map);
+    switch (rec[0]) {
+      case 'f':
+        fixes.add(body);
+      case 'p':
+        places.add(body);
+      case 'a':
+        announcements.add(body);
+    }
+  }
+  if (fixes.length < 2) return null; // same bar as [TripLogger.hasEnoughData]
+  return {
+    'locations': fixes,
+    'endLocationDetails': [
+      {'endTime': fixes.last['timestamp']},
+    ],
+    'places': places,
+    'announcements': announcements,
+    // Marks a salvaged trip, so a viewer/tool can say so instead of pretending
+    // the drive ended where the app was killed.
+    'recovered': true,
+  };
+}
+
+/// Turn every left-over `<trip>.part` spool into a normal trip file.
+///
+/// A `.part` means a trip that never reached [saveTrip] — the app was killed
+/// mid-drive (or the final write failed). Called at startup; returns how many
+/// trips were recovered. The external copy is used only when the private one is
+/// missing (a reinstall wipes the private dir), and both spool copies are
+/// removed once the trip exists as a `.json`.
+Future<int> recoverSpooledTrips({Directory? dir}) async {
+  try {
+    final trips = dir ?? await tripsDirectory();
+    final parts = <File>[];
+    if (trips.existsSync()) {
+      parts.addAll(
+        trips.listSync().whereType<File>().where(
+          (f) => f.path.endsWith('.part'),
+        ),
+      );
+    }
+    final ext = await _externalTripsDir();
+    if (ext != null && ext.path != trips.path && ext.existsSync()) {
+      final known = {for (final f in parts) f.uri.pathSegments.last};
+      parts.addAll(
+        ext
+            .listSync()
+            .whereType<File>()
+            .where((f) => f.path.endsWith('.part'))
+            .where((f) => !known.contains(f.uri.pathSegments.last)),
+      );
+    }
+
+    var recovered = 0;
+    for (final f in parts) {
+      final base = f.uri.pathSegments.last;
+      final name = base.substring(0, base.length - '.part'.length);
+      final out = File('${trips.path}/$name');
+      // A finished trip always wins: the spool is then just a leftover.
+      if (!out.existsSync()) {
+        final body = decodeSpoolFile(f);
+        if (body == null) {
+          // No complete fix line in it — nothing to rebuild, and leaving the
+          // `.part` around would keep it in the scan forever.
+          debugPrint('TRIP: discarded unusable spool $base');
+        } else {
+          final text = const JsonEncoder.withIndent('  ').convert(body);
+          await out.writeAsString(text);
+          await _mirrorToExternal(name, text);
+          recovered++;
+          debugPrint(
+            'TRIP: recovered ${(body['locations'] as List).length} fixes '
+            'from $base',
+          );
+        }
+      }
+      for (final p in [f, if (ext != null) File('${ext.path}/$base')]) {
+        try {
+          if (p.existsSync()) p.deleteSync();
+        } catch (_) {}
+      }
+    }
+    return recovered;
+  } catch (_) {
+    return 0;
+  }
+}
+
 /// Write a trip to disk in Takeout Records.json format; returns the file.
 ///
 /// Closes the pending stop (so the destination counts as a visited place) and
 /// resolves each detected place's name from the offline POI index before
-/// serializing.
+/// serializing. The continuous spool ([TripSpool]) is deleted only AFTER the
+/// finished file is on disk — a failed save leaves it for [recoverSpooledTrips].
 Future<File> saveTrip(TripLogger trip) async {
   trip.finish();
   try {
@@ -415,12 +735,31 @@ Future<File> saveTrip(TripLogger trip) async {
   } catch (_) {
     // POI lookup is best-effort; a failure must never lose the trip.
   }
+  final body = const JsonEncoder.withIndent('  ').convert(trip.toTakeoutJson());
   final dir = await tripsDirectory();
   final file = File('${dir.path}/${trip.defaultFileName}');
-  await file.writeAsString(
-    const JsonEncoder.withIndent('  ').convert(trip.toTakeoutJson()),
-  );
+  await file.writeAsString(body);
+  await _mirrorToExternal(trip.defaultFileName, body);
+  await trip.discardSpool(); // the trip is safe: the spool is a leftover now
   return file;
+}
+
+/// Mirror the trip into the app's EXTERNAL files dir
+/// (`/sdcard/Android/data/<pkg>/files/trips`).
+///
+/// No permission is needed for an app's own external dir, it survives a
+/// reinstall better than the private one, and unlike `getApplicationDocuments
+/// Directory()` it is READABLE OVER USB/adb — which is the difference between
+/// "send me that trip log" being one `adb pull` and having to install a
+/// debug-signed build to get `run-as`.
+Future<void> _mirrorToExternal(String name, String body) async {
+  try {
+    final dir = await _externalTripsDir(create: true);
+    if (dir == null) return;
+    await File('${dir.path}/$name').writeAsString(body);
+  } catch (_) {
+    // Best-effort mirror: the private copy is the authoritative one.
+  }
 }
 
 /// All saved trips, newest first.

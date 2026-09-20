@@ -65,4 +65,28 @@ void main() {
       );
     });
   });
+
+  group('osrmBearingsParam', () {
+    test('empty when startBearing is null or points < 2', () {
+      expect(osrmBearingsParam(2, null), '');
+      expect(osrmBearingsParam(1, (90.0, 45.0)), '');
+      expect(osrmBearingsParam(0, (90.0, 45.0)), '');
+    });
+
+    test('formats correctly for 2 coordinates (one trailing semicolon)', () {
+      expect(osrmBearingsParam(2, (90.0, 45.0)), '&bearings=90,45;');
+    });
+
+    test(
+      'formats correctly for 3 coordinates (two trailing semicolons for unconstrained stops)',
+      () {
+        expect(osrmBearingsParam(3, (180.0, 30.0)), '&bearings=180,30;;');
+      },
+    );
+
+    test('normalizes bearing to 0..359', () {
+      expect(osrmBearingsParam(2, (370.0, 45.0)), '&bearings=10,45;');
+      expect(osrmBearingsParam(2, (-30.0, 45.0)), '&bearings=330,45;');
+    });
+  });
 }

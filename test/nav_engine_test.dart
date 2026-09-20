@@ -97,6 +97,66 @@ void main() {
       expect(engine.offRouteDistance(far), greaterThan(900));
     });
 
+    test(
+      'offRouteDistance calculates perpendicular segment distance (not vertex distance)',
+      () {
+        // 2 vertices spaced ~400m apart
+        final longRoute = OsrmRoute(
+          distance: 400,
+          duration: 30,
+          geometry: const [
+            LatLng(10.8000, 106.6000),
+            LatLng(10.8000, 106.6036), // ~393m east
+          ],
+          steps: [
+            OsrmStep(
+              name: 'Đường Dài',
+              distance: 400,
+              duration: 30,
+              type: 'depart',
+              modifier: null,
+              maneuver: const LatLng(10.8000, 106.6000),
+            ),
+          ],
+        );
+        final engine = TurnByTurnEngine(longRoute);
+        // Midpoint directly on the road (~200m from both vertices)
+        final midOnRoad = const LatLng(10.8000, 106.6018);
+        expect(
+          engine.offRouteDistance(midOnRoad),
+          lessThan(2),
+        ); // ~0m, NOT ~200m
+
+        // Point 25m north of the midpoint
+        final off25m = LatLng(10.8000 + 25 / 111320.0, 106.6018);
+        expect(engine.offRouteDistance(off25m), closeTo(25, 2));
+
+        // Point 70m north (off-route)
+        final off70m = LatLng(10.8000 + 70 / 111320.0, 106.6018);
+        expect(engine.offRouteDistance(off70m), closeTo(70, 3));
+      },
+    );
+
+    test('currentStopIndex reports active stop correctly', () {
+      final base = _straightRoute();
+      final route = OsrmRoute(
+        distance: base.distance,
+        duration: base.duration,
+        geometry: base.geometry,
+        steps: base.steps,
+        stopCumulative: const [300, 600, 1110],
+      );
+      final engine = TurnByTurnEngine(route, stopNames: const ['A', 'B', 'C']);
+      engine.update(base.geometry.first);
+      expect(engine.currentStopIndex, 0);
+
+      engine.update(engine.positionAtDistance(400));
+      expect(engine.currentStopIndex, 1);
+
+      engine.update(engine.positionAtDistance(700));
+      expect(engine.currentStopIndex, 2);
+    });
+
     test('multi-stop routes report the approaching stop', () {
       final base = _straightRoute();
       final route = OsrmRoute(

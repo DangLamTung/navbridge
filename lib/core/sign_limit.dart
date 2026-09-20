@@ -36,16 +36,26 @@ const double kSignAdoptM = 400.0;
 const double kSignWarnM = 1000.0;
 
 /// True when the adopted sign ([signValue]) is IN FORCE — not merely previewed.
+///
+/// [layerKmh] is the posted limit the SEGMENT layer under the car carries
+/// (0 = unknown). When it is known, the sign may only TIGHTEN it, never raise
+/// it: on the 2026-09-20 drive three real VietMap 60 signs standing on Lũy Bán
+/// Bích (141-340 m away, their own segment says 60) were applied to Tân Thành
+/// and Vườn Lài, whose segment says 50 — 166 fixes of the chip reading 60 on a
+/// 50 street. A stricter sign (a genuine 40 in a school zone) still applies.
 bool signLimitInForce({
   required int? signValue,
   required double signAheadM,
   required String? signRoad,
   required String? currentRoad,
+  int layerKmh = 0,
 }) {
   if (signValue == null || signValue <= 0) return false;
   // 1. not there yet → the road's own limit still stands
   if (signAheadM > kSignReachedM) return false;
-  // 2. posted on another road → not ours
+  // 2. the segment layer is authority → a sign may only tighten it
+  if (layerKmh > 0 && signValue > layerKmh) return false;
+  // 3. posted on another road → not ours
   if (signRoad == null || signRoad.isEmpty) return true;
   return signRoad == currentRoad;
 }

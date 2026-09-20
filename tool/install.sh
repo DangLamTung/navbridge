@@ -13,12 +13,19 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do
     continue
   fi
   ABI=$(adb shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')
-  case "$ABI" in
-    arm64-v8a) APK="$OUT/app-arm64-v8a-release.apk" ;;
-    armeabi-v7a|armeabi) APK="$OUT/app-armeabi-v7a-release.apk" ;;
-    x86_64) APK="$OUT/app-x86_64-release.apk" ;;
-    *) APK="$OUT/app-release.apk" ;;
-  esac
+  if [[ -n "${1:-}" && -f "$1" ]]; then
+    APK="$1"
+  else
+    case "$ABI" in
+      arm64-v8a) APK="$OUT/app-arm64-v8a-release.apk" ;;
+      armeabi-v7a|armeabi) APK="$OUT/app-armeabi-v7a-release.apk" ;;
+      x86_64) APK="$OUT/app-x86_64-release.apk" ;;
+      *) APK="$OUT/app-release.apk" ;;
+    esac
+    if [[ ! -f "$APK" && -f "$OUT/app-release.apk" ]]; then
+      APK="$OUT/app-release.apk"
+    fi
+  fi
   echo "ABI=$ABI -> $APK"
   if adb install -r "$APK"; then
     echo "INSTALL OK"

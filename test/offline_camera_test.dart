@@ -2,13 +2,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'package:navbridge/services/offline_cameras.dart';
+import 'package:navbridge/services/offline_scan_isolate.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('loads bundled camera index', () async {
     final cams = await loadOfflineCameras();
-    if (cams.isEmpty) return; // real DB is local-only (CI ships an empty stub)
     expect(cams, isNotEmpty);
     // Every camera has valid Vietnam coordinates + a focus.
     for (final c in cams) {
@@ -21,7 +21,7 @@ void main() {
 
   test('camerasAheadOnRoute returns ordered ahead cameras', () async {
     final cams = await loadOfflineCameras();
-    if (cams.isEmpty) return; // guard if asset missing in test env
+    expect(cams, isNotEmpty);
     // A route through the middle of TP Hà Giang (where cameras cluster).
     final geometry = [
       const LatLng(22.80, 104.97),
@@ -50,7 +50,7 @@ void main() {
 
   test('camerasNearRoute returns only cameras on/near the route', () async {
     final cams = await loadOfflineCameras();
-    if (cams.isEmpty) return;
+    expect(cams, isNotEmpty);
     // A short route through the middle of TP Hà Giang (camera cluster). The
     // corridor is 200 m either side of the polyline.
     final geometry = [
@@ -76,7 +76,7 @@ void main() {
 
   test('camera index covers 60+ provinces (Vietnam-wide)', () async {
     final cams = await loadOfflineCameras();
-    if (cams.isEmpty) return;
+    expect(cams, isNotEmpty);
     // Every camera carries a province/district tag (from the build pipeline).
     final tagged = cams.where((c) => (c.district ?? '').isNotEmpty);
     // The vast majority must be tagged; the DB covers 60/63 provinces after
@@ -98,6 +98,134 @@ void main() {
         reason: '$p should have cameras after the crawl',
       );
     }
+  });
+
+  test('mostImportantCameraAhead prefers red-light/speed over nearer '
+      'surveillance', () {
+    OfflineCamera cam(String? type, String focus, double lat, double lng) =>
+        OfflineCamera(
+          name: 'Camera',
+          lat: lat,
+          lng: lng,
+          focus: focus,
+          type: type,
+          source: 'vietmap',
+        );
+    // A surveillance camera 60 m ahead must NOT shadow the red-light camera
+    // 200 m ahead — 76% of the DB is surveillance, so nearest-first made the
+    // useful warning lose.
+    final surveillance = CameraAhead(
+      camera: cam('traffic_camera', 'violations', 10.0, 106.0),
+      routeMeters: 60,
+    );
+    final redLight = CameraAhead(
+      camera: cam('red_light_camera', 'red_light', 10.01, 106.0),
+      routeMeters: 200,
+    );
+    final speed = CameraAhead(
+      camera: cam('speed_camera', 'speed', 10.02, 106.0),
+      routeMeters: 260,
+    );
+    expect(
+      mostImportantCameraAhead([surveillance, redLight, speed])!.camera.type,
+      'red_light_camera',
+    );
+
+    // Same type → the nearest still wins (no pointless jump to a far one).
+    final far = CameraAhead(
+      camera: cam('speed_camera', 'speed', 10.0, 106.0),
+      routeMeters: 500,
+    );
+    final near = CameraAhead(
+      camera: cam('speed_camera', 'speed', 10.01, 106.0),
+      routeMeters: 120,
+    );
+    expect(mostImportantCameraAhead([far, near])!.routeMeters, 120);
+
+    // Untyped police rows fall back to their focus (violations = lowest).
+    final police = CameraAhead(
+      camera: OfflineCamera(
+        name: 'Camera',
+        lat: 10.0,
+        lng: 106.0,
+        focus: 'violations',
+        source: 'police',
+      ),
+      routeMeters: 30,
+    );
+    expect(
+      mostImportantCameraAhead([police, redLight])!.camera.type,
+      'red_light_camera',
+    );
+    expect(mostImportantCameraAhead(const []), isNull);
+  });
+
+  test('dedupCameraAhead collapses same-focus cameras within ~100 m', () {
+    OfflineCamera cam(
+      String focus,
+      double lat,
+      double lng, {
+      String src = 'waze',
+    }) => OfflineCamera(
+      name: 'Camera',
+      lat: lat,
+      lng: lng,
+      focus: focus,
+      source: src,
+    );
+    // Same focus (speed), ~50 m apart → 1 (cross-source duplicate).
+    expect(
+      dedupCameraAhead([
+        CameraAhead(camera: cam('speed', 10.7695, 106.6930), routeMeters: 10),
+        CameraAhead(camera: cam('speed', 10.7699, 106.6934), routeMeters: 60),
+      ]),
+      hasLength(1),
+    );
+    // Different focus at the same spot (speed + red_light) → both kept.
+    expect(
+      dedupCameraAhead([
+        CameraAhead(camera: cam('speed', 10.7695, 106.6930), routeMeters: 10),
+        CameraAhead(
+          camera: cam('red_light', 10.7695, 106.6930),
+          routeMeters: 10,
+        ),
+      ]),
+      hasLength(2),
+    );
+    // Same focus but far apart (>100 m) → both kept.
+    expect(
+      dedupCameraAhead([
+        CameraAhead(camera: cam('speed', 10.7695, 106.6930), routeMeters: 10),
+        CameraAhead(camera: cam('speed', 10.7900, 106.6930), routeMeters: 400),
+      ]),
+      hasLength(2),
+    );
+  });
+
+  test('dedupCameras collapses same-focus cameras within ~100 m', () {
+    OfflineCamera cam(String focus, double lat, double lng) => OfflineCamera(
+      name: 'Camera',
+      lat: lat,
+      lng: lng,
+      focus: focus,
+      source: 'waze',
+    );
+    // Same focus, ~50 m apart → 1.
+    expect(
+      dedupCameras([
+        cam('violations', 10.7695, 106.6930),
+        cam('violations', 10.7699, 106.6934),
+      ]),
+      hasLength(1),
+    );
+    // Different focus at one spot → both kept.
+    expect(
+      dedupCameras([
+        cam('speed', 10.7695, 106.6930),
+        cam('red_light', 10.7695, 106.6930),
+      ]),
+      hasLength(2),
+    );
   });
 }
 

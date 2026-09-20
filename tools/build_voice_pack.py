@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Emit a machine-readable catalog of the NavBridge Vietnamese voice phrases.
+
+The app builds its spoken guidance from a set of fixed strings + templates in
+`lib/` (nav_voice.dart, nav_signs.dart, nav_weather.dart, nav_search.dart,
+nav_protocol.dart). This tool extracts the human-visible strings and emits a
+single JSON "voice pack" catalog so the phrases can be:
+  * reviewed / edited independently,
+  * used to generate pre-recorded clips for a custom speaker,
+  * localized / overridden without touching the navigation logic.
+
+Usage:
+    python3 tools/build_voice_pack.py [--out tools/voice_phrases.json]
+
+The output JSON groups phrases by category. Each entry has:
+    key, text (the VN string, with {placeholder} tokens), and Optional notes.
+"""
+import argparse
+import json
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+
+# phrase templates gathered from the source. Placeholders use {name} so a
+# recording script / TTS could substitute real values. Fixed strings appear as
+# plain text. 'near'/'far' variants are given explicitly where the app uses them.
+VOICE_PACK = {
+    "meta": {
+        "language": "vi-VN",
+        "engine": "Android TextToSpeech (FlutterTts)",
+        "audio_usage": "USAGE_ASSISTANCE_NAVIGATION_GUIDANCE",
+        "generator": "tools/build_voice_pack.py",
+    },
+    "maneuvers": {
+        "verbs": {
+            "turn_left": "rẽ trái",
+            "turn_right": "rẽ phải",
+            "slight_left": "rẽ trái nhẹ",
+            "slight_right": "rẽ phải nhẹ",
+            "uturn": "quay đầu",
+            "roundabout": "đi theo vòng xuyến",
+            "arrive": "đến nơi",
+            "default": "đi thẳng",
+        },
+        "templates": {
+            "head_up": "Đi{onRoad}, sau {distance}, {verb}{into}{nextNext}.{limit}",
+            "final": "{verb}{into}{nextNext}.{limit}",
+            "on_road": " trên {road}",
+            "into_road": " vào {road}",
+            "next_next": ", sau đó {verb} vào {road}",
+            "limit": " Tốc độ tối đa {limit} km/h.",
+            "arrive": "Bạn đã đến nơi.",
+            "arrive_side": "Điểm đến{side}.",
+            "side_left": " bên trái.",
+            "side_right": " bên phải.",
+        },
+    },
+    "distance": {
+        "meters": "{meters} mét",
+        "km": "{km} km",
+    },
+    "signs": {
+        "zone_enter": "Vào khu đông dân cư, giới hạn {limit} km/h",
+        "zone_leave": "Hết khu đông dân cư",
+        "items": {
+            "stop": {"near": "Biển STOP sắp tới", "far": "Biển STOP phía trước {distance}"},
+            "give_way": {"near": "Biển nhường đường sắp tới", "far": "Biển nhường đường phía trước {distance}"},
+            "no_passing": {"near": "Cấm vượt sắp tới", "far": "Cấm vượt phía trước {distance}"},
+            "no_left_turn": {"near": "Cấm rẽ trái sắp tới", "far": "Cấm rẽ trái phía trước {distance}"},
+            "no_right_turn": {"near": "Cấm rẽ phải sắp tới", "far": "Cấm rẽ phải phía trước {distance}"},
+            "no_u_turn": {"near": "Cấm quay đầu sắp tới", "far": "Cấm quay đầu phía trước {distance}"},
+            "no_left_uturn": {"near": "Cấm rẽ trái và quay đầu sắp tới", "far": "Cấm rẽ trái và quay đầu phía trước {distance}"},
+            "no_right_uturn": {"near": "Cấm rẽ phải và quay đầu sắp tới", "far": "Cấm rẽ phải và quay đầu phía trước {distance}"},
+            "no_passing_end": {"near": "Hết cấm vượt sắp tới", "far": "Hết cấm vượt phía trước {distance}"},
+            "only_straight": {"near": "Chỉ đi thẳng sắp tới", "far": "Chỉ được đi thẳng phía trước {distance}"},
+            "only_right": {"near": "Chỉ rẽ phải sắp tới", "far": "Chỉ được rẽ phải phía trước {distance}"},
+            "only_left": {"near": "Chỉ rẽ trái sắp tới", "far": "Chỉ được rẽ trái phía trước {distance}"},
+            "end_prohibitions": {"near": "Hết mọi lệnh cấm sắp tới", "far": "Hết mọi lệnh cấm phía trước {distance}"},
+            "slow_down": {"near": "Giảm tốc độ sắp tới", "far": "Giảm tốc độ phía trước {distance}"},
+            "toll_booth": {"near": "Trạm thu phí sắp tới", "far": "Trạm thu phí phía trước {distance}"},
+            "railway_crossing": {"near": "Đường ngang giao với đường sắt sắp tới", "far": "Đường ngang giao với đường sắt phía trước {distance}"},
+            "tunnel": {"near": "Hầm đường bộ sắp tới", "far": "Hầm đường bộ phía trước {distance}"},
+            "no_auto": {"near": "Cấm ô tô sắp tới", "far": "Cấm ô tô phía trước {distance}"},
+            "no_moto": {"near": "Cấm xe máy sắp tới", "far": "Cấm xe máy phía trước {distance}"},
+            "no_parking": {"near": "Cấm đỗ xe sắp tới", "far": "Cấm đỗ xe phía trước {distance}"},
+            "no_straight": {"near": "Cấm đi thẳng sắp tới", "far": "Cấm đi thẳng phía trước {distance}"},
+            "no_turn_both": {"near": "Cấm rẽ trái và rẽ phải sắp tới", "far": "Cấm rẽ trái và rẽ phải phía trước {distance}"},
+            "one_way": {"near": "Đường một chiều sắp tới", "far": "Đường một chiều phía trước {distance}"},
+            "reserved_lane": {"near": "Làn dành riêng sắp tới", "far": "Làn dành riêng phía trước {distance}"},
+            "signal": {"near": "Đèn giao thông sắp tới", "far": "Đèn giao thông phía trước {distance}"},
+        },
+    },
+    "cameras": {
+        "heads": {
+            "speed_limit": "Camera tốc độ {limit} km/h",
+            "speed": "Camera tốc độ",
+            "traffic": "Camera giám sát giao thông",
+            "penalty": "Camera phạt nguội",
+            "red_light": "Camera đèn đỏ",
+            "unconfirmed": "Có thể có camera",
+            "default": "Camera",
+        },
+        "templates": {
+            "near": "{head}{segment} ngay phía trước",
+            "far": "{head}{segment} phía trước {distance}",
+            "segment": " trên đoạn {distance}",
+        },
+    },
+    "speed": {
+        "limit_change": "Giới hạn {limit} km/h",
+        "overspeed_mild": "Vượt quá tốc độ {over} km/h.",
+        "overspeed_strong": "Giảm tốc độ! Vượt quá tốc độ.",
+        "motorway_no_moto": "Chú ý! Xe mô tô không được phép đi vào đường cao tốc. Xin thoát cao tốc khi có thể.",
+    },
+    "weather": {
+        "rain_ahead_km": "Trời đang mưa phía trước, cách đây khoảng {km} ki lô mét.",
+        "rain_ahead": "Trời đang mưa trên tuyến đường phía trước.",
+        "rain_likely": "Trời sắp mưa trên tuyến đường phía trước, xác suất {p} phần trăm.",
+    },
+    "search_state": {
+        "prompt": "Bạn muốn tìm địa điểm nào?",
+        "searching": "Đang tìm {type}…",
+        "found_route": "Đã tìm thấy {name}, bắt đầu chỉ đường.",
+        "not_found": "Không tìm thấy địa điểm {query}.",
+        "found": "Đã tìm thấy {name}.",
+        "start_route": "Bắt đầu chỉ đường.",
+        "stop_route": "Đã dừng chỉ đường.",
+        "voice_on": "Đã bật hướng dẫn bằng giọng nói.",
+        "voice_off": "Đã tắt nghe liên tục.",
+        "listening": "Nghe rồi, nói lệnh đi.",
+        "gps_weak": "Tín hiệu GPS yếu, vị trí có thể không chính xác.",
+        "ai_prompt": "Bạn muốn hỏi AI điều gì?",
+        "ai_not_understood": "Xin lỗi, tôi không hiểu lệnh.",
+        "voice_help": "Bạn có thể nói: chỉ đường tới chợ Bến Thành, bắt đầu, dừng lại, phóng to, thu nhỏ, bật tiếng, tắt tiếng, nghe luôn, hỏi AI.",
+    },
+    "ai_context": {
+        "remaining_km": "còn {km} km đến điểm đến",
+        "passes": "{n} đoạn đèo",
+        "tunnels": "{n} hầm",
+        "railways": "{n} đường ngang giao với đường sắt",
+        "slow_zones": "{n} đoạn giảm tốc độ",
+        "no_passing_zones": "{n} đoạn cấm vượt",
+        "winding_km": "{km} km đường uốn gắt",
+    },
+}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--out", default=str(REPO / "tools" / "voice_phrases.json"))
+    args = ap.parse_args()
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(VOICE_PACK, f, ensure_ascii=False, indent=2)
+    # count of leaf strings
+    def count(d):
+        n = 0
+        for v in d.values():
+            n += count(v) if isinstance(v, dict) else (1 if isinstance(v, str) else 0)
+        return n
+    print(f"wrote {out}  ({count(VOICE_PACK) - 3} phrases)")
+
+
+if __name__ == "__main__":
+    main()

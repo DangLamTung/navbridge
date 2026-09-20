@@ -7,6 +7,11 @@
     <!-- GPS for turn-by-turn -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- The floating widget keeps its own GPS stream while NavBridge is
+         backgrounded (over Google Maps / Waze). Android 10+ needs this to
+         deliver location fixes to a backgrounded app; without it the overlay
+         speed/limit/camera freezes the moment the user switches apps. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
     <!-- BLE to the E-ink clock -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation"/>
@@ -33,6 +38,9 @@
     <!-- TTS engine (voice guidance → Bluetooth speaker) -->
     <queries>
         <intent>
+            <action android:name="android.speech.RecognitionService"/>
+        </intent>
+        <intent>
             <action android:name="android.intent.action.TTS_SERVICE"/>
         </intent>
     </queries>
@@ -43,7 +51,11 @@
         android:label="NavBridge"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:largeHeap="true">
+        android:largeHeap="true"
+        android:networkSecurityConfig="@xml/network_security_config">
+        <!-- The nav map's own loopback tile server (http://127.0.0.1:<port>/tiles/
+             ...) is whitelisted for cleartext in res/xml/network_security_config.xml;
+             every other host still requires HTTPS. -->
         <!-- Cold-start fix for low-end phones (itel / Mali GPU): Impeller's
              Vulkan backend compiles shaders at launch, adding seconds to the
              first frame on Mali. Opt back into Skia for a much faster cold

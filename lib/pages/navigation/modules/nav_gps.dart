@@ -370,7 +370,8 @@ extension _NavGps on _NavigationPageState {
         : 0.0;
     final isDiverging = hDiff > 65.0 && _lastSpeedMps >= 1.8;
 
-    _netOnRoute = onRoute && !isDiverging; // authoritative while fresh (see _handleNav)
+    _netOnRoute =
+        onRoute && !isDiverging; // authoritative while fresh (see _handleNav)
     if (_netOnRoute) {
       _netOffSince = null;
       _offRouteSince = null; // network says we're on a route road — trust it
@@ -439,7 +440,7 @@ extension _NavGps on _NavigationPageState {
   /// consumed before the async work, so a cycle skipped by `_roadLoading`
   /// still burned the whole window. The on-device GraphHopper lookup is
   /// instant and offline, so re-querying on distance is cheap.
-  static const double _roadRequeryM = 15;
+  static const double _roadRequeryM = 8;
 
   /// Floor between queries so GPS jitter while stationary can't spin.
   static const Duration _roadRequeryMinGap = Duration(milliseconds: 600);
@@ -454,8 +455,9 @@ extension _NavGps on _NavigationPageState {
     final now = DateTime.now();
     final last = _lastRoadQuery;
     final lastPos = _lastRoadQueryPos;
-    final elapsed =
-        last == null ? const Duration(days: 1) : now.difference(last);
+    final elapsed = last == null
+        ? const Duration(days: 1)
+        : now.difference(last);
     // Distance travelled since the last query, compared SQUARED so no sqrt
     // (and no extra import) is needed. Longitude is scaled by cos(lat) for
     // the ~10-11° N latitudes this app runs at.
@@ -466,7 +468,8 @@ extension _NavGps on _NavigationPageState {
       moved2 = dLat * dLat + dLng * dLng;
     }
     final movedEnough = moved2 >= _roadRequeryM * _roadRequeryM;
-    final due = (elapsed >= _roadRequeryMinGap && movedEnough) ||
+    final due =
+        (elapsed >= _roadRequeryMinGap && movedEnough) ||
         elapsed >= _roadRequeryIdleGap;
     if (!due) return;
     _lastRoadQuery = now;
@@ -484,10 +487,9 @@ extension _NavGps on _NavigationPageState {
           if (r.maxspeed == null && !_offline && !forceOffline) {
             unawaited(_correctSpeedFromOsm(pos));
           }
-          // Offline, nationwide, instant: the bundled Waze/VietMap posted-limit
-          // points carry the REAL sign — overwrite the statutory estimate when
-          // one is right under the car.
-          unawaited(_correctSpeedFromWaze(pos));
+          // The posted-limit lookup itself runs on EVERY fix in the nav tick
+          // (see _signAhead/_correctSpeedFromWaze call site) — doing it here
+          // too would just duplicate it behind this 600 ms/8 m throttle.
           _maybeWarnMotorwayProhibited();
           return;
         }
@@ -511,12 +513,6 @@ extension _NavGps on _NavigationPageState {
     } finally {
       if (mounted) setNavState(() => _roadLoading = false);
     }
-    // Apply the real posted Waze/VietMap limit here too — the graph branch
-    // already calls _correctSpeedFromWaze, but this Overpass fallback path
-    // skipped it, so the announced limit could be the statutory estimate
-    // instead of the real posted value. (After the finally so the
-    // _roadLoading guard inside the helper passes.)
-    unawaited(_correctSpeedFromWaze(pos));
   }
 
   /// Background speed-limit correction: re-fetch road info from OSM (which
@@ -545,12 +541,43 @@ extension _NavGps on _NavigationPageState {
   /// can only estimate the statutory class default; Waze/VietMap carry the
   /// actual posted sign, so when one is within a few metres of the car its
   /// value wins. Best-effort: on no match the graph/statutory value stands.
-  Future<void> _correctSpeedFromWaze(LatLng pos) async {
+  /// True while [_correctSpeedFromWaze] is in flight (declared on the state
+  /// class — see [_wazeCorrecting]): keeps the limit and the street name from
+  /// the SAME segment lookup.
+  ///
+  /// [raw] is the physical GPS fix; [snapped] the route-projected point. The
+  /// posted limit is looked up at [raw] FIRST because that is where the car
+  /// actually is: measured on the 2026-09-20 drive, the route-snapped point
+  /// missed the segment that exists at the raw fix on 178 fixes (7.4%) — the
+  /// chip stayed on the class default for up to 25 s on Tân Thành, Bàu Cát,
+  /// Vân Côi, Phan Sào Nam, Đồng Đen, Trương Công Định, Cách Mạng Tháng Tám
+  /// and Lý Thường Kiệt. [snapped] is used only when [raw] finds nothing.
+  Future<void> _correctSpeedFromWaze(LatLng raw, {LatLng? snapped}) async {
     if (_roadLoading) return; // don't stack/race with the main road fetch
-    final lim = await speedLimitAt(
+    if (_wazeCorrecting) return; // keep limit + street from the same lookup
+    _wazeCorrecting = true;
+    try {
+      await _correctSpeedFromWazeInner(raw, snapped: snapped);
+    } finally {
+      _wazeCorrecting = false;
+    }
+  }
+
+  Future<void> _correctSpeedFromWazeInner(LatLng pos, {LatLng? snapped}) async {
+    var lim = await speedLimitAt(
       pos,
       headingDeg: _heading == 0 ? null : _heading,
     );
+    var usedSnapped = false;
+    if (lim == null && snapped != null && snapped != pos) {
+      lim = await speedLimitAt(
+        snapped,
+        headingDeg: _heading == 0 ? null : _heading,
+      );
+      usedSnapped = lim != null;
+    }
+    // Which layer answered — read before any other lookup overwrites it.
+    final layerKind = lastLimitLayer();
     // Street name from the SAME segment record that produced the limit. Must be
     // read immediately after speedLimitAt — the next lookup overwrites it.
     final wazeName = lastWazeStreetName();
@@ -567,8 +594,9 @@ extension _NavGps on _NavigationPageState {
     // code published a FRESH limit while explicitly keeping `name: cur.name`,
     // so the chip paired the new limit with the PREVIOUS street's name until
     // the throttled road query caught up.
-    final name =
-        (wazeName != null && wazeName.isNotEmpty) ? wazeName : cur.name;
+    final name = (wazeName != null && wazeName.isNotEmpty)
+        ? wazeName
+        : cur.name;
     if (lim == null) {
       // No posted limit on this segment: still adopt a better name when Waze
       // has one, so the label can catch up independently of the limit.
@@ -584,6 +612,8 @@ extension _NavGps on _NavigationPageState {
           oneway: cur.oneway,
           lanes: cur.lanes,
           divided: cur.divided,
+          urban: cur.urban,
+          src: cur.src,
         );
       });
       return;
@@ -602,7 +632,7 @@ extension _NavGps on _NavigationPageState {
     if (v == cur.speedLimit && name == cur.name) return;
     debugPrint(
       'ROAD: waze limit=$lim -> $v (was ${cur.speedLimit}) '
-      'street="$name" ${cur.highway}',
+      'street="$name" ${cur.highway} from=${usedSnapped ? 'snapped' : 'raw'}',
     );
     setNavState(() {
       _roadInfo = RoadInfo(
@@ -614,6 +644,11 @@ extension _NavGps on _NavigationPageState {
         oneway: cur.oneway,
         lanes: cur.lanes,
         divided: cur.divided,
+        urban: cur.urban,
+        // The posted-limit layer has now spoken: from here a speed sign may
+        // only tighten this value, never raise it (signLimitInForce), and the
+        // widget badge names the layer that produced it.
+        src: layerKind ?? 'segment',
       );
     });
   }
@@ -675,6 +710,12 @@ extension _NavGps on _NavigationPageState {
     final oneway = parseOneway(g['oneway'] as String?);
     final lanes = parseLanes(g['lanes']);
     final divided = g['divided'] == true;
+    // The graph rarely carries a real `maxspeed`, so its value is the class
+    // default — which is the RURAL one (primary 80 for a car / 60 for a mô tô).
+    // Inside a town that is wrong: the built-up rule caps it at 50 (60 on a
+    // đường đôi). POI density decides which table applies; a posted value
+    // (graph maxspeed or a Waze segment) always wins over it.
+    final urban = (ms ?? 0) <= 0 && await isUrbanArea(pos);
     final limit = effectiveLimit(
       highway,
       vehicle: vehicleType,
@@ -682,6 +723,7 @@ extension _NavGps on _NavigationPageState {
       oneway: oneway,
       lanes: lanes,
       divided: divided,
+      urban: urban,
     );
     return RoadInfo(
       name: (g['name'] ?? '') as String,
@@ -689,9 +731,11 @@ extension _NavGps on _NavigationPageState {
       maxspeed: ms == null ? null : '$ms',
       label: label,
       speedLimit: limit,
+      src: ms != null ? 'osm' : (urban ? 'city' : 'class'),
       oneway: oneway,
       lanes: lanes,
       divided: divided,
+      urban: urban,
     );
   }
 
@@ -713,6 +757,15 @@ extension _NavGps on _NavigationPageState {
       speedLimit: r?.speedLimit,
       limitEffective: eff.limit > 0 ? eff.limit : null,
       limitSource: eff.source,
+      // The decision inputs, so any logged limit can be re-derived offline:
+      // which layer was behind the road value, the vehicle class its table was
+      // read with, and the road tags the built-up rule keys on.
+      limitLayer: r?.src,
+      vehicle: vehicleType,
+      oneway: r?.oneway,
+      lanes: r?.lanes,
+      divided: r?.divided,
+      urban: r?.urban,
     );
   }
 

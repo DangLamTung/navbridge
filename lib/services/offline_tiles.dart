@@ -366,7 +366,11 @@ String navSpeedStyle = 'dial';
 
 /// Vehicle used for speed-limit defaults: 'car' | 'motorbike' | 'truck'.
 /// Persisted; applied on top of the road's OSM `maxspeed` (when tagged).
-String vehicleType = 'car';
+///
+/// Mô tô is the default: this is a motorbike nav, and the class tables differ
+/// outside town (mô tô primary/tertiary = 60 where the car law says 80/50), so
+/// a car default silently showed car-law numbers to a rider.
+String vehicleType = 'motorbike';
 
 /// Online geocoding provider: 'photon' (Komoot, default — free, no key,
 /// faster + better Vietnamese results) | 'nominatim' | 'vietmap' (Vietnam-
@@ -1074,7 +1078,6 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
     return null;
   }
 
-
   /// Synthesizes a missing tile by cropping and upsampling from its parent tile at $z-1$.
   /// Synthesizes a missing tile by cropping and upsampling from the nearest
   /// available ancestor tile (parent at $z-1, grandparent at $z-2, … up to
@@ -1135,8 +1138,12 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
       );
       canvas.drawImageRect(
         frame.image,
-        Rect.fromLTWH(srcX.toDouble(), srcY.toDouble(), srcSize.toDouble(),
-            srcSize.toDouble()),
+        Rect.fromLTWH(
+          srcX.toDouble(),
+          srcY.toDouble(),
+          srcSize.toDouble(),
+          srcSize.toDouble(),
+        ),
         Rect.fromLTWH(0, 0, outSize.toDouble(), outSize.toDouble()),
         Paint()..filterQuality = FilterQuality.medium,
       );
