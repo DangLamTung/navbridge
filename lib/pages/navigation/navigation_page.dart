@@ -57,8 +57,8 @@ import 'package:navbridge/services/osm_api.dart';
 import 'package:navbridge/services/search_history.dart';
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/overpass.dart';
-import 'package:navbridge/services/urban_area.dart';
 import 'package:navbridge/services/overlay_visibility.dart';
+import 'package:navbridge/ui/limit_source.dart';
 import 'package:navbridge/services/overlay_widget.dart' show startOverlay;
 import 'package:navbridge/services/radar.dart';
 import 'package:navbridge/services/route_export.dart';
@@ -696,17 +696,8 @@ class _NavigationPageState extends State<NavigationPage>
   /// dial in the floating widget and the nav chip. 'SIGN' when a posted sign is
   /// in force, else the layer behind the road value ('WAZE' segment, 'WAZE pt',
   /// 'VIETMAP', 'OSM' maxspeed, 'CITY' built-up rule, 'CLASS' default).
-  String get _limitSourceLabel {
-    if (_effectiveLimit.source == 'sign') return 'SIGN';
-    return switch (_roadInfo?.src) {
-      'segment' => 'WAZE',
-      'waze' => 'WAZE pt',
-      'vietmap' => 'VIETMAP',
-      'osm' => 'OSM',
-      'city' => 'CITY',
-      _ => 'CLASS',
-    };
-  }
+  String get _limitSourceLabel =>
+      limitSourceLabel(_roadInfo?.src, sign: _effectiveLimit.source == 'sign');
 
   /// True once the emulator-replay harness has started navigation.
   bool _autoSimStarted = false;

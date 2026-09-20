@@ -22,7 +22,7 @@ import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/offline_router.dart';
 import 'package:navbridge/services/offline_speed_limits.dart';
 import 'package:navbridge/services/overpass.dart';
-import 'package:navbridge/services/urban_area.dart';
+import 'package:navbridge/ui/limit_source.dart';
 import 'package:navbridge/ui/sign_icons.dart';
 import 'package:navbridge/ui/speed_dial.dart' show SpeedDialPainter;
 import 'package:navbridge/ui/widgets.dart';
@@ -351,49 +351,56 @@ class _OverlayAppState extends State<OverlayApp> {
         now.difference(_lastMsgAt!) < const Duration(seconds: 2);
     if (pushedFresh) return;
     try {
-      // Best-effort road class (used as the statutory-default fallback).
+      // Road class + form tags for the statutory fallback (all of it comes from
+      // the same on-device graph the app uses).
       String hw = 'unclassified';
+      var roadName = '';
+      bool? oneway;
+      int? lanes;
+      var divided = false;
       try {
         final g = await OfflineRouter.instance.roadInfo(pos);
         final gh = (g?['highway'] ?? '') as String;
         if (gh.isNotEmpty) hw = gh;
+        roadName = (g?['name'] ?? '') as String;
+        oneway = parseOneway(g?['oneway'] as String?);
+        lanes = parseLanes(g?['lanes']);
+        divided = g?['divided'] == true;
       } catch (_) {}
 
       final posted = await speedLimitAt(pos);
       // Which layer answered, before the fallback overwrites the variable.
       final postedLayer = posted != null ? lastLimitLayer() : null;
-      int? limit = posted;
-      // Nothing posted anywhere: the class default on its own is the RURAL one
-      // (mô tô primary/tertiary = 60), which is wrong inside a town. The
-      // POI-density built-up test picks the road-FORM table instead — exactly
-      // like the main nav's _refreshRoad. Without it the standalone widget (its
-      // main use, over Google Maps / Waze) showed 60 on every 2-lane city
-      // street while the app itself showed 50.
-      final urban = (limit == null || limit <= 0) && await isUrbanArea(pos);
-      if (limit == null || limit <= 0) {
-        // No posted sign within range → fall back to the statutory VN default
-        // for this road class (so the widget shows a real limit instead of "--"
-        // when stopped between signs / slightly off the road segment). Same
-        // rule as the main nav's _effectiveSpeedLimit.
-        limit = effectiveLimit(hw, vehicle: _vehicle, urban: urban);
-      } else if (_vehicle != 'car') {
-        // Cap a (car) posted limit to the vehicle's statutory class default.
-        limit = effectiveLimit(hw, vehicle: _vehicle, taggedKmh: limit);
-      }
+      // ONE decision, shared with the app (roadInfoFromRoad + applyPostedLayer):
+      // the posted layer wins when it answered, otherwise the road's own class
+      // table applies with the built-up rule on top. This widget used to
+      // re-derive the fallback itself and kept the RURAL class default in town
+      // (60 on a 2-lane city street) while the app showed 50.
+      final road = roadInfoFromRoad(
+        name: roadName,
+        highway: hw,
+        vehicle: _vehicle,
+        oneway: oneway,
+        lanes: lanes,
+        divided: divided,
+        urban: await builtUpRuleApplies(pos, hasPosted: posted != null),
+      );
+      final decided = (posted != null && posted > 0)
+          ? applyPostedLayer(
+              road,
+              kmh: posted,
+              vehicle: _vehicle,
+              layerSrc: postedLayer ?? srcSegment,
+            )
+          : road;
+      final limit = decided.speedLimit;
       if (mounted && limit > 0 && limit != _limit) {
         setState(() => _limit = limit);
       }
       if (mounted) {
-        // Self-computed path (no main app pushing): name the source ourselves,
-        // so the badge is never misleading on the standalone widget.
-        final label = posted == null
-            ? (urban ? 'CITY' : 'CLASS')
-            : switch (postedLayer) {
-                'segment' => 'WAZE',
-                'waze' => 'WAZE pt',
-                'vietmap' => 'VIETMAP',
-                _ => 'CLASS',
-              };
+        // Self-computed path (no main app pushing): name the source with the
+        // SAME mapper the app uses, so the two badges can never disagree.
+        final label = limitSourceLabel(decided.src);
         if (label != _limitSrc) setState(() => _limitSrc = label);
       }
     } catch (_) {}

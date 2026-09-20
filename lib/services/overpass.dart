@@ -79,6 +79,27 @@ class RoadInfo {
     this.urban = false,
     this.src = 'class',
   });
+
+  /// Same road, a couple of fields replaced. Use this instead of re-listing
+  /// every field: the hand-written copies had to be updated whenever a field
+  /// was added, and silently dropped the new one when they weren't.
+  RoadInfo copyWith({
+    String? name,
+    String? maxspeed,
+    int? speedLimit,
+    String? src,
+  }) => RoadInfo(
+    name: name ?? this.name,
+    highway: highway,
+    maxspeed: maxspeed ?? this.maxspeed,
+    label: label,
+    speedLimit: speedLimit ?? this.speedLimit,
+    oneway: oneway,
+    lanes: lanes,
+    divided: divided,
+    urban: urban,
+    src: src ?? this.src,
+  );
 }
 
 /// Overpass mirrors — tried in order until one answers.
@@ -280,6 +301,104 @@ int effectiveLimit(
   return vehicle == 'car' ? taggedKmh : math.min(statutory, taggedKmh);
 }
 
+/// True when the built-up ("khu đông dân cư") rule applies at [pos]: the road has
+/// nothing posted, and the POI-density test says this is a town.
+///
+/// The ONE place this question is answered. It used to be re-derived separately
+/// by the Overpass lookup, the on-device graph lookup and the standalone overlay
+/// — the overlay's copy was missing it entirely, which is how it kept showing the
+/// rural class default (60 on a 2-lane city street) after the app was fixed.
+Future<bool> builtUpRuleApplies(LatLng pos, {required bool hasPosted}) async =>
+    !hasPosted && await isUrbanArea(pos);
+
+/// Provenance labels for [RoadInfo.src]. Use these instead of string literals so
+/// a typo cannot silently disable the layer-authority rule ([RoadInfo.fromLayer]).
+const String srcSegment = 'segment'; // Waze/WME per-segment posted limit
+const String srcWazePoint = 'waze'; // Waze posted-limit point
+const String srcVietmap = 'vietmap'; // VietMap E-DOG posted-limit point
+const String srcOsm = 'osm'; // the way's own `maxspeed` tag
+const String srcCity = 'city'; // built-up rule (POI density)
+const String srcClass = 'class'; // statutory class default
+
+/// Build the [RoadInfo] for a road from its OWN data (class + tags + form),
+/// applying the statutory / built-up fallback.
+///
+/// Shared by every lookup path (Overpass, on-device graph, standalone overlay)
+/// so the three cannot drift apart: they used to construct this independently,
+/// which is why a rule fix had to be applied three times.
+RoadInfo roadInfoFromRoad({
+  required String name,
+  required String highway,
+  required String vehicle,
+  int taggedKmh = 0,
+  String? maxspeedTag,
+  bool? oneway,
+  int? lanes,
+  bool divided = false,
+  bool urban = false,
+}) {
+  final hasPosted = taggedKmh > 0;
+  return RoadInfo(
+    name: name,
+    highway: highway,
+    maxspeed: maxspeedTag,
+    label: classInfo(highway).$1,
+    speedLimit: effectiveLimit(
+      highway,
+      vehicle: vehicle,
+      taggedKmh: taggedKmh,
+      oneway: oneway,
+      lanes: lanes,
+      divided: divided,
+      urban: urban,
+    ),
+    oneway: oneway,
+    lanes: lanes,
+    divided: divided,
+    urban: urban,
+    // A real posted `maxspeed` beats the statutory tables; otherwise the value
+    // is the built-up or the class default.
+    src: hasPosted ? srcOsm : (urban ? srcCity : srcClass),
+  );
+}
+
+/// Apply a posted-limit LAYER value (Waze segment / Waze point / VietMap point)
+/// to [road].
+///
+/// The layer is authority, but the posted value is CAR-oriented: for motorbikes
+/// and trucks it only TIGHTENS the vehicle's statutory class default, never
+/// lifts it (see [effectiveLimit]). [name] is optional — the layer often carries
+/// a better street name than the graph/OSM way does.
+RoadInfo applyPostedLayer(
+  RoadInfo road, {
+  required int kmh,
+  required String vehicle,
+  required String layerSrc,
+  String? name,
+}) {
+  return RoadInfo(
+    name: (name != null && name.isNotEmpty) ? name : road.name,
+    highway: road.highway,
+    maxspeed: '$kmh',
+    label: road.label,
+    speedLimit: effectiveLimit(
+      road.highway,
+      vehicle: vehicle,
+      taggedKmh: kmh,
+      oneway: road.oneway,
+      lanes: road.lanes,
+      divided: road.divided,
+    ),
+    oneway: road.oneway,
+    lanes: road.lanes,
+    divided: road.divided,
+    urban: road.urban,
+    // The posted-limit layer has now spoken: from here a speed sign may only
+    // tighten this value (see [signLimitInForce]).
+    src: layerSrc,
+  );
+}
+
 /// Parse the OSM `oneway` tag → true (one-way) / false (two-way) / null
 /// (untagged). `-1` and `reverse` are OSM's "one-way, against the way
 /// direction" spellings — still one-way.
@@ -459,7 +578,6 @@ Future<RoadInfo?> fetchRoadInfo(
 
   final tags = (best['tags'] as Map<String, dynamic>? ?? {});
   final highway = (tags['highway'] ?? '') as String;
-  final (label, _) = classInfo(highway);
   final tagged = _effectiveMaxspeed(tags);
   final taggedKmh = tagged == null ? 0 : parseMaxspeed(tagged, 0);
   final oneway = parseOneway(tags['oneway'] as String?);
@@ -470,28 +588,18 @@ Future<RoadInfo?> fetchRoadInfo(
   // Nothing tagged → decide the urban table from POI density, so a class
   // default meant for the countryside (primary = 80/60) does not stand inside
   // a town (50, or 60 on a divided road).
-  final urban = taggedKmh <= 0 && await isUrbanArea(pos);
-  final info = RoadInfo(
+  final urban = await builtUpRuleApplies(pos, hasPosted: taggedKmh > 0);
+  // One constructor for every lookup path — see [roadInfoFromRoad].
+  final info = roadInfoFromRoad(
     name: (tags['name'] ?? '') as String,
     highway: highway,
-    // Prefer the plain maxspeed, then the directional / conditional
-    // variants. `maxspeed:forward` is usually a superset of `maxspeed` on
-    // dual carriageways (both directions are posted separately), but the
+    vehicle: vehicle,
+    taggedKmh: taggedKmh,
+    // The raw tag text is kept for the chip ("50", "50 km/h", …). `tagged`
+    // prefers the plain `maxspeed`, then the directional / conditional variants
+    // — `maxspeed:forward` is usually a superset on dual carriageways, but the
     // plain tag is the more reliable base value, so it wins when present.
-    maxspeed: tagged,
-    label: label,
-    speedLimit: effectiveLimit(
-      highway,
-      vehicle: vehicle,
-      taggedKmh: taggedKmh,
-      oneway: oneway,
-      lanes: lanes,
-      divided: divided,
-      urban: urban,
-    ),
-    // Provenance for the widget badge: a real posted `maxspeed` beats the
-    // statutory tables; otherwise it is the built-up or the class default.
-    src: taggedKmh > 0 ? 'osm' : (urban ? 'city' : 'class'),
+    maxspeedTag: tagged,
     oneway: oneway,
     lanes: lanes,
     divided: divided,

@@ -603,53 +603,29 @@ extension _NavGps on _NavigationPageState {
       if (name == cur.name) return;
       debugPrint('ROAD: waze street "$name" (was "${cur.name}")');
       setNavState(() {
-        _roadInfo = RoadInfo(
-          name: name,
-          highway: cur.highway,
-          maxspeed: cur.maxspeed,
-          label: cur.label,
-          speedLimit: cur.speedLimit,
-          oneway: cur.oneway,
-          lanes: cur.lanes,
-          divided: cur.divided,
-          urban: cur.urban,
-          src: cur.src,
-        );
+        _roadInfo = cur.copyWith(name: name);
       });
       return;
     }
     // The posted sign is a CAR value; for motorbikes/trucks it only TIGHTENS
     // the vehicle's statutory class default (never lifts it), same as the OSM
-    // maxspeed handling.
-    final v = effectiveLimit(
-      cur.highway,
+    // maxspeed handling — both now live in [applyPostedLayer].
+    final next = applyPostedLayer(
+      cur,
+      kmh: lim,
       vehicle: vehicleType,
-      taggedKmh: lim,
-      oneway: cur.oneway,
-      lanes: cur.lanes,
-      divided: cur.divided,
+      layerSrc: layerKind ?? srcSegment,
+      name: name,
     );
-    if (v == cur.speedLimit && name == cur.name) return;
+    if (next.speedLimit == cur.speedLimit && next.name == cur.name) return;
     debugPrint(
-      'ROAD: waze limit=$lim -> $v (was ${cur.speedLimit}) '
-      'street="$name" ${cur.highway} from=${usedSnapped ? 'snapped' : 'raw'}',
+      'ROAD: waze limit=$lim -> ${next.speedLimit} (was ${cur.speedLimit}) '
+      'street="${next.name}" ${cur.highway} from=${usedSnapped ? 'snapped' : 'raw'}',
     );
     setNavState(() {
-      _roadInfo = RoadInfo(
-        name: name,
-        highway: cur.highway,
-        maxspeed: '$v',
-        label: cur.label,
-        speedLimit: v,
-        oneway: cur.oneway,
-        lanes: cur.lanes,
-        divided: cur.divided,
-        urban: cur.urban,
-        // The posted-limit layer has now spoken: from here a speed sign may
-        // only tighten this value, never raise it (signLimitInForce), and the
-        // widget badge names the layer that produced it.
-        src: layerKind ?? 'segment',
-      );
+      // From here a speed sign may only tighten this value, never raise it
+      // (signLimitInForce), and the widget badge names the layer behind it.
+      _roadInfo = next;
     });
   }
 
@@ -689,7 +665,6 @@ extension _NavGps on _NavigationPageState {
     debugPrint('ROAD: graph highway=${g['highway']} maxspeed=${g['maxspeed']}');
     final highway = (g['highway'] ?? '') as String;
     if (highway.isEmpty) return null;
-    final (label, _) = classInfo(highway);
     // GraphHopper sends Infinity for `maxspeed=none` — treat any non-finite
     // value as "no tagged limit" and fall back to the statutory class default.
     // Also reject implausible finite readings: a mis-decoded max_speed edge
@@ -715,23 +690,15 @@ extension _NavGps on _NavigationPageState {
     // Inside a town that is wrong: the built-up rule caps it at 50 (60 on a
     // đường đôi). POI density decides which table applies; a posted value
     // (graph maxspeed or a Waze segment) always wins over it.
-    final urban = (ms ?? 0) <= 0 && await isUrbanArea(pos);
-    final limit = effectiveLimit(
-      highway,
-      vehicle: vehicleType,
-      taggedKmh: ms ?? 0,
-      oneway: oneway,
-      lanes: lanes,
-      divided: divided,
-      urban: urban,
-    );
-    return RoadInfo(
+    final urban = await builtUpRuleApplies(pos, hasPosted: (ms ?? 0) > 0);
+    // Shared constructor, so this path and the Overpass path cannot drift apart
+    // (see [roadInfoFromRoad]).
+    return roadInfoFromRoad(
       name: (g['name'] ?? '') as String,
       highway: highway,
-      maxspeed: ms == null ? null : '$ms',
-      label: label,
-      speedLimit: limit,
-      src: ms != null ? 'osm' : (urban ? 'city' : 'class'),
+      vehicle: vehicleType,
+      taggedKmh: ms ?? 0,
+      maxspeedTag: ms == null ? null : '$ms',
       oneway: oneway,
       lanes: lanes,
       divided: divided,
