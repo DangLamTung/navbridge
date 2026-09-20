@@ -751,11 +751,6 @@ class _NavigationPageState extends State<NavigationPage>
     });
   }
 
-  /// True when the effective limit comes from a sign the car has NOT reached
-  /// yet (adopted early), so it is the NEXT limit rather than the current one.
-  bool get _limitIsUpcoming =>
-      _effectiveLimit.source == 'sign' && _signAheadM > kSignReachedM;
-
   /// Effective limit + which layer supplied it — 'sign' (posted sign /
   /// Waze-DATMAP point, vehicle-capped) or 'road' (the road's own tagged /
   /// statutory class default). The source is recorded in the trip log so a

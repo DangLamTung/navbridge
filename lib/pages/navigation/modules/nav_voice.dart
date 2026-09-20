@@ -477,13 +477,10 @@ extension _NavVoice on _NavigationPageState {
     // value shown in the road-info chip (sign-aware: the last speed-limit sign
     // passed wins over the road's default). Omitted when unknown (0).
     final limit = _effectiveSpeedLimit;
-    // A sign adopted EARLY (up to 400 m before it is reached) is not the limit
-    // in force yet — say "tiếp theo", never "hiện tại".
-    final limitTxt = limit > 0
-        ? (_limitIsUpcoming
-              ? ' Tốc độ tối đa tiếp theo $limit km/h.'
-              : ' Tốc độ tối đa $limit km/h.')
-        : '';
+    // No "tiếp theo" phrasing: a sign is only authority once the car is at it
+    // (signLimitInForce), so an unreached sign never becomes the effective
+    // limit and this value is always the one in force right now.
+    final limitTxt = limit > 0 ? ' Tốc độ tối đa $limit km/h.' : '';
     if (now) {
       return '$verb$into$nextNext.$limitTxt';
     }
@@ -566,17 +563,12 @@ extension _NavVoice on _NavigationPageState {
     _lastSpokenLimit = limit;
     _pendingLimit = null;
     _pendingSince = null;
-    // The pre-recorded clip says "Tốc độ giới hạn HIỆN TẠI là N" — it must not
-    // be played for a sign adopted 400 m early. Say "tiếp theo" via TTS instead.
-    final upcoming = _limitIsUpcoming;
-    final txt = upcoming
-        ? 'Tốc độ tối đa tiếp theo $limit km/h'
-        : 'Giới hạn $limit km/h';
+    // The pre-recorded clip says "Tốc độ giới hạn HIỆN TẠI là N", which is what
+    // this value now is — a sign only counts once the car is at it
+    // (signLimitInForce), so there is no early-adopted sign left to phrase as
+    // "tiếp theo" via TTS.
+    final txt = 'Giới hạn $limit km/h';
     _logAnnouncement(txt, kind: 'limit');
-    if (upcoming) {
-      _voice.speak(txt, priority: VoiceGuide.priorityHigh);
-      return;
-    }
     unawaited(
       SoundAlerts.instance.playCurrentSpeedLimit(limit).then((played) {
         if (!played) {
