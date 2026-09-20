@@ -34,20 +34,28 @@ import 'package:navbridge/services/vietmap_config.dart'
 import 'package:navbridge/core/car_filter.dart';
 import 'package:navbridge/core/route_snap.dart';
 import 'package:navbridge/core/trip_plan.dart';
+import 'package:navbridge/services/nav_map_info.dart';
+import 'package:navbridge/ui/marker_density.dart';
 
 /// Approx. bounds of the BUNDLED nav-map vector tiles (`saigon_z16.pmtiles`,
-/// HCMC metro). OUTSIDE this box there are no vector tiles, so the nav map
-/// falls back to an online raster basemap (the user's chosen [tileSource])
-/// instead of showing a blank gray map — e.g. driving QL1A out of HCMC.
-const double _navMinLat = 10.40, _navMaxLat = 11.20;
-const double _navMinLon = 106.30, _navMaxLon = 107.10;
+/// HCMC metro) — used only until the archive's REAL bbox has been read from the
+/// file ([_mapInfo], see [NavMapInfo]): the hard-coded box was wider than the
+/// data (10.6564-10.8931 / 106.5444-106.8545), so the app kept the vector style
+/// in the ring between them and showed a blank map there instead of the raster
+/// fallback.
+const double _navMinLatFallback = 10.40, _navMaxLatFallback = 11.20;
+const double _navMinLonFallback = 106.30, _navMaxLonFallback = 107.10;
 
-bool _insideNavCoverage(ll.LatLng? p) {
+/// Zooms assumed when the archive header could not be read: the bundled asset is
+/// a z0-z16 pyramid, so anything above z16 has to be overzoomed.
+const int _fallbackVectorMinZoom = 0, _fallbackVectorMaxZoom = 16;
+
+bool _insideFallbackCoverage(ll.LatLng? p) {
   if (p == null) return true; // unknown position → assume inside (no swap)
-  return p.latitude >= _navMinLat &&
-      p.latitude <= _navMaxLat &&
-      p.longitude >= _navMinLon &&
-      p.longitude <= _navMaxLon;
+  return p.latitude >= _navMinLatFallback &&
+      p.latitude <= _navMaxLatFallback &&
+      p.longitude >= _navMinLonFallback &&
+      p.longitude <= _navMaxLonFallback;
 }
 
 /// Built-in car marker icons (see assets/offline_map/icons/).
@@ -310,6 +318,22 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// top of this per [_buildStyleString].
   Map<String, dynamic>? _baseStyle;
 
+  /// What the bundled vector archive ACTUALLY contains (bbox + zoom range),
+  /// read from the pmtiles header. The style's source gets its min/max zoom from
+  /// here so the renderer OVERZOOMS the tiles that exist instead of asking for
+  /// zooms the archive does not have — the archive stops at z16 while the nav
+  /// camera sits at z19 (and can pinch to z19) — and the raster fallback uses the
+  /// real bbox instead of a hard-coded box that was wider than the data.
+  NavMapInfo? _mapInfo;
+
+  /// True when [p] is inside the vector archive's own coverage.
+  bool _insideNavCoverage(ll.LatLng? p) {
+    if (p == null) return true; // unknown position → assume inside (no swap)
+    final info = _mapInfo;
+    if (info == null) return _insideFallbackCoverage(p);
+    return info.contains(p.latitude, p.longitude);
+  }
+
   /// Root of the offline raster tile store (`.../offline_tiles`), or null
   /// before [_prepare] runs. Used to build the offline basemap tile URLs.
   String? _offlineTilesRoot;
@@ -329,10 +353,12 @@ class _VectorNavMapState extends State<VectorNavMap>
   final List<Circle> _trafficLights = [];
   String? _lastPoiSig;
   String? _lastSearchSig;
+
   /// Cameras on the route, projected to screen space and drawn as Flutter
   /// overlays (a camera PNG). Native circles are deliberately NOT used — see
   /// [_projectCameraOverlays] for why.
   final List<({OfflineCamera cam, Offset pos})> _cameraOverlays = [];
+
   /// Cameras currently in scope (route-filtered); reprojected on camera move.
   List<OfflineCamera> _activeCams = const [];
   DateTime? _lastCameraProject;
@@ -534,6 +560,12 @@ class _VectorNavMapState extends State<VectorNavMap>
         return;
       }
 
+      // What this archive really holds: its bbox and zoom range (z0-z16 for the
+      // bundled Saigon file, verified against the reference pmtiles reader).
+      // Drives the raster fallback box and the source's min/max zoom below.
+      _mapInfo = await NavMapInfo.read(pmtilesFile);
+      debugPrint('VECTORMAP: archive $_mapInfo');
+
       final spriteDir = Directory('${dir.path}/sprite');
       if (!spriteDir.existsSync()) spriteDir.createSync(recursive: true);
       for (final rel in (manifest['sprite'] as List).cast<String>()) {
@@ -566,6 +598,15 @@ class _VectorNavMapState extends State<VectorNavMap>
       final style = jsonDecode(styleRaw) as Map<String, dynamic>;
       final src = style['sources'] as Map<String, dynamic>;
       src['openmaptiles']['url'] = 'pmtiles://file://${pmtilesFile.path}';
+      // Tell the renderer which zooms EXIST. Without this it requests the zoom
+      // the camera is at — z19 in nav mode, z14/13 in the PiP — and the z16-only
+      // archive answers nothing: the vector layers draw a blank map over the
+      // basemap and the detail never matches the zoom. With maxzoom declared,
+      // MapLibre overzooms the z16 tiles for z17-z19 instead.
+      src['openmaptiles']['minzoom'] =
+          _mapInfo?.minZoom ?? _fallbackVectorMinZoom;
+      src['openmaptiles']['maxzoom'] =
+          _mapInfo?.maxZoom ?? _fallbackVectorMaxZoom;
       debugPrint('VECTORMAP: vector source -> ${src['openmaptiles']['url']}');
       // NOTE: NO online raster fallback on the nav map. It used to render an
       // OSM/CARTO raster below the vector tiles, which LEAKED through outside
@@ -827,7 +868,15 @@ class _VectorNavMapState extends State<VectorNavMap>
       'minzoom': 12,
       'filter': <dynamic>[
         'all',
-        <dynamic>['in', 'class', 'motorway', 'trunk', 'primary', 'secondary', 'tertiary'],
+        <dynamic>[
+          'in',
+          'class',
+          'motorway',
+          'trunk',
+          'primary',
+          'secondary',
+          'tertiary',
+        ],
         <dynamic>['==', '\$type', 'LineString'],
       ],
       'layout': <String, dynamic>{
@@ -837,10 +886,7 @@ class _VectorNavMapState extends State<VectorNavMap>
       },
       'paint': <String, dynamic>{
         'line-color': dashColor,
-        'line-width': <String, dynamic>{
-          'base': 1.2,
-          'stops': widthStops,
-        },
+        'line-width': <String, dynamic>{'base': 1.2, 'stops': widthStops},
         'line-dasharray': dash,
       },
     };
@@ -944,7 +990,9 @@ class _VectorNavMapState extends State<VectorNavMap>
   List<String> _basemapTiles() {
     final port = _tileServerPort;
     if (port != null) {
-      return ['http://127.0.0.1:$port/tiles/${widget.tileSource}/{z}/{x}/{y}.png'];
+      return [
+        'http://127.0.0.1:$port/tiles/${widget.tileSource}/{z}/{x}/{y}.png',
+      ];
     }
     final root = _offlineTilesRoot;
     if (widget.offline && root != null) {
@@ -1018,18 +1066,10 @@ class _VectorNavMapState extends State<VectorNavMap>
 
   /// All four CARTO subdomains, with `{s}` expanded to real hosts for MapLibre.
   List<String> _carto(String style) => [
-    appendCartoApiKey(
-      'https://a.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
-    ),
-    appendCartoApiKey(
-      'https://b.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
-    ),
-    appendCartoApiKey(
-      'https://c.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
-    ),
-    appendCartoApiKey(
-      'https://d.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
-    ),
+    appendCartoApiKey('https://a.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png'),
+    appendCartoApiKey('https://b.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png'),
+    appendCartoApiKey('https://c.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png'),
+    appendCartoApiKey('https://d.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png'),
   ];
 
   /// Real dark-map theme for the vector style (used when [widget.nightMode]).
@@ -1494,9 +1534,12 @@ class _VectorNavMapState extends State<VectorNavMap>
       }
       onRoute.add(c);
     }
-    // Still bound the count — a long route can carry a lot of cameras.
+    // Zoom-dependent camera culling: the visible window shrinks as the camera
+    // zooms in, so the driver wants more of what is around — but every marker is
+    // a Flutter widget reprojected ~4 Hz, so the count follows the zoom with a
+    // HARD ceiling (see marker_density.dart).
     final cams = <OfflineCamera>[
-      ..._nearestCameras(onRoute, 60, cur),
+      ..._nearestCameras(onRoute, cameraMarkerCap(_zoom), cur),
     ];
     _activeCams = cams; // reprojected on every camera move, not just on change
     final sig = _cameraSignature(cams, cur);
@@ -1582,20 +1625,21 @@ class _VectorNavMapState extends State<VectorNavMap>
       return;
     }
 
-    // Zoom-dependent sign culling:
+    // Zoom-dependent sign culling (density rises with zoom, then hard-caps):
     // < 11.0: hidden completely (country / region scale)
-    // < 14.5: show only 20-30 important signs (speed, khu dân cư, cấm vượt, STOP)
-    // >= 14.5: show all route signs at street level
+    // 11..13: only the important kinds (speed, khu dân cư, cấm vượt, STOP),
+    //         few of them — this is the old fixed 20-30 window
+    // >= 13: important signs first, then the rest, capped by zoom
     final List<RoadSign> activeSigns;
     if (_zoom < 11.0) {
       activeSigns = const [];
-    } else if (_zoom < 14.5) {
-      final important = signs.where((s) => s.isImportant).toList();
-      final cap = ((_zoom - 11.0) * 3 + 20).round().clamp(20, 30);
-      activeSigns =
-          important.length > cap ? important.sublist(0, cap) : important;
     } else {
-      activeSigns = signs;
+      final cap = signMarkerCap(_zoom);
+      final ranked = [
+        ...signs.where((s) => s.isImportant),
+        if (_zoom >= 13.0) ...signs.where((s) => !s.isImportant),
+      ];
+      activeSigns = ranked.length > cap ? ranked.sublist(0, cap) : ranked;
     }
 
     if (activeSigns.isEmpty) {
@@ -1635,7 +1679,9 @@ class _VectorNavMapState extends State<VectorNavMap>
       }
       batchOk = list.length == activeSigns.length;
     } catch (e) {
-      debugPrint('VECTORMAP: sign batch projection failed ($e) — per-point fallback');
+      debugPrint(
+        'VECTORMAP: sign batch projection failed ($e) — per-point fallback',
+      );
     }
     if (!mounted) return;
     // Per-point recovery for anything the batch did not deliver.
@@ -2382,9 +2428,7 @@ class _VectorNavMapState extends State<VectorNavMap>
             left: o.pos.dx - 20,
             top: o.pos.dy - 20,
             child: _tapMarker(
-              widget.onSignTap == null
-                  ? null
-                  : () => widget.onSignTap!(o.sign),
+              widget.onSignTap == null ? null : () => widget.onSignTap!(o.sign),
               SignIcon(kind: o.sign.kind, value: o.sign.value, size: 40),
             ),
           ),
@@ -2435,15 +2479,15 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// Camera marker: a real camera PNG (the Waze alerter icon) drawn as a
   /// Flutter overlay, mirroring [SignIcon]. No MapLibre annotation involved.
   Widget _cameraMarker() => SizedBox(
-        width: 28,
-        height: 28,
-        child: Image.asset(
-          'assets/waze/icon_alerter_cam_speed.png',
-          width: 28,
-          height: 28,
-          filterQuality: FilterQuality.medium,
-        ),
-      );
+    width: 28,
+    height: 28,
+    child: Image.asset(
+      'assets/waze/icon_alerter_cam_speed.png',
+      width: 28,
+      height: 28,
+      filterQuality: FilterQuality.medium,
+    ),
+  );
 
   /// Small tappable wrapper for map markers: a tap fires [onTap]; no drag
   /// recognizer, so dragging the map over a marker still pans. When [onTap]

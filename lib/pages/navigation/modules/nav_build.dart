@@ -81,9 +81,10 @@ extension _NavBuild on _NavigationPageState {
                     signs: _routeSigns,
                     controller: _vmFollow,
                     smoothCamera: smoothCamera,
-                    // PiP can't be pinched — start a bit wider so more of the
-                    // route is visible in the small window (z14 ≈ ~5 km view).
-                    defaultZoom: 14,
+                    // PiP can't be pinched — start wider than the full-screen
+                    // camera so more of the route is visible in the small
+                    // window (z13 ≈ ~7 km view).
+                    defaultZoom: 13,
                     // No compass in the tiny PiP window — it just eats space.
                     showCompass: false,
                   ),
