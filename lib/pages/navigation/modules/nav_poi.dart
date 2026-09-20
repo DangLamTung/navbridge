@@ -243,6 +243,72 @@ extension _NavPoi on _NavigationPageState {
   bool _sameStation(PoiResult a, PoiResult b) =>
       distanceMeters(a.pos, b.pos) < 40;
 
+  /// De-dupe [results] by physical station, KEEPING the best copy: a Google
+  /// Places result ([placeId] set, carries a real place name + rating) wins
+  /// over a raw OSM/Overpass point for the same station. This makes "Xăng"
+  /// show branded, verified stations (e.g. "Petrolimex") instead of the
+  /// sparse OSM "fuel" point that the merge picked first.
+  List<PoiResult> _dedupeKeepBest(List<PoiResult> results) {
+    final out = <PoiResult>[];
+    for (final r in results) {
+      final idx = out.indexWhere((x) => _sameStation(x, r));
+      if (idx < 0) {
+        out.add(r);
+      } else {
+        final existing = out[idx];
+        // Replace the OSM copy with the Google copy when the two are the same
+        // physical station and the incoming one is Google-verified.
+        if (existing.placeId == null && r.placeId != null) {
+          out[idx] = r;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Rank POI results for display: prefer the REAL current route — POIs ON the
+  /// path AHEAD of the car (same travel side), never behind the direction —
+  /// then by nearest. When no route is active, fall back to nearest
+  /// straight-line distance from [c]. This is the single ranking used by the
+  /// "Xăng" search / "gần nhất" gas button / any quick-POI category.
+  ///
+  /// Google Places results ([PoiResult.placeId] set) are preferred over raw
+  /// OSM/Overpass ones as a tie-breaker — they're real, verified places with
+  /// names + ratings (e.g. "Petrolimex"), far better than the sparse OSM
+  /// "fuel" points.
+  List<PoiResult> _rankOnPathOrNearest(List<PoiResult> results, LatLng c) {
+    final route = _route?.geometry ?? const <LatLng>[];
+    if (route.length > 2 && results.length > 1) {
+      final startIdx =
+          (_engine?.snappedSegmentIndex ?? 0).clamp(0, max(0, route.length - 1))
+              as int;
+      final ranked = rankPoisForRoute(
+        results,
+        route,
+        startIndex: startIdx,
+        carPos: c,
+      );
+      // Stable order: within the route-ranked list, prefer Google (placeId)
+      // entries when the ranking didn't already separate them.
+      ranked.sort((a, b) {
+        final ga = a.placeId != null ? 0 : 1;
+        final gb = b.placeId != null ? 0 : 1;
+        return ga.compareTo(gb);
+      });
+      return ranked;
+    }
+    final sorted = [...results]
+      ..sort((a, b) {
+        final dc = distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos));
+        if (dc != 0) return dc;
+        // At the same distance, a Google-verified place beats an OSM point.
+        final ga = a.placeId != null ? 0 : 1;
+        final gb = b.placeId != null ? 0 : 1;
+        return ga.compareTo(gb);
+      });
+    return sorted;
+  }
+
   /// Vietmap (VN-native) POI pass — autocomplete "trạm xăng"/"trạm sạc" then
   /// resolve coordinates. Best-effort: empty without VIETMAP_API_KEY.
   Future<List<PoiResult>> _vietmapPois(
@@ -289,7 +355,13 @@ extension _NavPoi on _NavigationPageState {
         cum = 0;
       }
     }
-    if (out.length == 1 && startIdx < route.length) out.add(route.last);
+    // Always keep the destination area covered: if the last corridor centre
+    // is > 10 km short of the destination, add the destination as its own
+    // centre (each search uses a 15 km radius, so the end of the route is
+    // never missed).
+    if (distanceMeters(out.last, route.last) > 10000) {
+      out.add(route.last);
+    }
     return out;
   }
 
@@ -314,21 +386,46 @@ extension _NavPoi on _NavigationPageState {
       _pois = [];
     });
     try {
-      final results = <PoiResult>[];
-      // Offline pass first (bundled Vietnam POIs).
+      var results = <PoiResult>[];
+      // Offline pass first (bundled Vietnam POIs). For fuel/charging fetch a
+      // WIDER set along the route CORRIDOR (not just around the car) so the
+      // route-aware ranking has the stations AHEAD on the path to promote —
+      // the old limit-12 nearest-around-the-car often returned only stations
+      // behind, skipping the ones further up the road (e.g. a Petrolimex on a
+      // street ahead). The corridor centres cover the car + ~10 km ahead.
       final key = _offlineKeyForPoiType(type);
       if (key != null) {
-        for (final p in await poisInCategory(key, near: c, limit: 12)) {
-          results.add(
-            PoiResult(name: p.name, lat: p.lat, lng: p.lng, type: type),
-          );
+        final offLimit =
+            (type == PoiType.fuel || type == PoiType.charging) ? 40 : 12;
+        final queryCenters =
+            (type == PoiType.fuel || type == PoiType.charging)
+            ? centers
+            : [c];
+        for (final qc in queryCenters) {
+          for (final p in await poisInCategory(key, near: qc, limit: offLimit)) {
+            if (!results.any((x) => _sameStation(x, PoiResult(
+                  name: p.name,
+                  lat: p.lat,
+                  lng: p.lng,
+                  type: type,
+                )))) {
+              results.add(
+                PoiResult(name: p.name, lat: p.lat, lng: p.lng, type: type),
+              );
+            }
+          }
         }
       }
       // Online Overpass pass is best-effort — offline results still show if
-      // it fails (or the phone is offline).
+      // it fails (or the phone is offline). Search along the corridor centres
+      // too, so stations AHEAD on the route are found, not just near the car.
       try {
-        for (final r in await searchPois(type, c, radius: 10000, limit: 30)) {
-          if (!results.any((x) => _sameStation(x, r))) results.add(r);
+        for (final qc in (type == PoiType.fuel || type == PoiType.charging)
+            ? centers
+            : [c]) {
+          for (final r in await searchPois(type, qc, radius: 10000, limit: 30)) {
+            if (!results.any((x) => _sameStation(x, r))) results.add(r);
+          }
         }
       } catch (_) {}
       // Google Places pass — the best VN coverage with REAL ratings, searched
@@ -362,6 +459,9 @@ extension _NavPoi on _NavigationPageState {
       if (results.isEmpty) {
         throw Exception('Không tìm thấy ${type.label.toLowerCase()} gần đây');
       }
+      // Prefer Google/verified copies of a station over the sparse OSM one.
+      final deduped = _dedupeKeepBest(results);
+      results = deduped.isEmpty ? results : deduped;
       List<PoiResult> ranked;
       if (type == PoiType.food || type == PoiType.cafeVong) {
         // Nhà hàng: highest rating first (with a sane minimum review count so
@@ -378,38 +478,16 @@ extension _NavPoi on _NavigationPageState {
         });
         ranked = results;
       } else if (type == PoiType.fuel) {
-        // Trạm xăng: prefer the stations AHEAD on the route (the next place
-        // we're going to reach) — not ones behind, or the app points back. On
-        // a route, ahead-distance + travel-side wins; otherwise nearest.
-        if (route.length > 2) {
-          final startIdx =
-              (_engine?.snappedSegmentIndex ?? 0).clamp(
-                    0,
-                    max(0, route.length - 1),
-                  )
-                  as int;
-          ranked = rankPoisForRoute(results, route, startIndex: startIdx);
-        } else {
-          results.sort(
-            (a, b) =>
-                distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos)),
-          );
-          ranked = results;
-        }
+        // Trạm xăng: prefer stations ON the real current route ahead of the
+        // car (the next ones we'll actually reach), same travel side first —
+        // not a random nearest station that could be behind / off-route.
+        // Within the route set, keep near→far. With no route, nearest first.
+        ranked = _rankOnPathOrNearest(results, c);
       } else if (route.length > 2) {
-        final startIdx =
-            (_engine?.snappedSegmentIndex ?? 0).clamp(
-                  0,
-                  max(0, route.length - 1),
-                )
-                as int;
-        ranked = rankPoisForRoute(results, route, startIndex: startIdx);
+        // Any other category: same "on the real path first" priority.
+        ranked = _rankOnPathOrNearest(results, c);
       } else {
-        results.sort(
-          (a, b) =>
-              distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos)),
-        );
-        ranked = results;
+        ranked = _rankOnPathOrNearest(results, c);
       }
       if (!mounted) return;
       setNavState(() => _pois = ranked.take(8).toList());
@@ -437,14 +515,37 @@ extension _NavPoi on _NavigationPageState {
       _pois = [];
     });
     try {
-      final results = <PoiResult>[
-        for (final p in await poisInCategory('fuel', near: c, limit: 8))
-          PoiResult(name: p.name, lat: p.lat, lng: p.lng, type: PoiType.fuel),
-      ];
+      // Search along the route corridor (car + points ahead) so stations
+      // AHEAD on the path are found — not just the nearest around the car,
+      // which often misses the next station up the road.
+      final route = _route?.geometry ?? const <LatLng>[];
+      final centers = _poiCorridorCenters(c, route);
+      final results = <PoiResult>[];
+      for (final qc in centers) {
+        for (final p in await poisInCategory('fuel', near: qc, limit: 40)) {
+          if (!results.any(
+            (x) => _sameStation(
+              x,
+              PoiResult(
+                name: p.name,
+                lat: p.lat,
+                lng: p.lng,
+                type: PoiType.fuel,
+              ),
+            ),
+          )) {
+            results.add(
+              PoiResult(name: p.name, lat: p.lat, lng: p.lng, type: PoiType.fuel),
+            );
+          }
+        }
+      }
       // Online pass is best-effort — offline stations still show if it fails.
       try {
-        for (final r in await searchPois(PoiType.fuel, c, limit: 8)) {
-          if (!results.any((x) => _sameStation(x, r))) results.add(r);
+        for (final qc in centers) {
+          for (final r in await searchPois(PoiType.fuel, qc, limit: 8)) {
+            if (!results.any((x) => _sameStation(x, r))) results.add(r);
+          }
         }
       } catch (_) {}
       // Vietmap pass — real VN gas stations ("Petrolimex"…) via the app's key.
@@ -458,37 +559,20 @@ extension _NavPoi on _NavigationPageState {
           if (!results.any((x) => _sameStation(x, r))) results.add(r);
         }
       } catch (_) {}
-      // Google pass — nearest real gas stations (rankby=distance around the
-      // car) with names/ratings from Google Places.
+      // Google pass — nearest real gas stations (names/ratings from Google
+      // Places) along the route corridor, not just around the car.
       try {
-        for (final r in await googlePoiSearch(
-          PoiType.fuel,
-          [c],
-          radius: 15000,
-          limit: 20,
-        )) {
+        for (final r in await googlePoiSearch(PoiType.fuel, centers, radius: 15000)) {
           if (!results.any((x) => _sameStation(x, r))) results.add(r);
         }
       } catch (_) {}
-      // Prefer stations AHEAD on the route (the next place we'll reach), so
-      // "xăng gần nhất" never points back the way we came.
-      List<PoiResult> ranked;
-      final route = _route?.geometry ?? const <LatLng>[];
-      if (route.length > 2) {
-        final startIdx =
-            (_engine?.snappedSegmentIndex ?? 0).clamp(
-                  0,
-                  max(0, route.length - 1),
-                )
-                as int;
-        ranked = rankPoisForRoute(results, route, startIndex: startIdx);
-      } else {
-        results.sort(
-          (a, b) =>
-              distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos)),
-        );
-        ranked = results;
-      }
+      // Prefer Google/verified copies of a station over the sparse OSM one.
+      final deduped = _dedupeKeepBest(results);
+      final finalResults = deduped.isEmpty ? results : deduped;
+      // Prefer stations ON the real current route ahead of the car (the next
+      // ones we'll actually reach), same travel side first — not a random
+      // nearest station that could be behind / off-route. No route → nearest.
+      final ranked = _rankOnPathOrNearest(finalResults, c);
       if (!mounted) return;
       setNavState(() => _pois = ranked.take(8).toList());
     } catch (e) {
@@ -549,7 +633,12 @@ extension _NavPoi on _NavigationPageState {
             as int;
     double? nextGas; // nearest station on/near the route, AHEAD of the car
     for (final r in results) {
-      final proj = projectOnRoute(route, r.pos, startIndex: startIdx);
+      final proj = projectOnRoute(
+        route,
+        r.pos,
+        startIndex: startIdx,
+        carPos: c,
+      );
       if (proj.aheadMeters >= -100) {
         if (nextGas == null || proj.aheadMeters < nextGas) {
           nextGas = proj.aheadMeters;
@@ -726,10 +815,15 @@ extension _NavPoi on _NavigationPageState {
       } else if (_stops.isEmpty) {
         newStops = [poiStop]; // no destination yet → POI becomes destination
       } else {
+        // En-route POI (gas station, food) is visited NEXT, before remaining stops
+        final currentStopIdx = _engine?.currentStopIndex ?? 0;
+        final insertIdx = (_navigating && currentStopIdx < _stops.length)
+            ? currentStopIdx
+            : max(0, _stops.length - 1);
         newStops = [
-          ..._stops.sublist(0, _stops.length - 1), // planned stops (kept)
-          poiStop, // gas station waypoint (added)
-          _stops.last, // final destination — never forgotten
+          ..._stops.sublist(0, insertIdx),
+          poiStop,
+          ..._stops.sublist(insertIdx),
         ];
       }
       final points = [from, for (final s in newStops) s.pos];

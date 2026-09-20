@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import 'poi_search.dart';
+import 'api_notice.dart' show noteGoogleQuota;
 import 'vietmap_config.dart';
 
 /// Google Places Nearby Search for [type] around a CORRIDOR of [centers]
@@ -88,8 +89,18 @@ Future<List<PoiResult>> googlePoiSearch(
             ),
           )
           .timeout(const Duration(seconds: 10));
-      if (res.statusCode != 200) return;
+      if (res.statusCode != 200) {
+        noteGoogleQuota(statusCode: res.statusCode, body: res.body);
+        return;
+      }
       final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map?;
+      if (data?['status'] != 'OK') {
+        noteGoogleQuota(
+          statusCode: res.statusCode,
+          status: data?['status'] as String?,
+        );
+        return;
+      }
       for (final r in ((data?['results'] as List?) ?? const [])) {
         if (r is! Map) continue;
         add(r);

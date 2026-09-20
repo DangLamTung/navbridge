@@ -24,8 +24,8 @@ class OverlayManeuver {
 }
 
 /// One nearby road-sign chip the floating widget shows (icon + distance).
-/// Several are pushed at once — every sign within 300 m, plus zone-boundary
-/// signs farther out — so the driver sees them all as they approach.
+/// Several are pushed at once — every sign within the widget's own distance
+/// window — so the driver sees them all as they approach.
 class OverlaySign {
   final String kind; // RoadSignKind.key
   final int? value; // km/h for speed signs
@@ -42,13 +42,26 @@ String overlayLayout = 'vertical';
 /// Active scale multiplier (0.8 to 1.5, default 1.0).
 double overlayScale = 1.0;
 
+/// Whether the floating widget is enabled/shown. Persisted (app settings) so it
+/// survives background/restart and is auto-shown at launch (the widget runs in
+/// its own engine over any other app).
+bool overlayEnabled = false;
+
+/// True while NavBridge navigation (or simulated drive) is active, i.e. the
+/// foreground service is being used to keep nav alive in the background.
+/// [stopOverlay] consults this so closing the floating widget never kills the
+/// service mid-navigation. Maintained by the navigation page.
+bool navigationActive = false;
+
 bool _hidden = false;
+bool _lastNavigating = false;
 int? _lastManeuverIcon;
 int? _lastManeuverMeters;
 int? _lastLimit;
 int? _lastCameras;
 String? _lastLayout;
 double? _lastScale;
+double? _lastSpeedKmh;
 String? _lastSigns;
 
 /// Push the overlay's state (hidden flag + next maneuver + speed limit +
@@ -74,8 +87,8 @@ Future<void> syncOverlayState({
   List<int>? cameras,
   double? speedKmh,
 
-  /// Nearby sign chips to show (every sign within 600 m + zone-boundary signs
-  /// beyond). Null keeps whatever the overlay currently shows.
+  /// Nearby sign chips to show (every sign within 600 m). Null keeps whatever
+  /// the overlay currently shows.
   List<OverlaySign>? signs,
 
   /// Auto-hide only applies while the user is ACTIVELY navigating in
@@ -100,23 +113,26 @@ Future<void> syncOverlayState({
       : '${signs.length}:${signs.fold<int>(0, (a, s) => a + s.kind.hashCode * 31 + s.meters)}';
   final camSig = cameras?.fold<int>(0, (a, c) => a * 31 + c);
   if (hide == _hidden &&
+      navigating == _lastNavigating &&
       icon == _lastManeuverIcon &&
       meters == _lastManeuverMeters &&
       limit == _lastLimit &&
       camSig == _lastCameras &&
       overlayLayout == _lastLayout &&
       overlayScale == _lastScale &&
-      speedKmh == null &&
+      speedKmh == _lastSpeedKmh &&
       signSig == _lastSigns) {
     return;
   }
   _hidden = hide;
+  _lastNavigating = navigating;
   _lastManeuverIcon = icon;
   _lastManeuverMeters = meters;
   _lastLimit = limit;
   _lastCameras = camSig;
   _lastLayout = overlayLayout;
   _lastScale = overlayScale;
+  _lastSpeedKmh = speedKmh;
   _lastSigns = signSig;
   try {
     unawaited(
@@ -130,6 +146,7 @@ Future<void> syncOverlayState({
         'layout': overlayLayout,
         'scale': overlayScale,
         'kmh': ?speedKmh,
+        'navigating': navigating,
         'signs': signs == null
             ? null
             : [

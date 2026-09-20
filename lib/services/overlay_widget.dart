@@ -8,8 +8,10 @@ library;
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 
+import 'package:navbridge/services/nav_foreground.dart';
 import 'package:navbridge/services/overlay_visibility.dart';
 
 /// True when the system "display over other apps" permission is granted.
@@ -131,6 +133,11 @@ Future<void> startOverlay() async {
     debugPrint('OVERLAY: perm requested -> $ok');
     if (!ok) return;
   }
+  // Keep the app process ALIVE while the standalone widget is up (its main
+  // use is floating over Google Maps / Waze, so NavBridge is backgrounded).
+  // Without the foreground service Android can kill the process and tear down
+  // the overlay engine. Best-effort; already-running nav service is untouched.
+  unawaited(NavForegroundService.instance.start());
   // Convert the dp size for current layout to physical px on the default display.
   final (widthDp, heightDp) = overlaySizeDpFor(overlayLayout);
   final views = WidgetsBinding.instance.platformDispatcher.views;
@@ -169,4 +176,13 @@ Future<void> startOverlay() async {
 }
 
 /// Remove the floating widget.
-Future<void> stopOverlay() => FlutterOverlayWindow.closeOverlay();
+Future<void> stopOverlay() async {
+  await FlutterOverlayWindow.closeOverlay();
+  // If the widget was the only reason the foreground service is running (i.e.
+  // not mid-navigation), stop it so we don't keep the process alive forever.
+  // Navigation relies on the same service to keep GPS/voice/BLE alive in the
+  // background — never stop it while a drive is active.
+  if (navigationActive) return;
+  if (!(await FlutterForegroundTask.isRunningService)) return;
+  await NavForegroundService.instance.stopVoiceService();
+}

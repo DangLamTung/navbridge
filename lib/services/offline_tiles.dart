@@ -21,6 +21,8 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'vietmap_config.dart' show appendCartoApiKey;
+
 /// User-Agent sent with every tile request. The OSM tile policy REQUIRES a
 /// distinct, stable User-Agent that names the app (library defaults are
 /// blocked).
@@ -40,16 +42,38 @@ const String _ua =
 /// Max concurrent tile HTTP fetches (OSM policy: <= 2 threads).
 const int _maxTileConcurrency = 2;
 
-/// Minimum gap between tile requests PER SOURCE. OSM's tile usage policy
-/// (~1 tile/s, ≤2 threads) is respected for the OSM source — hammering OSM at
-/// the old 25 ms gap got the app IP-banned. Other free providers (CARTO /
-/// ESRI / topo) allow a faster rate, so the default esri-street map still
-/// loads quickly.
-const Duration _osmMinTileGap = Duration(milliseconds: 1000);
+/// Minimum gap between tile requests PER SOURCE. Paced at 200ms with concurrency
+/// <= 2 threads so viewport tile sets load swiftly while remaining within
+/// polite client conventions. Other free providers (CARTO / ESRI / topo) allow
+/// a faster 40ms rate.
+const Duration _osmMinTileGap = Duration(milliseconds: 200);
 const Duration _fastMinTileGap = Duration(milliseconds: 40);
 
 /// How long to pause fetches when all servers for a source have blocked us.
 const Duration _blockBackoff = Duration(seconds: 60);
+
+/// True when [b] begins with the PNG magic bytes. Used to reject a tile server
+/// that returns an HTML error page / "access blocked" placeholder with HTTP 200
+/// (those are never cached).
+bool _isPngBytes(List<int> b) =>
+    b.length >= 8 &&
+    b[0] == 0x89 &&
+    b[1] == 0x50 &&
+    b[2] == 0x4E &&
+    b[3] == 0x47 &&
+    b[4] == 0x0D &&
+    b[5] == 0x0A &&
+    b[6] == 0x1A &&
+    b[7] == 0x0A;
+
+/// True when [b] looks like a decodable raster image (PNG or JPEG). ESRI
+/// World Imagery (and some satellite/topo servers) serve JPEG, not PNG —
+/// a PNG-only check silently dropped every ESRI tile, so the satellite
+/// basemap rendered nothing. JPEG starts with 0xFF 0xD8 0xFF; PNG with the
+/// magic above. Rejects HTML/JSON error pages (they don't start like either).
+bool _isImageBytes(List<int> b) =>
+    _isPngBytes(b) ||
+    (b.length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF);
 
 /// Fallback tile servers PER BASEMAP SOURCE (no API key, attribution
 /// required), used when the primary server fails. Each source only fails
@@ -92,7 +116,7 @@ String _tileUrl(String template, int z, int x, int y) {
   // Some providers balance across a/b/c subdomains.
   const subs = ['a', 'b', 'c'];
   url = url.replaceAll('{s}', subs[(x + y) % subs.length]);
-  return url;
+  return appendCartoApiKey(url);
 }
 
 String _tileHost(String template) {
@@ -301,10 +325,44 @@ Future<bool> _looksLikeBlockPlaceholder(Uint8List bytes) async {
   }
 }
 
+/// Public, OSM-policy-aware online tile fetch used by the MapLibre nav map's
+/// loopback tile server ([NavTileServer]). Returns the raw downloaded bytes
+/// for [z]/[x]/[y] (or null when every server failed).
+///
+/// Unlike a naive `http.get`, this routes through [_fetchTile], so it honours
+/// the OSM tile policy (<= 2 concurrent, ~1 tile/s), fails over across the
+/// style-matched servers, detects 403/429 blocks AND the "access blocked"
+/// placeholder that OSM/CARTO serve with HTTP 200, and never caches HTML
+/// error pages. Without this the nav map's pan/zoom fired an unthrottled
+/// burst at OSM and got rate-limited → a blank basemap (the OSM-not-working
+/// bug).
+Future<Uint8List?> fetchOnlineTileBytes(
+  int z,
+  int x,
+  int y, {
+  required String template,
+  required String source,
+}) async {
+  final res = await _fetchTile(z, x, y, template, source);
+  if (res == null || res.statusCode != 200 || res.bodyBytes.isEmpty) {
+    return null;
+  }
+  return res.bodyBytes;
+}
+
 /// When true the app is locked to offline mode: tiles are only served from
 /// disk (no network fetches), routing is on-device only and search is
 /// cache-only. Toggled by the user (offline screen) and persisted.
 bool forceOffline = false;
+
+/// How the current speed + posted limit are drawn WHILE NAVIGATING:
+///   'chip' — compact white chip with two small dials (default)
+///   'dial' — the floating speed widget's round gauge (orange→red tick sweep,
+///            big weight-900 number) with the P.127 limit sign overlapping it.
+/// Set in Settings → "Hiển thị tốc độ"; persisted in AppSettings.navSpeedStyle.
+/// Default is the floating widget's round gauge ('dial') — the compact chip is
+/// the opt-in.
+String navSpeedStyle = 'dial';
 
 /// Vehicle used for speed-limit defaults: 'car' | 'motorbike' | 'truck'.
 /// Persisted; applied on top of the road's OSM `maxspeed` (when tagged).
@@ -512,15 +570,23 @@ Future<void> ensureOverviewTilesExtracted() async {
   try {
     final sup = await getApplicationSupportDirectory();
     final marker = File('${sup.path}/offline_tiles/.overview_extracted');
-    if (marker.existsSync()) return;
+    final overviewDir = Directory('${sup.path}/offline_tiles/overview');
+    if (marker.existsSync() &&
+        overviewDir.existsSync() &&
+        overviewDir.listSync().isNotEmpty) {
+      return;
+    }
 
     final bytes = await rootBundle.load(
       'assets/offline_map/overview_tiles.tar.gz',
     );
-    final decompressed = GZipDecoder().decodeBytes(bytes.buffer.asUint8List());
+    final rawBytes = bytes.buffer.asUint8List(
+      bytes.offsetInBytes,
+      bytes.lengthInBytes,
+    );
+    final decompressed = GZipDecoder().decodeBytes(rawBytes);
     final archive = TarDecoder().decodeBytes(decompressed);
 
-    final overviewDir = Directory('${sup.path}/offline_tiles/overview');
     final cartoDir = Directory('${sup.path}/offline_tiles/carto');
     final osmDir = Directory('${sup.path}/offline_tiles');
 
@@ -557,7 +623,7 @@ Future<void> ensureOverviewTilesExtracted() async {
 
 /// Bump when the tile-cache validation changes (e.g. a batch of poisoned
 /// "access blocked" tiles was cached) — forces a one-time full cache clear.
-const int tileCacheVersion = 3;
+const int tileCacheVersion = 4;
 bool _tileVersionChecked = false;
 
 Future<void> _ensureTileCacheVersion() async {
@@ -587,17 +653,27 @@ Future<File> tileFile(int z, int x, int y, {String? source}) async {
 Future<int> tileCacheBytes() async {
   final root = await tileStoreDir();
   var total = 0;
-  await for (final f in root.list(recursive: true)) {
-    if (f is File && f.path.endsWith('.png')) total += f.lengthSync();
-  }
+  try {
+    await for (final f in root.list(recursive: true)) {
+      if (f is File && f.path.endsWith('.png')) {
+        try {
+          total += f.lengthSync();
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
   return total;
 }
 
 /// Remove every stored tile (auto-cache + downloaded regions).
+/// Preserves bundled overview tiles so zoomed-out maps never go blank.
 Future<void> clearTileCache() async {
   final root = await tileStoreDir();
+  _overviewExtracted = false;
   try {
     for (final e in await root.list().toList()) {
+      final name = e.path.split(Platform.pathSeparator).last;
+      if (name == 'overview' || name == '.overview_extracted') continue;
       if (e is Directory) {
         await e.delete(recursive: true);
       } else if (e is File) {
@@ -605,6 +681,7 @@ Future<void> clearTileCache() async {
       }
     }
   } catch (_) {}
+  await ensureOverviewTilesExtracted();
 }
 
 // ---- region model ------------------------------------------------------
@@ -863,11 +940,50 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
     ImageDecoderCallback decode,
   ) => OneFrameImageStreamCompleter(_load(decode));
 
+  // Fast in-memory LRU cache of recently decoded tile images (0 ms retrieval).
+  static final Map<String, Uint8List> _memCache = {};
+  static final List<String> _memCacheOrder = [];
+  static const int _maxMemCache = 160;
+
+  static Uint8List? _getFromMem(String key) {
+    final v = _memCache[key];
+    if (v != null) {
+      _memCacheOrder.remove(key);
+      _memCacheOrder.add(key);
+    }
+    return v;
+  }
+
+  static void _putToMem(String key, Uint8List bytes) {
+    if (_memCache.containsKey(key)) {
+      _memCacheOrder.remove(key);
+    } else if (_memCache.length >= _maxMemCache && _memCacheOrder.isNotEmpty) {
+      final oldest = _memCacheOrder.removeAt(0);
+      _memCache.remove(oldest);
+    }
+    _memCache[key] = bytes;
+    _memCacheOrder.add(key);
+  }
+
   Future<ImageInfo> _load(ImageDecoderCallback decode) async {
-    // Look in the ACTIVE source dir first; if the tile isn't there, check the
-    // bulk-download ('carto') and bundled overview ('overview') dirs.
+    final keyStr = '$source/$z/$x/$y';
+
+    // 1. In-memory LRU cache hit (0 ms — instant render during panning/zooming).
+    final mem = _getFromMem(keyStr);
+    if (mem != null) {
+      try {
+        return await _decode(decode, mem);
+      } catch (_) {
+        _memCache.remove(keyStr);
+        _memCacheOrder.remove(keyStr);
+      }
+    }
+
+    // 2. Local disk cache hit (1-2 ms).
+    // Look in the active source dir first; if missing, check 'carto' (for OSM)
+    // and bundled 'overview'.
     var file = await tileFile(z, x, y, source: source);
-    if (!await file.exists() && source != 'carto') {
+    if (!await file.exists() && source == 'osm') {
       file = await tileFile(z, x, y, source: 'carto');
     }
     if (!await file.exists() && source != 'overview') {
@@ -876,47 +992,64 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
     }
     if (await file.exists()) {
       try {
-        return await _decode(decode, await file.readAsBytes());
+        final b = await file.readAsBytes();
+        _putToMem(keyStr, b);
+        return await _decode(decode, b);
       } catch (_) {
-        // corrupt tile — fall through to re-download or synthesize
-      }
-    }
-    debugPrint('TILE: loading $z/$x/$y (no cache)');
-    if (await isOnline()) {
-      // Rate-limited + serialized so we stay under the OSM tile policy,
-      // with automatic failover to other free OSM tile servers when one
-      // blocks us (403/429 — e.g. an IP ban).
-      final res = await _fetchTile(z, x, y, options.urlTemplate ?? '', source);
-      if (res != null && res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
-        await file.create(recursive: true);
-        await file.writeAsBytes(res.bodyBytes);
-        return _decode(decode, res.bodyBytes);
+        // corrupt tile on disk — fall through to re-download
       }
     }
 
-    // Offline / un-downloaded fallback: synthesize from available child or
-    // parent tiles. Capped at z12 — beyond that the upscaled result is just
-    // blur and the decode/encode cost isn't worth it. The result is CACHED
-    // under a 'synth' dir (checked AFTER real tiles + the online fetch, so it
-    // never shadows a real tile) — this way each missing tile is synthesized
-    // ONCE per session instead of re-decoding on every pan.
-    if (z >= 1 && z <= 12) {
+    // 3. Online fetch (only when missing on disk and connected).
+    if (!forceOffline && await isOnline()) {
+      final res = await _fetchTile(z, x, y, options.urlTemplate ?? '', source);
+      if (res != null &&
+          res.statusCode == 200 &&
+          res.bodyBytes.isNotEmpty &&
+          _isImageBytes(res.bodyBytes)) {
+        try {
+          final f = await tileFile(z, x, y, source: source);
+          await f.create(recursive: true);
+          await f.writeAsBytes(res.bodyBytes);
+        } catch (_) {}
+        _putToMem(keyStr, res.bodyBytes);
+        try {
+          return await _decode(decode, res.bodyBytes);
+        } catch (_) {}
+      }
+    }
+
+    // 4. Missing tile fallback: cached synthesized tile, or a parent-tile
+    // upsample (crop + upscale the nearest available ancestor). This keeps a
+    // large-zoom/offline map from going blank: instead of a transparent tile,
+    // we zoom into the closest tile we DO have. Works at ANY zoom (not just
+    // z<=12) so deep zoom-in still shows image-filled detail from an ancestor.
+    if (z >= 1) {
       final synthFile = await tileFile(z, x, y, source: 'synth');
       if (await synthFile.exists()) {
         try {
-          return await _decode(decode, await synthFile.readAsBytes());
-        } catch (_) {
-          // corrupt synth tile — fall through and regenerate
-        }
+          final b = await synthFile.readAsBytes();
+          _putToMem(keyStr, b);
+          return await _decode(decode, b);
+        } catch (_) {}
       }
-      final synthesized =
-          await _trySynthesizeFromChildren(z, x, y, source) ??
-          await _trySynthesizeFromParent(z, x, y, source);
+      // Top out the ancestor walk at a sane depth: zooming to z=20 with an
+      // only-z10 overview would otherwise recurse 10 levels every frame for
+      // every tile. 5 levels up (~5x) is plenty to fill a missing tile while
+      // staying cheap on the low-end phone.
+      final synthesized = await _trySynthesizeFromParent(
+        z,
+        x,
+        y,
+        source,
+        maxDepth: 6,
+      );
       if (synthesized != null) {
         try {
           await synthFile.create(recursive: true);
           await synthFile.writeAsBytes(synthesized, flush: true);
         } catch (_) {}
+        _putToMem(keyStr, synthesized);
         return _decode(decode, synthesized);
       }
     }
@@ -941,98 +1074,77 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
     return null;
   }
 
-  /// Synthesizes a missing zoom level tile by downsampling 4 child tiles from $z+1$.
-  static Future<Uint8List?> _trySynthesizeFromChildren(
-    int z,
-    int x,
-    int y,
-    String source,
-  ) async {
-    final cz = z + 1;
-    final cx0 = x * 2;
-    final cy0 = y * 2;
-
-    final c00 = await _getTileBytes(cz, cx0, cy0, source);
-    final c10 = await _getTileBytes(cz, cx0 + 1, cy0, source);
-    final c01 = await _getTileBytes(cz, cx0, cy0 + 1, source);
-    final c11 = await _getTileBytes(cz, cx0 + 1, cy0 + 1, source);
-
-    if (c00 == null && c10 == null && c01 == null && c11 == null) {
-      return null;
-    }
-
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 256, 256));
-    final bgPaint = Paint()..color = const Color(0xFFF1EEE6);
-    canvas.drawRect(const Rect.fromLTWH(0, 0, 256, 256), bgPaint);
-
-    Future<void> drawChild(Uint8List? bytes, double dx, double dy) async {
-      if (bytes == null) return;
-      try {
-        final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-        final descriptor = await ui.ImageDescriptor.encoded(buffer);
-        final codec = await descriptor.instantiateCodec(
-          targetWidth: 128,
-          targetHeight: 128,
-        );
-        final frame = await codec.getNextFrame();
-        canvas.drawImage(frame.image, Offset(dx, dy), Paint());
-        frame.image.dispose();
-        codec.dispose();
-      } catch (_) {}
-    }
-
-    await drawChild(c00, 0, 0);
-    await drawChild(c10, 128, 0);
-    await drawChild(c01, 0, 128);
-    await drawChild(c11, 128, 128);
-
-    final picture = recorder.endRecording();
-    final img = await picture.toImage(256, 256);
-    picture.dispose();
-    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
-    img.dispose();
-    return byteData?.buffer.asUint8List();
-  }
 
   /// Synthesizes a missing tile by cropping and upsampling from its parent tile at $z-1$.
+  /// Synthesizes a missing tile by cropping and upsampling from the nearest
+  /// available ancestor tile (parent at $z-1, grandparent at $z-2, … up to
+  /// [maxDepth] levels up). Deep zoom / offline gaps never go blank: we zoom
+  /// into whatever tile we actually have. The crop region grows with depth so
+  /// the final 256×256 is always filled.
   static Future<Uint8List?> _trySynthesizeFromParent(
     int z,
     int x,
     int y,
-    String source,
-  ) async {
-    if (z <= 0) return null;
-    final pz = z - 1;
-    final px = x >> 1;
-    final py = y >> 1;
-    final pBytes = await _getTileBytes(pz, px, py, source);
-    if (pBytes == null) return null;
+    String source, {
+    int maxDepth = 6,
+  }) async {
+    for (var up = 1; up <= maxDepth; up++) {
+      final az = z - up;
+      if (az <= 0) break;
+      final ax = x >> up;
+      final ay = y >> up;
+      final aBytes = await _getTileBytes(az, ax, ay, source);
+      if (aBytes == null) continue;
 
+      // The region of the ancestor tile that maps to this (z,x,y) tile. At
+      // depth `up` the ancestor is 2^up times coarser, so this tile is a
+      // (256 / 2^up) square inside it.
+      final cells = 1 << up; // 2^up
+      final cell = 256 ~/ cells;
+      final srcX = (x & (cells - 1)) * cell;
+      final srcY = (y & (cells - 1)) * cell;
+      final syn = await _cropUpscale(aBytes, srcX, srcY, cell, 256);
+      if (syn != null) return syn;
+      // If the ancestor decoded but cropping failed, keep walking up.
+    }
+    return null;
+  }
+
+  /// Decodes [bytes] then crops a [srcX],[srcY],[srcSize] square and scales it
+  /// up to [outSize]×[outSize], re-encoding to PNG. Returns null on any error.
+  static Future<Uint8List?> _cropUpscale(
+    Uint8List bytes,
+    int srcX,
+    int srcY,
+    int srcSize,
+    int outSize,
+  ) async {
     try {
-      final buffer = await ui.ImmutableBuffer.fromUint8List(pBytes);
+      final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
       final descriptor = await ui.ImageDescriptor.encoded(buffer);
       final codec = await descriptor.instantiateCodec(
-        targetWidth: 256,
-        targetHeight: 256,
+        targetWidth: outSize,
+        targetHeight: outSize,
       );
       final frame = await codec.getNextFrame();
 
       final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 256, 256));
-      final srcX = (x % 2 == 0) ? 0.0 : 128.0;
-      final srcY = (y % 2 == 0) ? 0.0 : 128.0;
+      final canvas = Canvas(
+        recorder,
+        Rect.fromLTWH(0, 0, outSize.toDouble(), outSize.toDouble()),
+      );
       canvas.drawImageRect(
         frame.image,
-        Rect.fromLTWH(srcX, srcY, 128, 128),
-        const Rect.fromLTWH(0, 0, 256, 256),
+        Rect.fromLTWH(srcX.toDouble(), srcY.toDouble(), srcSize.toDouble(),
+            srcSize.toDouble()),
+        Rect.fromLTWH(0, 0, outSize.toDouble(), outSize.toDouble()),
         Paint()..filterQuality = FilterQuality.medium,
       );
       frame.image.dispose();
       codec.dispose();
 
       final picture = recorder.endRecording();
-      final img = await picture.toImage(256, 256);
+      final img = await picture.toImage(outSize, outSize);
       picture.dispose();
       final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
       img.dispose();

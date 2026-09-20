@@ -28,10 +28,11 @@ extension RouteProfileX on RouteProfile {
     RouteProfile.walking => Icons.directions_walk,
   };
 
-  /// OSRM profile name. The public OSRM server offers driving/cycling/walking;
-  /// motorbikes ride on the car network → driving.
+  /// OSRM profile name. The public OSRM server offers driving / motorcycle /
+  /// cycling / walking profiles.
   String get osrm => switch (this) {
-    RouteProfile.car || RouteProfile.motorbike => 'driving',
+    RouteProfile.car => 'driving',
+    RouteProfile.motorbike => 'motorcycle',
     RouteProfile.bicycle => 'cycling',
     RouteProfile.walking => 'walking',
   };

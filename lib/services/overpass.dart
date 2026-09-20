@@ -25,12 +25,32 @@ class RoadInfo {
   final String label; // Vietnamese label for the road class
   final int speedLimit; // effective km/h limit (tagged or VN default)
 
+  /// OSM `oneway` tag: true = one-way, false = two-way, null = untagged.
+  final bool? oneway;
+
+  /// OSM `lanes` tag — lanes in THIS carriageway (null when untagged).
+  final int? lanes;
+
+  /// The car is on a "đường đôi" (divided road / có dải phân cách): either the
+  /// way is `oneway=yes` with ≥2 motor lanes, or another way of the SAME street
+  /// running the opposite way sits within ~35 m.
+  ///
+  /// VN mappers model a dải phân cách by drawing each direction as its own
+  /// `oneway=yes` way — there is NO median tag in VN data (0 of 9,011 highway
+  /// ways sampled in HCMC / Đà Nẵng carry `dual_carriageway`, `median`,
+  /// `divider`, `central_median` or `separation`), so the pair structure is the
+  /// only usable signal.
+  final bool divided;
+
   RoadInfo({
     required this.name,
     required this.highway,
     this.maxspeed,
     required this.label,
     required this.speedLimit,
+    this.oneway,
+    this.lanes,
+    this.divided = false,
   });
 }
 
@@ -79,7 +99,13 @@ const String _ua = 'navbridge/1.0 (BLE portable navigation; road info)';
 /// table mirrors [classInfo]; motorbike / truck are lower (motorbikes are
 /// prohibited on motorways — capped rather than 0 so the chip never shows an
 /// empty limit).
-int statutoryLimit(String highway, {String vehicle = 'car'}) {
+int statutoryLimit(
+  String highway, {
+  String vehicle = 'car',
+  bool? oneway,
+  int? lanes,
+  bool divided = false,
+}) {
   const car = {
     'motorway': 120,
     'motorway_link': 100,
@@ -91,10 +117,12 @@ int statutoryLimit(String highway, {String vehicle = 'car'}) {
     'secondary_link': 50,
     'tertiary': 50,
     'tertiary_link': 50,
-    // Urban streets without a median: posted 40 km/h (QCVN 41) — 50 was
-    // too high and made the limit read wrong on city roads.
-    'unclassified': 40,
-    'residential': 40,
+    // Built-up two-way car limit is 50 (Thông tư 38/2024/TT-BGTVT); 40 is the
+    // XE GẮN MÁY (moped) figure, not the car one, and it made city streets
+    // read low. The "đường đôi / một chiều ≥2 làn" = 60 case is applied by
+    // [urbanLimit] once oneway/lanes are known.
+    'unclassified': 50,
+    'residential': 50,
     'living_street': 20,
     'service': 30,
     'pedestrian': 10,
@@ -150,7 +178,21 @@ int statutoryLimit(String highway, {String vehicle = 'car'}) {
     'truck' => truck,
     _ => car,
   };
-  return table[highway] ?? 50;
+  final base = table[highway] ?? 50;
+  // `residential` / `unclassified` are built-up street classes by definition,
+  // so the "khu đông dân cư" rule applies whether or not a boundary sign was
+  // crossed: đường đôi / một chiều ≥2 làn → 60, hai chiều → 50. Higher classes
+  // keep the class default (their limit depends on urban/rural, which OSM
+  // cannot tell us), and living_street / service keep their stricter value.
+  if (highway == 'residential' || highway == 'unclassified') {
+    return urbanLimit(
+      vehicle: vehicle,
+      oneway: oneway,
+      lanes: lanes,
+      divided: divided,
+    );
+  }
+  return base;
 }
 
 /// Effective speed limit for [vehicle] on [highway], given an optional OSM
@@ -166,10 +208,77 @@ int effectiveLimit(
   String highway, {
   required String vehicle,
   int taggedKmh = 0,
+  bool? oneway,
+  int? lanes,
+  bool divided = false,
 }) {
-  final statutory = statutoryLimit(highway, vehicle: vehicle);
+  final statutory = statutoryLimit(
+    highway,
+    vehicle: vehicle,
+    oneway: oneway,
+    lanes: lanes,
+    divided: divided,
+  );
   if (taggedKmh <= 0) return statutory;
   return vehicle == 'car' ? taggedKmh : math.min(statutory, taggedKmh);
+}
+
+/// Parse the OSM `oneway` tag → true (one-way) / false (two-way) / null
+/// (untagged). `-1` and `reverse` are OSM's "one-way, against the way
+/// direction" spellings — still one-way.
+bool? parseOneway(String? raw) {
+  if (raw == null) return null;
+  switch (raw.trim().toLowerCase()) {
+    case 'yes':
+    case 'true':
+    case '1':
+    case '-1':
+    case 'reverse':
+      return true;
+    case 'no':
+    case 'false':
+    case '0':
+      return false;
+  }
+  return null; // "alternating", "reversible", … — no usable signal
+}
+
+/// Parse the OSM `lanes` tag → lanes in THIS carriageway (1..8), else null.
+/// Multi/odd values ("2;3", "2.5", 0) are ignored rather than guessed.
+int? parseLanes(Object? raw) {
+  if (raw == null) return null;
+  final m = RegExp(r'(\d+)').firstMatch(raw.toString());
+  if (m == null) return null;
+  final n = int.tryParse(m.group(1)!);
+  if (n == null || n < 1 || n > 8) return null;
+  return n;
+}
+
+/// Posted limit INSIDE "khu đông dân cư" (built-up area) for [vehicle].
+///
+/// Thông tư 38/2024/TT-BGTVT (hiệu lực 01/01/2025) splits the built-up limit
+/// by ROAD FORM, not by road class:
+///   đường đôi / đường một chiều có từ hai làn xe cơ giới → 60 (ô tô, mô tô)
+///   đường hai chiều / đường một chiều một làn             → 50 (ô tô, mô tô)
+///   xe tải                                                → 50 / 40
+///
+/// "Đường đôi" = two carriageways split by a dải phân cách. OSM carries no
+/// median tag in VN, so the two usable signals are [divided] (an opposite-way
+/// carriageway of the same street sits alongside) and a one-way way that
+/// itself carries ≥2 motor lanes ([oneway] + [lanes]).
+int urbanLimit({
+  required String vehicle,
+  bool? oneway,
+  int? lanes,
+  bool divided = false,
+}) {
+  // `lanes` unknown defaults to 2: a street the mappers made one-way is a
+  // through street (≥2 làn), while an explicit `lanes=1` is a genuine single
+  // lane. This also keeps the answer stable on the many ways of the SAME
+  // divided road that carry no `lanes` tag (5 of Lũy Bán Bích's 11 ways).
+  final isDivided = divided || (oneway == true && (lanes ?? 2) >= 2);
+  if (vehicle == 'truck') return isDivided ? 50 : 40;
+  return isDivided ? 60 : 50;
 }
 
 /// Parse a raw OSM maxspeed tag into km/h: "50", "50 km/h", "30 mph",
@@ -221,7 +330,11 @@ final _Cache _cache = _Cache();
 /// `maxspeed` is a CAR-oriented tag: for a car it IS the posted limit; for
 /// motorbikes / trucks it only tightens the vehicle's statutory class
 /// default (it never lifts it).
-Future<RoadInfo?> fetchRoadInfo(LatLng pos, {String vehicle = 'car'}) async {
+Future<RoadInfo?> fetchRoadInfo(
+  LatLng pos, {
+  String vehicle = 'car',
+  double? heading,
+}) async {
   final cached = _cache.last;
   if (cached != null && _cache.at != null) {
     if (distanceMeters(pos, _cache.at!) < 25) return cached;
@@ -229,8 +342,8 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos, {String vehicle = 'car'}) async {
 
   final query =
       '[out:json][timeout:10];'
-      'way(around:15,${pos.latitude},${pos.longitude})[highway];'
-      'out tags center;';
+      'way(around:30,${pos.latitude},${pos.longitude})[highway];'
+      'out tags geom;';
 
   http.Response? res;
   for (final ep in _endpoints) {
@@ -262,17 +375,26 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos, {String vehicle = 'car'}) async {
   }).toList();
   final pool = drivable.isNotEmpty ? drivable : elements;
 
+  // Score each candidate: perpendicular distance to the way's REAL geometry +
+  // a road-class penalty + heading agreement. The old nearest-centre pick let
+  // a parallel service / residential frontage road beat the main road the car
+  // is actually on (the "residential shown on a main road" bug).
   Map<String, dynamic>? best;
-  var bestD = double.infinity;
+  var bestScore = double.infinity;
   for (final e in pool) {
-    final c = e['center'];
-    if (c is! Map || c['lat'] == null || c['lon'] == null) continue;
-    final d = distanceMeters(
-      pos,
-      LatLng((c['lat'] as num).toDouble(), (c['lon'] as num).toDouble()),
-    );
-    if (d < bestD) {
-      bestD = d;
+    final tags = (e['tags'] as Map<String, dynamic>? ?? {});
+    final hw = (tags['highway'] ?? '') as String;
+    final geom = e['geometry'] as List? ?? const [];
+    final (d, segBearing) = _nearestSegment(pos, geom);
+    if (!d.isFinite) continue;
+    final classPenalty = (_classPriority[hw] ?? 20) * 8.0;
+    var headingPenalty = 0.0;
+    if (heading != null) {
+      headingPenalty = _angDiff(heading, segBearing) / 90.0 * 20.0;
+    }
+    final score = d + classPenalty + headingPenalty;
+    if (score < bestScore) {
+      bestScore = score;
       best = e;
     }
   }
@@ -283,6 +405,11 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos, {String vehicle = 'car'}) async {
   final (label, _) = classInfo(highway);
   final tagged = _effectiveMaxspeed(tags);
   final taggedKmh = tagged == null ? 0 : parseMaxspeed(tagged, 0);
+  final oneway = parseOneway(tags['oneway'] as String?);
+  final lanes = parseLanes(tags['lanes']);
+  // "Đường đôi" detection: another way of the SAME street running roughly the
+  // opposite way, close enough to be the other carriageway of a dải phân cách.
+  final divided = _hasOppositeCarriageway(pos, best, pool);
   final info = RoadInfo(
     name: (tags['name'] ?? '') as String,
     highway: highway,
@@ -292,7 +419,17 @@ Future<RoadInfo?> fetchRoadInfo(LatLng pos, {String vehicle = 'car'}) async {
     // plain tag is the more reliable base value, so it wins when present.
     maxspeed: tagged,
     label: label,
-    speedLimit: effectiveLimit(highway, vehicle: vehicle, taggedKmh: taggedKmh),
+    speedLimit: effectiveLimit(
+      highway,
+      vehicle: vehicle,
+      taggedKmh: taggedKmh,
+      oneway: oneway,
+      lanes: lanes,
+      divided: divided,
+    ),
+    oneway: oneway,
+    lanes: lanes,
+    divided: divided,
   );
   _cache.last = info;
   _cache.at = pos;
@@ -327,3 +464,120 @@ bool _isDrivable(String hw) => !const {
   'track',
   'construction',
 }.contains(hw);
+
+/// Road-class priority for candidate scoring (0 = highest). Lower is better;
+/// each step is ~8 m of "distance" so a parallel service road loses to a main
+/// road unless it is genuinely much closer.
+const Map<String, int> _classPriority = {
+  'motorway': 0,
+  'motorway_link': 1,
+  'trunk': 2,
+  'trunk_link': 3,
+  'primary': 4,
+  'primary_link': 5,
+  'secondary': 6,
+  'secondary_link': 7,
+  'tertiary': 8,
+  'tertiary_link': 9,
+  'unclassified': 10,
+  'residential': 11,
+  'living_street': 12,
+  'service': 13,
+  'track': 14,
+  'path': 15,
+  'pedestrian': 16,
+  'footway': 17,
+  'cycleway': 18,
+  'steps': 19,
+};
+
+/// Perpendicular distance from [p] to the way's node polyline, plus the
+/// bearing (deg, 0=N) of the nearest segment. Returns (∞, 0) when the way has
+/// no usable geometry.
+(double, double) _nearestSegment(LatLng p, List<dynamic> geom) {
+  final pts = <LatLng>[
+    for (final g in geom)
+      if (g is Map && g['lat'] != null && g['lon'] != null)
+        LatLng((g['lat'] as num).toDouble(), (g['lon'] as num).toDouble()),
+  ];
+  if (pts.length < 2) {
+    if (pts.isEmpty) return (double.infinity, 0);
+    return (distanceMeters(p, pts.first), 0);
+  }
+  final mPerDegLat = 111320.0;
+  final mPerDegLng = mPerDegLat * math.cos(p.latitude * math.pi / 180);
+  var bestD = double.infinity;
+  var bestBearing = 0.0;
+  for (var i = 0; i < pts.length - 1; i++) {
+    final a = pts[i], b = pts[i + 1];
+    final ax = (a.longitude - p.longitude) * mPerDegLng;
+    final ay = (a.latitude - p.latitude) * mPerDegLat;
+    final bx = (b.longitude - p.longitude) * mPerDegLng;
+    final by = (b.latitude - p.latitude) * mPerDegLat;
+    final dx = bx - ax, dy = by - ay;
+    final len2 = dx * dx + dy * dy;
+    final t = len2 < 1e-12 ? 0.0 : ((0 - ax) * dx + (0 - ay) * dy) / len2;
+    final tt = t.clamp(0.0, 1.0).toDouble();
+    final px = ax + tt * dx, py = ay + tt * dy;
+    final d = math.sqrt(px * px + py * py);
+    if (d < bestD) {
+      bestD = d;
+      bestBearing = (math.atan2(dx, dy) * 180 / math.pi + 360) % 360;
+    }
+  }
+  return (bestD, bestBearing);
+}
+
+/// Smallest angle between two bearings in [0, 90] — roads are bidirectional,
+/// so a 180° difference is the SAME road (0°).
+double _angDiff(double a, double b) {
+  var d = ((a - b) % 360).abs();
+  if (d > 180) d = 360 - d;
+  if (d > 90) d = 180 - d;
+  return d;
+}
+
+/// Raw difference between two bearings in [0, 180] — the folded [_angDiff]
+/// cannot tell "same direction" from "opposite direction" (both give 0°),
+/// which is exactly the distinction a dual carriageway needs.
+double _bearingDelta(double a, double b) {
+  var d = ((a - b) % 360).abs();
+  if (d > 180) d = 360 - d;
+  return d;
+}
+
+/// Whether [best] is one carriageway of a divided road (đường đôi): some OTHER
+/// [pool] way with the same street name/ref sits within ~35 m of [pos] and runs
+/// roughly the opposite way (>120° apart, or the reverse bearing). Only the
+/// other carriageway of a dải phân cách is that close AND that anti-parallel.
+bool _hasOppositeCarriageway(
+  LatLng pos,
+  Map<String, dynamic> best,
+  List<Map<String, dynamic>> pool,
+) {
+  final bt = (best['tags'] as Map<String, dynamic>? ?? {});
+  final name = (bt['name'] ?? '') as String;
+  final ref = (bt['ref'] ?? '') as String;
+  if (name.isEmpty && ref.isEmpty) return false;
+  final (_, bestBearing) = _nearestSegment(
+    pos,
+    best['geometry'] as List? ?? const [],
+  );
+  for (final e in pool) {
+    if (identical(e, best)) continue;
+    final t = (e['tags'] as Map<String, dynamic>? ?? {});
+    if (t['highway'] is! String) continue;
+    final en = (t['name'] ?? '') as String;
+    final er = (t['ref'] ?? '') as String;
+    final sameStreet =
+        (name.isNotEmpty && en == name) || (ref.isNotEmpty && er == ref);
+    if (!sameStreet) continue;
+    final (d, b) = _nearestSegment(pos, e['geometry'] as List? ?? const []);
+    if (!d.isFinite || d > 35) continue;
+    // Only the ANTI-parallel case counts (>120° apart). A same-direction
+    // duplicate way (<20°) is not a divided road, and an ordinary parallel
+    // street fails the same-street test above.
+    if (_bearingDelta(bestBearing, b) > 120) return true;
+  }
+  return false;
+}

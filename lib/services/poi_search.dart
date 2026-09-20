@@ -334,6 +334,37 @@ class RouteProjection {
   });
 }
 
+/// Project [p] onto the route polyline and return its exact along-route
+/// distance in meters from the route START (not from the car). Used to pin
+/// the car's real position when ranking POIs.
+double _alongRoute(List<LatLng> route, LatLng p) {
+  const d = Distance();
+  if (route.length < 2) return 0;
+  double bestOff = double.infinity;
+  double bestAlong = 0;
+  double cum = 0;
+  for (var i = 0; i + 1 < route.length; i++) {
+    final a = route[i];
+    final b = route[i + 1];
+    final seg = d.as(LengthUnit.Meter, a, b);
+    final ax = a.longitude, ay = a.latitude;
+    final bx = b.longitude, by = b.latitude;
+    final px = p.longitude, py = p.latitude;
+    final dx = bx - ax, dy = by - ay;
+    final len2 = dx * dx + dy * dy;
+    var t = len2 == 0 ? 0.0 : ((px - ax) * dx + (py - ay) * dy) / len2;
+    t = t.clamp(-1.0, 2.0);
+    final proj = LatLng(ay + t * dy, ax + t * dx);
+    final off = d.as(LengthUnit.Meter, proj, p);
+    if (off < bestOff) {
+      bestOff = off;
+      bestAlong = cum + seg * t;
+    }
+    cum += seg;
+  }
+  return bestAlong;
+}
+
 /// Project [p] onto the route polyline. [startIndex] is the car's snapped
 /// vertex — its cumulative distance is where "ahead" begins, but the point is
 /// projected onto the FULL route (not only from [startIndex]) so a point
@@ -342,6 +373,13 @@ class RouteProjection {
 /// minus the car's) and its LATERAL offset (signed cross-track distance;
 /// positive = left of travel, negative = right).
 ///
+/// [carPos] (when given) is the car's ACTUAL snapped position. It is used to
+/// compute an exact along-route distance for the car instead of approximating
+/// it as the [startIndex] segment's start vertex. Without it, a car sitting in
+/// the middle of a long segment treats the segment START as its position, so a
+/// station on the same segment but BEHIND the car reads as a small POSITIVE
+/// ahead and ranks ahead of the real next station ("xăng vẫn phía sau").
+///
 /// Used to rank POI search results: prefer places AHEAD on the route (the
 /// driver is heading there) and on the SAME side of the road (crossing /
 /// U-turning wastes time + energy).
@@ -349,16 +387,25 @@ RouteProjection projectOnRoute(
   List<LatLng> route,
   LatLng p, {
   int startIndex = 0,
+  LatLng? carPos,
 }) {
   const d = Distance();
   if (route.length < 2) {
     return RouteProjection(aheadMeters: 0, lateralMeters: 0);
   }
-  // Cumulative distance from the route START to the car's snapped vertex
-  // (where "ahead" begins).
-  double carCum = 0;
-  for (var i = 0; i < startIndex && i + 1 < route.length; i++) {
-    carCum += d.as(LengthUnit.Meter, route[i], route[i + 1]);
+  // Cumulative distance from the route START to the car's snapped position.
+  // When [carPos] is given, project the car itself and use its exact
+  // along-route distance (so the "ahead" baseline sits at the car, not at the
+  // start of whatever segment it happens to be on). Otherwise fall back to the
+  // [startIndex] segment's start vertex.
+  double carCum;
+  if (carPos != null) {
+    carCum = _alongRoute(route, carPos);
+  } else {
+    carCum = 0;
+    for (var i = 0; i < startIndex && i + 1 < route.length; i++) {
+      carCum += d.as(LengthUnit.Meter, route[i], route[i + 1]);
+    }
   }
   double bestOff = double.infinity;
   double bestAlong = 0; // cumulative at the projected point
@@ -407,23 +454,35 @@ RouteProjection projectOnRoute(
 /// route (within [maxAheadMeters], ~10–20 km ahead) and on the SAME side of
 /// the road as travel direction. Results behind the car or far off-route sink
 /// to the bottom. Returns a re-sorted copy (does not mutate [results]).
+///
+/// [carPos] (when given) is the car's actual snapped position — passed to
+/// [projectOnRoute] so the "ahead" baseline sits at the car, not the start of
+/// its current segment (see [projectOnRoute]).
 List<PoiResult> rankPoisForRoute(
   List<PoiResult> results,
   List<LatLng> route, {
   int startIndex = 0,
   double maxAheadMeters = 15000,
+  LatLng? carPos,
 }) {
   if (results.length < 2 || route.length < 2) return List.of(results);
   final scored = <(PoiResult, double)>[];
   for (final p in results) {
-    final proj = projectOnRoute(route, p.pos, startIndex: startIndex);
+    final proj = projectOnRoute(
+      route,
+      p.pos,
+      startIndex: startIndex,
+      carPos: carPos,
+    );
     // Base: how far ahead (clamped so very-ahead items still rank near).
     final ahead = proj.aheadMeters.clamp(0.0, maxAheadMeters);
-    // Penalise: BEHIND the car (any meaningful negative — was only < -500,
-    // which let stations 0–500 m behind the car score 0 and top the list),
-    // far beyond the window, or the wrong side of the road.
+    // Penalise: BEHIND the car (a positive ahead only counts for stations the
+    // driver is still going to reach — anything behind must never top the
+    // list), far beyond the window, or the wrong side of the road. The old
+    // `aheadMeters < -50` let a station 0–50 m behind the car score 0 and rank
+    // ABOVE a genuinely ahead one, which made "xăng gần nhất" point back.
     var score = ahead;
-    if (proj.aheadMeters < -50) score += 1e6; // behind → bottom
+    if (proj.aheadMeters < 0) score += 1e6; // behind the car → bottom
     if (proj.aheadMeters > maxAheadMeters) score += 1e5; // beyond window
     if (!proj.sameSide) score += 5000; // crossing/U-turn → deprioritise
     scored.add((p, score));

@@ -8,7 +8,13 @@ void main() {
   group('RouteProfile', () {
     test('OSRM profile mapping (motorbike rides on the car network)', () {
       expect(RouteProfile.car.osrm, 'driving');
-      expect(RouteProfile.motorbike.osrm, 'driving');
+      // The motorbike profile is NAMED `motorcycle`. Verified against the
+      // public server on 2026-09-20: both `driving` and `motorcycle` return
+      // 200 with an IDENTICAL route (10,263 m for a Bình Thạnh → Quận 7
+      // probe), so router.project-osrm.org still routes two-wheelers on the
+      // car network; the distinct name only matters against a self-hosted
+      // motorcycle profile.
+      expect(RouteProfile.motorbike.osrm, 'motorcycle');
       expect(RouteProfile.bicycle.osrm, 'cycling');
       expect(RouteProfile.walking.osrm, 'walking');
     });

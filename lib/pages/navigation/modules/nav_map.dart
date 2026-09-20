@@ -157,6 +157,92 @@ extension _NavMap on _NavigationPageState {
     );
   }
 
+  /// Bottom-sheet details for a road-sign marker tapped on the map: kind,
+  /// posted speed limit, name, and data source (Vietmap / OSM / Waze).
+  void _showSignInfo(RoadSign s) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  SignIcon(kind: s.kind, value: s.value, size: 36),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          s.kind.label,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if (s.value != null && s.value! > 0)
+                          Text(
+                            'Tốc độ giới hạn: ${s.value} km/h',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[700],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              if (s.name.isNotEmpty && s.name != s.kind.label) ...[
+                const SizedBox(height: 10),
+                Text(
+                  s.name,
+                  style: TextStyle(fontSize: 13, color: Colors.grey[800]),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: _cameraSourceColor(s.source),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Nguồn dữ liệu: ${cameraSourceLabel(s.source)}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '${s.lat.toStringAsFixed(5)}, ${s.lng.toStringAsFixed(5)}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey[500],
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _locateMe() {
     final c = _current;
     if (c != null) _map.move(c, 17);
@@ -168,9 +254,9 @@ extension _NavMap on _NavigationPageState {
   }
 
   Widget _buildMap(OsrmRoute? route, LatLng? current) {
-    // Browse map with camera alerts on: load the camera index LAZILY (after
-    // the first build) so cold start stays fast but cameras still appear.
-    if (cameraAlerts && !_camerasRequested) {
+    // Browse map: load the camera/sign index LAZILY (after the first build)
+    // so cold start stays fast but cameras + signs still appear on browse.
+    if (!_camerasRequested) {
       _camerasRequested = true;
       unawaited(_ensureCameras());
     }
@@ -190,7 +276,25 @@ extension _NavMap on _NavigationPageState {
             ),
             // Keep the floating widget's auto-hide in sync with the browse
             // map zoom EVEN without GPS fixes (deduped + cheap).
-            onPositionChanged: (pos, hasGesture) => _syncOverlayVisibility(),
+            onPositionChanged: (pos, hasGesture) {
+              _syncOverlayVisibility();
+              if ((pos.zoom - _cameraZoom).abs() >= 0.35 ||
+                  (!hasGesture && (pos.zoom - _cameraZoom).abs() >= 0.05)) {
+                setNavState(() {
+                  _cameraZoom = pos.zoom;
+                });
+              } else {
+                _cameraZoom = pos.zoom;
+              }
+              if (!hasGesture && !_navigating) {
+                final c = _nearCamCenter;
+                if (c == null ||
+                    (pos.center.latitude - c.latitude).abs() > 0.03 ||
+                    (pos.center.longitude - c.longitude).abs() > 0.03) {
+                  _refreshNearCameras(pos.center);
+                }
+              }
+            },
             // Google-style interactive route editing on the preview map:
             // tap an alternative route line to select it, long-press to add
             // a via point and re-plan.
@@ -207,23 +311,63 @@ extension _NavMap on _NavigationPageState {
                     _startCtrl.text = _originName;
                     _suggestions = [];
                   });
+                  // Resolve a real road/place name for the tapped start.
+                  reverseGeocode(tapPos).then((addr) {
+                    if (!mounted || addr.isEmpty) return;
+                    setNavState(() {
+                      _originName = addr;
+                      _startCtrl.text = addr;
+                    });
+                  });
                 } else {
                   _planToPoint(
                     'Điểm trên bản đồ',
                     tapPos.latitude,
                     tapPos.longitude,
                   );
+                  // Resolve a real road/place name for the tapped destination.
+                  reverseGeocode(tapPos).then((addr) {
+                    if (!mounted || addr.isEmpty) return;
+                    setNavState(() {
+                      final idx = _stops.length - 1;
+                      if (idx >= 0 &&
+                          _stops[idx].lat == tapPos.latitude &&
+                          _stops[idx].lng == tapPos.longitude) {
+                        _stops[idx] = TripStop(
+                          name: addr,
+                          lat: tapPos.latitude,
+                          lng: tapPos.longitude,
+                        );
+                      }
+                    });
+                  });
                 }
                 return;
               }
               if (_navigating || _alternativeRoutes.length <= 1) return;
+              // Scale tap tolerance to ~28 screen pixels based on current zoom
+              // so the driver can tap alternative routes easily even when zoomed out.
+              var threshold = 45.0;
+              try {
+                final zoom = _map.camera.zoom;
+                final cosLat = cos(tapPos.latitude * pi / 180);
+                final mPerPx = 156543.03392 * cosLat / pow(2, zoom);
+                threshold = max(45.0, 28.0 * mPerPx);
+              } catch (_) {}
+
+              int? bestIdx;
+              var bestDist = double.infinity;
               for (var i = 0; i < _alternativeRoutes.length; i++) {
                 if (i == _selectedRoute) continue;
-                if (_distToLine(tapPos, _alternativeRoutes[i].geometry) <
-                    0.05 /* ~50m */ ) {
-                  _selectAlternative(i);
-                  return;
+                final d = _distToLine(tapPos, _alternativeRoutes[i].geometry);
+                if (d < threshold && d < bestDist) {
+                  bestDist = d;
+                  bestIdx = i;
                 }
+              }
+              if (bestIdx != null) {
+                _selectAlternative(bestIdx);
+                return;
               }
             },
             onLongPress: (_, pos) {
@@ -382,15 +526,27 @@ extension _NavMap on _NavigationPageState {
                       child: Icon(p.type.icon, size: 14, color: Colors.white),
                     ),
                   ),
+                // Road-sign layer: real sign icons near the user (cấm vượt /
+                // STOP / khu dân cư …). Density + visibility follow zoom.
+                for (final s in _signSlice(_cameraZoom))
+                  Marker(
+                    point: s.pos,
+                    width: 32,
+                    height: 32,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _showSignInfo(s),
+                      child: SignIcon(kind: s.kind, value: s.value, size: 30),
+                    ),
+                  ),
                 // Camera layer: colored dot per focus (speed / red-light /
-                // general), shown when camera alerts are on. A single circle
-                // (no separate 📷 text) so it fits the 26×26 marker box — the
-                // old dot+tag Column overflowed by 5 px for every camera. A
-                // tiny corner dot marks the data source (waze/police/osm).
-                // Only NEAR-THE-USER cameras ([_nearCameras], ≤120) are drawn
-                // — all ~70k nationwide markers crushed the low-end phone.
-                if (cameraAlerts)
-                  for (final c in _nearCameras)
+                // general). A single circle (no separate 📷 text) so it fits
+                // the 26×26 marker box. A tiny corner dot marks the source
+                // (waze/police/osm). Only NEAR-THE-USER cameras are drawn,
+                // density-culled by zoom (fewer when zoomed out), and HIDDEN
+                // when zoomed in further (>= z16).
+                if (_camerasVisible(_cameraZoom))
+                  for (final c in _cameraSlice(_cameraZoom))
                     Marker(
                       point: c.pos,
                       width: 26,
@@ -444,7 +600,118 @@ extension _NavMap on _NavigationPageState {
             ),
           ],
         ),
+        // Basemap layer switcher, floating on the map (Google Maps style).
+        Positioned(
+          left: 12,
+          bottom: 20,
+          child: _layerMenuButton(),
+        ),
       ],
+    );
+  }
+
+  /// Camera visibility on browse/route map: only if camera alerts are enabled,
+  /// and hidden when zoomed out past regional level (z < 10).
+  bool _camerasVisible(double zoom) => cameraAlerts && zoom >= 10.0;
+
+  /// Marker density cap: fewer markers when zoomed out, more when zoomed in.
+  int _markerLimit(double zoom) => ((zoom - 12) * 40).round().clamp(20, 120);
+
+  /// Decimates [items] evenly across the sequence so the route is sampled
+  /// uniformly from start to end without clumping or dropping the tail.
+  List<T> _decimateList<T>(List<T> items, int cap) {
+    if (items.length <= cap) return items;
+    if (cap <= 0) return const [];
+    final step = items.length / cap;
+    return List.generate(cap, (i) => items[(i * step).floor()]);
+  }
+
+  List<OfflineCamera> _cameraSlice(double zoom) {
+    if (_route != null) {
+      // In navigation or prepare-to-navigate mode with an active route:
+      // Cap cameras to ~15-60 markers based on zoom so combined markers
+      // (signs + cameras) stay strictly within 100-200 important markers.
+      final important = _routeCameras
+          .where((c) => c.focus == 'speed' || c.focus == 'red_light')
+          .toList();
+      final pool = important.isNotEmpty ? important : _routeCameras;
+      final cap = ((zoom - 10.0) * 7 + 15).round().clamp(15, 60);
+      return _decimateList(pool, cap);
+    }
+
+    final n = _markerLimit(zoom);
+    return _nearCameras.length > n ? _nearCameras.sublist(0, n) : _nearCameras;
+  }
+
+  /// Road signs on the map:
+  /// - When an active route exists (_route != null, i.e. navigation or prepare-to-navigate):
+  ///   Strictly limits to important signs (speed limits, khu dân cư, cấm vượt, STOP, etc.),
+  ///   clustering/decimating evenly along the route when zoomed out (20 signs at z11)
+  ///   and smoothly increasing up to ~140 signs when zoomed in.
+  /// - When browsing without a route (_route == null):
+  ///   Uses near-user signs (20-30 important signs when zoomed out, up to 70 when zoomed in).
+  /// Hidden completely at z < 11.0 (regional overview).
+  List<RoadSign> _signSlice(double zoom) {
+    if (zoom < 11.0) return const [];
+
+    if (_route != null) {
+      // Limit to important regulatory & safety signs on route
+      final important = _routeSigns.where((s) => s.isImportant).toList();
+      final pool = important.isNotEmpty ? important : _routeSigns;
+      final cap = ((zoom - 11.0) * 24 + 20).round().clamp(20, 140);
+      return _decimateList(pool, cap);
+    }
+
+    final list = _nearSigns;
+    final isZoomedOut = zoom < 14.5;
+    if (isZoomedOut) {
+      final important = list.where((s) => s.isImportant).toList();
+      final cap = ((zoom - 11.0) * 3 + 20).round().clamp(20, 30);
+      return important.length > cap ? important.sublist(0, cap) : important;
+    }
+
+    final n = ((zoom - 14.5) * 20 + 30).round().clamp(30, 70);
+    return list.length > n ? list.sublist(0, n) : list;
+  }
+
+  /// Floating basemap layer picker (OpenStreetMap / CARTO / ESRI / topo).
+  Widget _layerMenuButton() {
+    const options = {
+      'osm': 'OpenStreetMap',
+      'esri-street': 'ESRI Street',
+      'esri': 'ESRI Satellite',
+      'topo': 'OpenTopoMap',
+    };
+    return PopupMenuButton<String>(
+      tooltip: 'Lớp bản đồ',
+      color: Colors.white,
+      elevation: 8,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      onSelected: (v) => _setTileSource(v),
+      itemBuilder: (ctx) => [
+        for (final e in options.entries)
+          PopupMenuItem<String>(
+            value: e.key,
+            child: Row(
+              children: [
+                Icon(
+                  e.key == _tileSource
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
+                  size: 18,
+                  color: const Color(0xFF4285F4),
+                ),
+                const SizedBox(width: 8),
+                Text(e.value),
+              ],
+            ),
+          ),
+      ],
+      child: const CircleAvatar(
+        radius: 20,
+        backgroundColor: Colors.white,
+        child: Icon(Icons.layers, color: Color(0xFF5F6368)),
+      ),
     );
   }
 }

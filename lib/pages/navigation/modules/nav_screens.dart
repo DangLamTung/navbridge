@@ -10,6 +10,11 @@ extension _NavScreens on _NavigationPageState {
     if (!mounted) return;
     final s = await loadSettings();
     dataSource = s.dataSource;
+    vehicleType = s.vehicleType;
+    _routeProfile = switch (s.vehicleType) {
+      'motorbike' => RouteProfile.motorbike,
+      _ => RouteProfile.car,
+    };
     setNavState(() {});
   }
 }

@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import 'package:navbridge/services/vietmap_config.dart';
+import 'package:navbridge/services/api_notice.dart' show noteVietmapQuota;
 
 const _ua = 'navbridge/1.0 (Vietmap search)';
 
@@ -31,8 +32,9 @@ Future<List<VmSuggestion>> vietmapAutocomplete(
   String text, {
   LatLng? focus,
 }) async {
+  final key = VietmapConfig.nextKey();
   var url =
-      '${VietmapConfig.autocomplete}?apikey=${VietmapConfig.nextKey()}'
+      '${VietmapConfig.autocomplete}?apikey=$key'
       '&text=${Uri.encodeQueryComponent(text)}&display_type=6';
   if (focus != null) {
     url += '&focus=${focus.latitude},${focus.longitude}';
@@ -40,7 +42,13 @@ Future<List<VmSuggestion>> vietmapAutocomplete(
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': _ua})
       .timeout(const Duration(seconds: 10));
-  if (res.statusCode != 200) return const [];
+  if (res.statusCode != 200) {
+    if (res.statusCode == 401 || res.statusCode == 403 || res.statusCode == 429) {
+      VietmapConfig.markKeyFailed(key);
+      noteVietmapQuota(statusCode: res.statusCode, body: res.body);
+    }
+    return const [];
+  }
   final data = jsonDecode(utf8.decode(res.bodyBytes));
   if (data is! List) return const [];
   final out = <VmSuggestion>[];
@@ -59,23 +67,45 @@ Future<List<VmSuggestion>> vietmapAutocomplete(
   return out;
 }
 
+/// In-memory cache of refId -> coordinates + display name to save transactions.
+final _vmPlaceCache = <String, (double, double, String)>{};
+const _maxVmPlaceCacheEntries = 200;
+
 /// Resolve coordinates + display name for a chosen suggestion.
 /// Returns (lat, lng, display) or null on failure. One transaction per call.
 Future<(double, double, String)?> vietmapPlace(String refId) async {
+  if (refId.isEmpty) return null;
+  final cached = _vmPlaceCache[refId];
+  if (cached != null) return cached;
+
+  final key = VietmapConfig.nextKey();
   final url =
-      '${VietmapConfig.place}?apikey=${VietmapConfig.nextKey()}'
+      '${VietmapConfig.place}?apikey=$key'
       '&refid=${Uri.encodeQueryComponent(refId)}';
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': _ua})
       .timeout(const Duration(seconds: 10));
-  if (res.statusCode != 200) return null;
+  if (res.statusCode != 200) {
+    if (res.statusCode == 401 || res.statusCode == 403 || res.statusCode == 429) {
+      VietmapConfig.markKeyFailed(key);
+      noteVietmapQuota(statusCode: res.statusCode, body: res.body);
+    }
+    return null;
+  }
   final d = jsonDecode(utf8.decode(res.bodyBytes));
   if (d is! Map) return null;
   final lat = (d['lat'] as num?)?.toDouble();
   final lng = (d['lng'] as num?)?.toDouble();
   if (lat == null || lng == null) return null;
   final display = (d['display'] ?? d['name'] ?? '') as String;
-  return (lat, lng, display);
+  final result = (lat, lng, display);
+
+  if (_vmPlaceCache.length >= _maxVmPlaceCacheEntries) {
+    _vmPlaceCache.remove(_vmPlaceCache.keys.first);
+  }
+  _vmPlaceCache[refId] = result;
+
+  return result;
 }
 
 /// A POI found via the Vietmap place index.
@@ -109,7 +139,7 @@ Future<List<VmPoi>> vietmapPoiSearch(
   }
   final suggestions = await vietmapAutocomplete(text, focus: center);
   final resolved = await Future.wait([
-    for (final s in suggestions.take(limit * 2)) _resolveVmPoi(s),
+    for (final s in suggestions.take(limit)) _resolveVmPoi(s),
   ]);
   final out = [for (final p in resolved) ?p];
   const Distance d = Distance();

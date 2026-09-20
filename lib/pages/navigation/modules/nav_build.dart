@@ -77,6 +77,7 @@ extension _NavBuild on _NavigationPageState {
                     satelliteUrl: _satelliteLayerUrl,
                     onPoiTap: _onNavPoiTap,
                     onCameraTap: _showCameraInfo,
+                    onSignTap: _showSignInfo,
                     signs: _routeSigns,
                     controller: _vmFollow,
                     smoothCamera: smoothCamera,
@@ -198,6 +199,7 @@ extension _NavBuild on _NavigationPageState {
                   satelliteUrl: _satelliteLayerUrl,
                   onPoiTap: _onNavPoiTap,
                   onCameraTap: _showCameraInfo,
+                  onSignTap: _showSignInfo,
                   signs: _routeSigns,
                   controller: _vmFollow,
                   smoothCamera: smoothCamera,
@@ -240,7 +242,17 @@ extension _NavBuild on _NavigationPageState {
                                     suggestions: _suggestions,
                                     onSelected: _selectSuggestion,
                                   )
-                                : (_stops.isNotEmpty
+                                : (_showRecentSearches
+                                      // Previous searches — offered as soon as
+                                      // the field is focused (Google-Maps
+                                      // style), before anything is typed.
+                                      ? RecentSearchesList(
+                                          items: RecentSearches.instance.items,
+                                          onSelected: _selectRecentSearch,
+                                          onRemove: _removeRecentSearch,
+                                          onClear: _clearRecentSearches,
+                                        )
+                                      : _stops.isNotEmpty
                                       ? StopsPanel(
                                           stops: _stops,
                                           onMoveUp: (i) => _moveStop(i, -1),
@@ -261,17 +273,31 @@ extension _NavBuild on _NavigationPageState {
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                RoadInfoChip(
-                                  info: _roadInfo,
-                                  loading: _roadLoading,
-                                  speedMps: _progress?.speedMps,
-                                  limitOverride: _effectiveSpeedLimit > 0
-                                      ? _effectiveSpeedLimit
-                                      : null,
-                                  // GPS source tag lives INSIDE the chip so it
-                                  // never overlaps the right controls column.
-                                  fromEsp: _espActive(),
-                                ),
+                                // Speed display style (Settings → Hiển thị
+                                // tốc độ): the compact chip, or the floating
+                                // widget's round gauge. Same values either way
+                                // — only the drawing differs.
+                                if (navSpeedStyle == 'dial')
+                                  SpeedDialChip(
+                                    info: _roadInfo,
+                                    speedMps: _progress?.speedMps,
+                                    limitOverride: _effectiveSpeedLimit > 0
+                                        ? _effectiveSpeedLimit
+                                        : null,
+                                    fromEsp: _espActive(),
+                                  )
+                                else
+                                  RoadInfoChip(
+                                    info: _roadInfo,
+                                    loading: _roadLoading,
+                                    speedMps: _progress?.speedMps,
+                                    limitOverride: _effectiveSpeedLimit > 0
+                                        ? _effectiveSpeedLimit
+                                        : null,
+                                    // GPS source tag lives INSIDE the chip so
+                                    // it never overlaps the right column.
+                                    fromEsp: _espActive(),
+                                  ),
                                 // Close chip to dismiss the search / POI
                                 // markers on the nav map (blue search markers
                                 // + the tapped/selected POI highlight).
@@ -465,6 +491,12 @@ extension _NavBuild on _NavigationPageState {
                                                 _tileSource == 'vietmapsat',
                                               ),
                                             ],
+                                            _layerItem(
+                                              'type:vector',
+                                              Icons.layers,
+                                              'Bản đồ Vector (HCMC)',
+                                              _tileSource == 'vector',
+                                            ),
                                             const PopupMenuDivider(height: 12),
                                             _layerHeader('Lớp phủ & Hiệu ứng'),
                                             _layerItem(
@@ -641,6 +673,49 @@ extension _NavBuild on _NavigationPageState {
                                   style: TextStyle(
                                     color: Colors.white,
                                     fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (_isRerouting)
+                    Positioned(
+                      top: _navigating ? 150 : 58,
+                      left: 12,
+                      right: 12,
+                      child: Material(
+                        elevation: 5,
+                        shadowColor: Colors.black38,
+                        borderRadius: BorderRadius.circular(12),
+                        color: const Color(0xFF1A73E8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          child: Row(
+                            children: const [
+                              SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'Đang tính lại lộ trình…',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
                               ),

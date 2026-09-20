@@ -1,8 +1,5 @@
-/// Round bluetooth button showing the BLE **displays** connection state —
-/// the E-ink clock (DA14585) and the ESP32 2.8" nav display (NAV-OSM).
-///
-/// Tapping opens the device picker, which routes each device to its own BLE
-/// client (E-ink clock → [BleClock], ESP display → [BleMapClock]).
+/// Round bluetooth button showing the BLE display connection state —
+/// the ESP32 2.8" nav display (NAV-OSM).
 library;
 
 import 'package:flutter/material.dart';

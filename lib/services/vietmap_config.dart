@@ -2,6 +2,8 @@
 /// switch ('osm' default / 'vietmap').
 library;
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 class VietmapConfig {
   /// Vietmap API key(s) — autocomplete / place / routing.
   ///
@@ -13,21 +15,77 @@ class VietmapConfig {
   /// limit doesn't kill search/routing.
   static const String apiKey = String.fromEnvironment('VIETMAP_API_KEY');
 
-  static final List<String> _keys = apiKey
+  static List<String> _keys = apiKey
       .split(',')
       .map((k) => k.trim())
       .where((k) => k.isNotEmpty)
       .toList();
   static int _keyIdx = 0;
 
-  /// Next Vietmap key (round-robin across the comma-separated list). Empty
-  /// when no key was provided.
+  /// Failed/quarantined keys mapped to their quarantine expiration time.
+  static final Map<String, DateTime> _quarantinedKeys = {};
+
+  /// Duration to quarantine a key when it returns 401/403/429.
+  static const Duration quarantineDuration = Duration(minutes: 10);
+
+  /// Mark a key as failed (e.g. rate limited, invalid, or quota exhausted).
+  static void markKeyFailed(String key) {
+    final k = key.trim();
+    if (k.isEmpty) return;
+    _quarantinedKeys[k] = DateTime.now().add(quarantineDuration);
+  }
+
+  /// Check whether [key] is currently in quarantine.
+  static bool isKeyQuarantined(String key) {
+    final exp = _quarantinedKeys[key.trim()];
+    if (exp == null) return false;
+    if (DateTime.now().isAfter(exp)) {
+      _quarantinedKeys.remove(key.trim());
+      return false;
+    }
+    return true;
+  }
+
+  /// Reset quarantine and round-robin state for testing.
+  @visibleForTesting
+  static void resetQuarantineForTesting() {
+    _quarantinedKeys.clear();
+    _keyIdx = 0;
+  }
+
+  /// Override keys for unit testing.
+  @visibleForTesting
+  static void setKeysForTesting(List<String>? testKeys) {
+    _keys = (testKeys ?? apiKey.split(','))
+        .map((k) => k.trim())
+        .where((k) => k.isNotEmpty)
+        .toList();
+    _quarantinedKeys.clear();
+    _keyIdx = 0;
+  }
+
+  /// Next Vietmap key (round-robin across active, non-quarantined keys).
+  /// Falls back to regular round-robin if every key is quarantined.
+  /// Empty when no key was provided.
   static String nextKey() {
     if (_keys.isEmpty) return '';
+    final now = DateTime.now();
+    _quarantinedKeys.removeWhere((_, until) => now.isAfter(until));
+
+    for (var i = 0; i < _keys.length; i++) {
+      final idx = (_keyIdx + i) % _keys.length;
+      final candidate = _keys[idx];
+      if (!_quarantinedKeys.containsKey(candidate)) {
+        _keyIdx = (idx + 1) % _keys.length;
+        return candidate;
+      }
+    }
+
     final k = _keys[_keyIdx % _keys.length];
-    _keyIdx++;
+    _keyIdx = (_keyIdx + 1) % _keys.length;
     return k;
   }
+
 
   /// Vietmap TILE key — map tiles / style (also --dart-define only).
   static const String tileKey = String.fromEnvironment('VIETMAP_TILE_KEY');
@@ -84,3 +142,35 @@ const String navMapDownloadBaseUrl = String.fromEnvironment('NAVMAP_URL');
 /// Set at build time via `--dart-define=GRAPH_URL=http://<host>/` — the file
 /// is expected at `$GRAPH_URL/graph.ghz` (built with `tools/build_graph.sh`).
 const String graphDownloadBaseUrl = String.fromEnvironment('GRAPH_URL');
+
+/// Base URL the app auto-updates the offline point data (traffic cameras +
+/// road signs) from. Empty = auto-update disabled (only the bundled assets are
+/// used). Set at build time via `--dart-define=DATA_URL=http://<host>/`. The
+/// server should publish:
+///   `$DATA_URL/version.json`  → `{"cameras": "123", "signs": "456"}` (version
+///                               strings, e.g. content hashes / timestamps)
+///   `$DATA_URL/vietnam_cameras.json`
+///   `$DATA_URL/vietnam_signs.json`
+/// (same schema as `assets/offline_map/`). A plain `python3 -m http.server`
+/// over the folder works.
+const String dataUpdateBaseUrl = String.fromEnvironment('DATA_URL');
+
+/// CARTO API key — used to authenticate CARTO basemap raster tile requests.
+/// Provided at BUILD TIME via `--dart-define=CARTO_API_KEY=...`.
+const String cartoApiKey = String.fromEnvironment('CARTO_API_KEY');
+
+/// If [url] targets CARTO (`basemaps.cartocdn.com`) and [cartoApiKey] is set,
+/// appends `?key=...` (or `&key=...`) to authenticate the request.
+///
+/// CARTO switched its basemap auth from `api_key` to `key` (2026); the old
+/// `?api_key=` is ignored and returns an "API KEY REQUIRED" watermark tile.
+String appendCartoApiKey(String url) {
+  if (cartoApiKey.isEmpty ||
+      !url.contains('basemaps.cartocdn.com') ||
+      url.contains('key=')) {
+    return url;
+  }
+  return url.contains('?')
+      ? '$url&key=$cartoApiKey'
+      : '$url?key=$cartoApiKey';
+}

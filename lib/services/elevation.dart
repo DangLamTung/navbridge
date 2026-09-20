@@ -58,22 +58,30 @@ Future<ElevationInfo?> fetchRouteElevation(List<LatLng> poly) async {
     // fall through to the online service
   }
   try {
-    // Sample ~120 m apart, max ~60 points for the free SRTM endpoint.
+    // Dynamic sampling: sample max ~58 intermediate points so with endpoints
+    // we stay <= 60 points for the free SRTM endpoint across the ENTIRE route.
+    var totalDist = 0.0;
+    for (var i = 1; i < poly.length; i++) {
+      totalDist += _dist(poly[i - 1], poly[i]);
+    }
+    final stepM = math.max(120.0, totalDist / 58.0);
+
     final pts = <LatLng>[poly.first];
     final dists = <double>[0.0];
     var since = 0.0, acc = 0.0;
-    for (var i = 1; i < poly.length && pts.length < 60; i++) {
+    for (var i = 1; i < poly.length - 1; i++) {
       final seg = _dist(poly[i - 1], poly[i]);
       since += seg;
       acc += seg;
-      if (since >= 120) {
+      if (since >= stepM && pts.length < 59) {
         pts.add(poly[i]);
         dists.add(acc);
         since = 0;
       }
     }
-    if (pts.length < 2) pts.add(poly.last);
-    if (dists.length < pts.length) dists.add(acc);
+    // Always include the route destination endpoint.
+    pts.add(poly.last);
+    dists.add(totalDist);
 
     final locs = pts.map((p) => '${p.latitude},${p.longitude}').join('|');
     final url = 'https://api.opentopodata.org/v1/srtm90m?locations=$locs';

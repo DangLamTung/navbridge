@@ -61,7 +61,9 @@ class OfflineRouter {
   /// Load the graph at [graphPath] (a folder, or a `.ghz` zip — the native
   /// side extracts it). Returns true when routing is ready.
   Future<bool> load(String graphPath) async {
-    _loadCompleter ??= Completer<void>();
+    // Reset every attempt: after a failed load the completer must not stay
+    // completed, or [ready] would report "done" before the graph loaded.
+    _loadCompleter = Completer<void>();
     try {
       final ok = await _channel.invokeMethod<bool>('load', {'dir': graphPath});
       _loaded = ok ?? false;
@@ -72,6 +74,15 @@ class OfflineRouter {
       if (!_loadCompleter!.isCompleted) _loadCompleter!.complete();
       return false;
     }
+  }
+
+  /// Unload the routing engine and release file handles.
+  Future<void> unload() async {
+    try {
+      await _channel.invokeMethod('unload');
+    } catch (_) {}
+    _loaded = false;
+    _loadCompleter = null;
   }
 
   /// Ask the native side whether a graph is already loaded (e.g. after the
@@ -137,6 +148,7 @@ class OfflineRouter {
     int maxAlternatives = 1,
     bool avoidMotorway = false,
     bool avoidFerry = false,
+    double? startHeading,
   }) async {
     if (points.length < 2 || !_loaded) return const [];
     try {
@@ -145,15 +157,17 @@ class OfflineRouter {
         flat.add(p.latitude);
         flat.add(p.longitude);
       }
+      final args = <String, dynamic>{
+        'points': flat,
+        'alternatives': maxAlternatives,
+        'avoidMotorway': avoidMotorway,
+        'avoidFerry': avoidFerry,
+      };
+      if (startHeading != null) args['heading'] = startHeading;
       // Platform-channel maps decode as Map<Object?, Object?>, so a typed
       // invokeMapMethod<String, dynamic> cast throws. Convert explicitly.
       final raw = await _channel
-          .invokeMethod<Object?>('route', {
-            'points': flat,
-            'alternatives': maxAlternatives,
-            'avoidMotorway': avoidMotorway,
-            'avoidFerry': avoidFerry,
-          })
+          .invokeMethod<Object?>('route', args)
           .timeout(const Duration(seconds: 90));
       if (raw == null) {
         debugPrint('ROUTER: route returned null (no path)');
@@ -246,18 +260,78 @@ Future<String> routingGraphDir() async {
   return '${sup.path}/routing_graph';
 }
 
-/// Path to pass to the loader: the `.ghz` file if present, else the folder.
+/// Delete the on-device routing graph and all downloaded source files to free phone storage.
+Future<void> deleteRoutingGraph() async {
+  await OfflineRouter.instance.unload();
+  final dir = await routingGraphDir();
+  final d = Directory(dir);
+  if (d.existsSync()) {
+    try {
+      d.deleteSync(recursive: true);
+    } catch (_) {}
+  }
+  for (final ext in ['.ghz', '.osm.pbf', '.pbf', '.zip']) {
+    final f = File('$dir$ext');
+    if (f.existsSync()) {
+      try {
+        f.deleteSync();
+      } catch (_) {}
+    }
+  }
+}
+
+/// Path to pass to the loader: the extracted directory if populated,
+/// or a `.ghz` / `.osm.pbf` file (which will be converted on-device and deleted).
 Future<String> routingGraphPath() async {
   final dir = await routingGraphDir();
+  final d = Directory(dir);
+  if (d.existsSync()) {
+    try {
+      if (d.listSync().isNotEmpty) return dir;
+    } catch (_) {}
+  }
+  for (final ext in ['.ghz', '.osm.pbf', '.pbf', '.zip']) {
+    final local = File('$dir$ext');
+    if (local.existsSync()) return local.path;
+  }
+  // Also check external storage / Download directory if user downloaded via browser or pushed via ADB
+  for (final p in [
+    '/sdcard/Download/routing_graph.ghz',
+    '/sdcard/Download/graph.ghz',
+    '/sdcard/Download/vietnam-latest.osm.pbf',
+    '/sdcard/Download/vietnam.osm.pbf',
+    '/sdcard/Download/saigon-latest.osm.pbf',
+    '/storage/emulated/0/Download/routing_graph.ghz',
+    '/storage/emulated/0/Download/graph.ghz',
+    '/storage/emulated/0/Download/vietnam-latest.osm.pbf',
+  ]) {
+    final f = File(p);
+    if (f.existsSync()) {
+      try {
+        final ext = p.endsWith('.osm.pbf')
+            ? '.osm.pbf'
+            : p.substring(p.lastIndexOf('.'));
+        final target = File('$dir$ext');
+        if (!target.existsSync() || target.lengthSync() != f.lengthSync()) {
+          target.parent.createSync(recursive: true);
+          f.copySync(target.path);
+          // Delete from /sdcard/Download after copying to reclaim download storage
+          try {
+            f.deleteSync();
+          } catch (_) {}
+        }
+        return target.path;
+      } catch (_) {
+        return f.path;
+      }
+    }
+  }
   return File('$dir.ghz').existsSync() ? '$dir.ghz' : dir;
 }
 
 Future<bool> routingGraphPresent() async {
   final dir = await routingGraphDir();
   final d = Directory(dir);
-  // listSync() on the main isolate with a multi-GB graph dir would block the
-  // first frames — check cheaply instead (the graph exists iff the dir is
-  // non-empty, which list() confirms without materialising names).
   var nonEmpty = false;
   try {
     await for (final _ in d.list(followLinks: false)) {
@@ -265,34 +339,52 @@ Future<bool> routingGraphPresent() async {
       break;
     }
   } catch (_) {}
-  return nonEmpty || File('$dir.ghz').existsSync();
+  if (nonEmpty) return true;
+  for (final ext in ['.ghz', '.osm.pbf', '.pbf', '.zip']) {
+    if (File('$dir$ext').existsSync()) return true;
+  }
+  for (final p in [
+    '/sdcard/Download/routing_graph.ghz',
+    '/sdcard/Download/graph.ghz',
+    '/sdcard/Download/vietnam-latest.osm.pbf',
+    '/sdcard/Download/vietnam.osm.pbf',
+    '/sdcard/Download/saigon-latest.osm.pbf',
+    '/storage/emulated/0/Download/routing_graph.ghz',
+    '/storage/emulated/0/Download/graph.ghz',
+    '/storage/emulated/0/Download/vietnam-latest.osm.pbf',
+  ]) {
+    if (File(p).existsSync()) return true;
+  }
+  return false;
 }
 
-/// Download the GraphHopper routing graph (`.ghz`) from
-/// `$graphDownloadBaseUrl/graph.ghz` into app storage, then load it.
-/// Throws a clear error when no `GRAPH_URL` is configured. Reports byte
-/// progress via [onProgress] (done bytes, total bytes). Returns true when
-/// routing is ready after the download.
-Future<bool> downloadGraph(
+/// Download the GraphHopper routing data directly on the phone,
+/// convert it into the offline graph, and delete the downloaded file to save storage.
+Future<bool> downloadGraph([
   void Function(int done, int total)? onProgress,
-) async {
-  final base = graphDownloadBaseUrl;
-  if (base.isEmpty) {
-    throw StateError(
-      'Chưa cấu hình URL tải bộ dữ liệu GraphHopper (dùng --dart-define=GRAPH_URL).',
-    );
-  }
-  final url = Uri.parse('$base/graph.ghz');
+  String? customUrl,
+]) async {
+  final urlStr = (customUrl != null && customUrl.isNotEmpty)
+      ? customUrl
+      : (graphDownloadBaseUrl.isNotEmpty
+          ? (graphDownloadBaseUrl.endsWith('.ghz') ||
+                  graphDownloadBaseUrl.endsWith('.pbf')
+              ? graphDownloadBaseUrl
+              : '$graphDownloadBaseUrl/graph.ghz')
+          : 'https://download.geofabrik.de/asia/vietnam-latest.osm.pbf');
+
   final dir = await routingGraphDir();
-  final target = '$dir.ghz';
+  final isPbf = urlStr.contains('.pbf');
+  final target = isPbf ? '$dir.osm.pbf' : '$dir.ghz';
   final ok = await downloadToFile(
-    url.toString(),
+    urlStr,
     target,
     onProgress ?? (_, _) {},
   );
   if (!ok) {
-    throw StateError('Không tải được bộ dữ liệu GraphHopper ($url).');
+    throw StateError('Không tải được bộ dữ liệu GraphHopper ($urlStr).');
   }
+  // Convert/extract on the phone. Once converted, the native loader automatically deletes the downloaded file!
   return OfflineRouter.instance.load(target);
 }
 
@@ -404,6 +496,7 @@ Future<OsrmRoute> fetchAnyRoute(
   bool avoidFerry = false,
   RoutePreference preference = RoutePreference.fastest,
   Duration? onlineTimeout,
+  double? startHeading,
 }) async {
   final routes = await fetchAnyRoutes(
     points,
@@ -412,6 +505,7 @@ Future<OsrmRoute> fetchAnyRoute(
     avoidFerry: avoidFerry,
     preference: preference,
     onlineTimeout: onlineTimeout,
+    startHeading: startHeading,
   );
   return routes.first;
 }
@@ -428,6 +522,8 @@ Future<OsrmRoute> fetchAnyRoute(
 /// take before falling through to the on-device graph / OSRM. Live off-route
 /// reroutes pass a short budget so a dead zone (tunnel / rural) can't freeze
 /// turn-by-turn guidance for 30–60 s waiting on a network that is gone.
+/// [startHeading] = departure vehicle bearing (degrees) to guide reroutes along
+/// the current direction of travel.
 Future<List<OsrmRoute>> fetchAnyRoutes(
   List<LatLng> points, {
   RouteProfile profile = RouteProfile.car,
@@ -436,13 +532,20 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
   bool avoidFerry = false,
   RoutePreference preference = RoutePreference.fastest,
   Duration? onlineTimeout,
+  double? startHeading,
 }) async {
-  // Xe mô tô is PROHIBITED on VN motorways — always avoid them for this
-  // profile, regardless of the user's car-oriented "avoid highway" toggle.
-  final effAvoidHighway = avoidHighway || profile == RouteProfile.motorbike;
+  // Xe mô tô is PROHIBITED on VN motorways — the OSRM `motorcycle` profile and
+  // Vietmap's `vehicle=motorcycle` account for that natively; the car
+  // `driving` profile still honours the user's "avoid highway" toggle via
+  // `exclude=motorway`.
   if (dataSource == 'google' && !forceOffline) {
     try {
-      final fut = fetchGoogleRoutes(points, maxAlternatives: maxAlternatives);
+      final fut = profile == RouteProfile.motorbike
+          ? fetchGoogleTwoWheelerRoutes(
+              points,
+              maxAlternatives: maxAlternatives,
+            )
+          : fetchGoogleRoutes(points, maxAlternatives: maxAlternatives);
       final routes = onlineTimeout == null
           ? await fut
           : await fut.timeout(onlineTimeout);
@@ -478,6 +581,7 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
         maxAlternatives: maxAlternatives,
         avoidMotorway: avoidHighway,
         avoidFerry: avoidFerry,
+        startHeading: startHeading,
       );
       if (local.isNotEmpty) return rankByPreference(local, preference);
     }
@@ -495,10 +599,14 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
       points,
       profile: profile.osrm,
       exclude: osrmExclude(
-        avoidHighway: effAvoidHighway,
+        // The OSRM `motorcycle` profile already keeps two-wheelers off
+        // motorways; `exclude=motorway` is unsupported on that profile.
+        avoidHighway: avoidHighway && profile != RouteProfile.motorbike,
         avoidFerry: avoidFerry,
       ),
       maxAlternatives: maxAlternatives,
+      timeout: onlineTimeout,
+      startBearing: startHeading != null ? (startHeading, 45.0) : null,
     ),
     preference,
   );

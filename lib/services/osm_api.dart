@@ -21,6 +21,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:navbridge/services/offline_poi.dart';
 import 'offline_tiles.dart' show forceOffline, geocodingProvider;
 import 'package:navbridge/services/vietmap_api.dart';
+import 'package:navbridge/services/api_notice.dart' show noteGoogleQuota;
 import 'vietmap_config.dart' show VietmapConfig, dataSource;
 
 const _nominatimBase = 'https://nominatim.openstreetmap.org';
@@ -61,6 +62,14 @@ const _ua = 'navbridge/1.0 (BLE portable navigation; OSM search)';
 /// On-disk cache of recent results — used when the network is unavailable.
 final Map<String, List<OsmSuggestion>> _searchCache = {};
 bool _searchCacheLoaded = false;
+const int _maxSearchCacheEntries = 100;
+
+void _cacheSearchResult(String key, List<OsmSuggestion> list) {
+  _searchCache[key] = list;
+  if (_searchCache.length > _maxSearchCacheEntries) {
+    _searchCache.remove(_searchCache.keys.first);
+  }
+}
 
 Future<File> _searchCacheFile() async {
   final sup = await getApplicationSupportDirectory();
@@ -72,9 +81,14 @@ Future<void> _loadSearchCache() async {
   _searchCacheLoaded = true;
   try {
     final f = await _searchCacheFile();
-    if (!f.existsSync()) return;
-    final data = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
-    for (final e in data.entries) {
+    if (!await f.exists()) return;
+    final raw = await f.readAsString();
+    final data = jsonDecode(raw) as Map<String, dynamic>;
+    final entries = data.entries.toList();
+    final keep = entries.length > _maxSearchCacheEntries
+        ? entries.sublist(entries.length - _maxSearchCacheEntries)
+        : entries;
+    for (final e in keep) {
       final list = (e.value as List).cast<Map<String, dynamic>>();
       _searchCache[e.key] = [
         for (final s in list)
@@ -307,31 +321,113 @@ String _removeDiacritics(String s) {
   return b.toString();
 }
 
+/// Whitelist of prominent Vietnamese historical dates used as street names:
+/// 30/4 (Giải phóng miền Nam), 1/5 (Quốc tế Lao động), 19/5 (Sinh nhật Bác),
+/// 2/9 (Quốc khánh), 3/2 (Thành lập Đảng), 26/3 (Thành lập Đoàn),
+/// 23/9 (Nam Bộ kháng chiến), 8/3 (Quốc tế Phụ nữ), 20/10 (Phụ nữ VN),
+/// 20/11 (Nhà giáo VN), 27/7 (Thương binh Liệt sĩ), 22/12 (Quân đội ND),
+/// 19/8 (Cách mạng Tháng Tám), 10/3 (Giỗ tổ Hùng Vương).
+const _historicalDateStreets = <(int, int)>{
+  (30, 4),
+  (1, 5),
+  (19, 5),
+  (2, 9),
+  (3, 2),
+  (26, 3),
+  (23, 9),
+  (8, 3),
+  (20, 10),
+  (20, 11),
+  (27, 7),
+  (22, 12),
+  (19, 8),
+  (10, 3),
+};
+
 /// Rewrite Vietnamese date-street shorthand ("Đường 30/4", "30-4", "30.4")
-/// into the form OSM actually names it ("Đường 30 Tháng 4"). Only matches
-/// real dates (day ≤ 31 / month ≤ 12), so alley numbers like "Hẻm 130/21" are
-/// left alone. Returns null when there is nothing to rewrite.
+/// into the form OSM actually names it ("Đường 30 Tháng 4").
+///
+/// Protection against mangling house/alley numbers:
+/// - If preceded by an alley/house indicator (hẻm, ngõ, ngách, kiệt, số) -> NOT rewritten.
+/// - If preceded by a street indicator (đường, phố, đ., ql) -> any valid day/month (≤31/≤12) is rewritten.
+/// - If standalone / no street indicator -> ONLY matches the historical date street whitelist
+///   (so "15/4 Lê Lợi" stays an alley address and is NOT mangled into "15 Tháng 4 Lê Lợi").
+/// Returns null when there is nothing to rewrite.
 String? rewriteDateStreet(String s) {
   final m = RegExp(
-    r'(?<![0-9])([0-9]{1,2})[/.\-]([0-9]{1,2})(?![0-9])',
+    r'(?<![0-9])([0-9]{1,2})[/.\-]([0-9]{1,2})(?![0-9/.\-])',
   ).firstMatch(s);
   if (m == null) return null;
   final d = int.parse(m.group(1)!);
   final mo = int.parse(m.group(2)!);
   if (d < 1 || d > 31 || mo < 1 || mo > 12) return null;
-  return s.replaceFirst(m.group(0)!, '${m.group(1)} Tháng ${m.group(2)}');
+
+  final prefix = s.substring(0, m.start).trim().toLowerCase();
+  // 1. Preceded by an alley or house number keyword -> keep as-is (not a date street)
+  final isAlley = RegExp(
+    r'(?:hẻm|hem|ngõ|ngo|ngách|ngach|kiệt|kiet|số|so)\s*$',
+    caseSensitive: false,
+  ).hasMatch(prefix);
+  if (isAlley) return null;
+
+  // 2. Preceded by a street keyword -> rewrite
+  final isStreet = RegExp(
+    r'(?:đường|duong|đ\.|d\.|phố|pho|đoạn|doan|quốc lộ|quoc lo|ql)\s*$',
+    caseSensitive: false,
+  ).hasMatch(prefix);
+  if (isStreet) {
+    return s.replaceFirst(m.group(0)!, '${m.group(1)} Tháng ${m.group(2)}');
+  }
+
+  // 3. No street keyword -> only rewrite if it matches the Vietnamese historical date street whitelist
+  if (_historicalDateStreets.contains((d, mo))) {
+    return s.replaceFirst(m.group(0)!, '${m.group(1)} Tháng ${m.group(2)}');
+  }
+
+  return null;
 }
 
 /// Split a leading Vietnamese house number from the street part of an
 /// address. Handles "62", "62A", "62/8", "62/8A":
 ///   splitHouseNumber("62 đường 30/4") → ("62", "đường 30/4")
+///
+/// Prevents misinterpreting date streets as house numbers:
+///   "30/4 Tân Bình" → null (it's the 30/4 street in Tân Bình, not house 30/4 on Tân Bình street).
 /// Returns null when there is no leading house number.
 (String, String)? splitHouseNumber(String s) {
   final m = RegExp(
     r'^[0-9]+[A-Za-z]?(?:/[0-9]+[A-Za-z]?)?\s+',
   ).matchAsPrefix(s);
   if (m == null) return null;
-  return (m.group(0)!.trim(), s.substring(m.end).trim());
+
+  final numPart = m.group(0)!.trim();
+  final rest = s.substring(m.end).trim();
+
+  // If numPart looks like a date (e.g. 30/4, 2/9) and is in the historical
+  // date-street whitelist, check whether the query is actually a date-street
+  // name rather than a house number on another street.
+  final dateMatch = RegExp(r'^([0-9]{1,2})[/.\-]([0-9]{1,2})$').firstMatch(numPart);
+  if (dateMatch != null) {
+    final d = int.parse(dateMatch.group(1)!);
+    final mo = int.parse(dateMatch.group(2)!);
+    if (_historicalDateStreets.contains((d, mo))) {
+      final lowerRest = rest.toLowerCase();
+      final hasStreetKeyword = RegExp(
+        r'^(?:đường|duong|phố|pho|đ\.|d\.)\b',
+      ).hasMatch(lowerRest);
+      final isDistrictOrCityOrPunct = RegExp(
+        r'^(?:p\.|phường|phuong|q\.|quận|quan|h\.|huyện|huyen|tx\.|thị xã|thi xa|tp\.|thành phố|thanh pho|tỉnh|tinh|,)\b',
+      ).hasMatch(lowerRest);
+
+      // If followed by an area/city/comma OR not followed by an explicit street keyword,
+      // treat the date as the street name itself, not a house number.
+      if (isDistrictOrCityOrPunct || !hasStreetKeyword) {
+        return null;
+      }
+    }
+  }
+
+  return (numPart, rest);
 }
 
 /// Photon (Komoot) search. Photon returns GeoJSON features without a ready
@@ -361,22 +457,37 @@ Future<List<OsmSuggestion>> _photonSearch(
   final street = split?.$2 ?? '';
 
   final out = <OsmSuggestion>[];
-  // 1) Full-query variants merged (date-street rewrite + as typed).
+  // 1) Full-query variants run in PARALLEL (date-street rewrite + as typed).
   final fullVariants = <String>[];
   final fullRewritten = rewriteDateStreet(original);
   if (fullRewritten != null) fullVariants.add(fullRewritten);
   if (!fullVariants.contains(original)) fullVariants.add(original);
-  for (final v in fullVariants) {
-    out.addAll(await _photonSearchRaw(v, limit: limit, focus: focus));
+
+  final fullResults = await Future.wait([
+    for (final v in fullVariants)
+      _photonSearchRaw(v, limit: limit, focus: focus).catchError(
+        (_) => <OsmSuggestion>[],
+      ),
+  ]);
+  for (final res in fullResults) {
+    out.addAll(res);
   }
+
   // 2) House-number query with no hits → bare street (rewritten, then typed).
   if (out.isEmpty && house != null && street.isNotEmpty) {
     final streetVariants = <String>[];
     final streetRewritten = rewriteDateStreet(street);
     if (streetRewritten != null) streetVariants.add(streetRewritten);
     if (!streetVariants.contains(street)) streetVariants.add(street);
-    for (final v in streetVariants) {
-      out.addAll(await _photonSearchRaw(v, limit: limit, focus: focus));
+
+    final streetResults = await Future.wait([
+      for (final v in streetVariants)
+        _photonSearchRaw(v, limit: limit, focus: focus).catchError(
+          (_) => <OsmSuggestion>[],
+        ),
+    ]);
+    for (final res in streetResults) {
+      out.addAll(res);
     }
   }
   // De-duplicate by OSM ref (Photon repeats some features).
@@ -386,6 +497,7 @@ Future<List<OsmSuggestion>> _photonSearch(
       if (seen.add(s.refId)) s,
   ].take(limit).toList();
 }
+
 
 /// One Photon query. NOTE: no `lang=` param — Photon only supports
 /// default/de/en/fr and REJECTS the whole request for any other language
@@ -477,10 +589,14 @@ Future<List<OsmSuggestion>> osmAutocomplete(
     final out = [...bundled, ...cached, ...pois];
     // De-duplicate by (lat,lng) — POIs first so they win over place entries.
     final seen = <String>{};
-    return [
-      for (final s in out)
-        if (seen.add('${s.lat},${s.lng}')) s,
-    ].take(limit).toList();
+    return _sortNearFocus(
+      [
+        for (final s in out)
+          if (seen.add('${s.lat},${s.lng}')) s,
+      ].take(limit).toList(),
+      focus,
+      query: text,
+    );
   }
 
   // Google Places AUTOCOMPLETE — the best type-ahead for Vietnamese
@@ -491,9 +607,9 @@ Future<List<OsmSuggestion>> osmAutocomplete(
     try {
       final g = await googlePlaceAutocomplete(text, limit: limit, focus: focus);
       if (g.isNotEmpty) {
-        _searchCache[key] = g;
+        _cacheSearchResult(key, g);
         unawaited(_saveSearchCache());
-        return g;
+        return _sortNearFocus(g, focus, query: text);
       }
     } catch (_) {
       // fall through to Vietmap / Nominatim
@@ -506,9 +622,9 @@ Future<List<OsmSuggestion>> osmAutocomplete(
     try {
       final g = await googleGeocode(text, limit: limit);
       if (g.isNotEmpty) {
-        _searchCache[key] = g;
+        _cacheSearchResult(key, g);
         unawaited(_saveSearchCache());
-        return g;
+        return _sortNearFocus(g, focus, query: text);
       }
     } catch (_) {
       // fall through to Vietmap / Nominatim
@@ -532,7 +648,7 @@ Future<List<OsmSuggestion>> osmAutocomplete(
             source: 'vietmap',
           ),
       ];
-      if (out.isNotEmpty) return out;
+      if (out.isNotEmpty) return _sortNearFocus(out, focus, query: text);
     } catch (_) {
       // fall through to Nominatim
     }
@@ -544,9 +660,9 @@ Future<List<OsmSuggestion>> osmAutocomplete(
     try {
       final out = await _photonSearch(text, limit: limit, focus: focus);
       if (out.isNotEmpty) {
-        _searchCache[key] = out;
+        _cacheSearchResult(key, out);
         unawaited(_saveSearchCache());
-        return out;
+        return _sortNearFocus(out, focus, query: text);
       }
     } catch (_) {
       // fall through to Nominatim
@@ -584,9 +700,9 @@ Future<List<OsmSuggestion>> osmAutocomplete(
         ),
       );
     }
-    _searchCache[key] = out;
+    _cacheSearchResult(key, out);
     unawaited(_saveSearchCache());
-    return out;
+    return _sortNearFocus(out, focus, query: text);
   } catch (_) {
     // Online search failed / empty — fall back to the bundled offline place
     // index so geocoding still works even with a dead network.
@@ -604,11 +720,71 @@ Future<List<OsmSuggestion>> osmAutocomplete(
     );
     final out = [...bundled, ...cached, ...pois];
     final seen = <String>{};
-    return [
-      for (final s in out)
-        if (seen.add('${s.lat},${s.lng}')) s,
-    ].take(limit).toList();
+    return _sortNearFocus(
+      [
+        for (final s in out)
+          if (seen.add('${s.lat},${s.lng}')) s,
+      ].take(limit).toList(),
+      focus,
+      query: text,
+    );
   }
+}
+
+/// Sort [suggestions] balancing search engine relevance and proximity to
+/// [focus] (current location).
+///
+/// If [query] is provided and the top search result is an exact/prominent
+/// match (e.g. searching "Hà Nội" yields "Thành phố Hà Nội"), it is preserved
+/// at rank 1 rather than being pushed below a local shop 1000 km closer.
+///
+/// Suggestions with unresolved coordinates (`lat==0 && lng==0`) retain their
+/// relative order after resolved suggestions.
+List<OsmSuggestion> _sortNearFocus(
+  List<OsmSuggestion> suggestions,
+  LatLng? focus, {
+  String? query,
+}) {
+  if (focus == null || suggestions.length < 2) return suggestions;
+  const Distance d = Distance();
+  final q = query != null ? _removeDiacritics(query.trim().toLowerCase()) : '';
+
+  double score(int originalIndex, OsmSuggestion s) {
+    if (s.lat == 0 && s.lng == 0) {
+      return 1e9 + originalIndex;
+    }
+    final distKm = d.as(LengthUnit.Meter, focus, LatLng(s.lat, s.lng)) / 1000.0;
+    final name = _removeDiacritics(s.display.toLowerCase());
+
+    final isExact = q.isNotEmpty &&
+        (name == q ||
+            name.startsWith('$q,') ||
+            name.startsWith('thanh pho $q') ||
+            name.startsWith('tp. $q') ||
+            name.startsWith('tp $q'));
+    final startsWith = q.isNotEmpty && name.startsWith(q);
+
+    // If the top search result is an exact or prominent text match, keep it at the top
+    if (originalIndex == 0 && (isExact || startsWith)) {
+      return -1000.0;
+    }
+
+    // Weight distance and original search engine relevance
+    double penalty = distKm;
+    if (isExact) {
+      penalty *= 0.1;
+    } else if (startsWith) {
+      penalty *= 0.4;
+    }
+    // Search engine rank penalty (15 km per rank)
+    penalty += originalIndex * 15.0;
+
+    return penalty;
+  }
+
+  final indexed = suggestions.asMap().entries.toList();
+  indexed.sort((a, b) => score(a.key, a.value).compareTo(score(b.key, b.value)));
+  return indexed.map((e) => e.value).toList();
 }
 
 /// Google Maps Geocoding API search (used when [VietmapConfig.googleApiKey]
@@ -664,7 +840,6 @@ Future<List<OsmSuggestion>> googlePlaceAutocomplete(
       '?input=${Uri.encodeQueryComponent(text)}'
       '&components=country:vn'
       '&language=vi'
-      '&types=address|establishment'
       '&key=$key';
   if (focus != null) {
     // Bias suggestions toward the phone (~50 km circle) so a street that
@@ -674,9 +849,18 @@ Future<List<OsmSuggestion>> googlePlaceAutocomplete(
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
       .timeout(const Duration(seconds: 15));
-  if (res.statusCode != 200) return const [];
+  if (res.statusCode != 200) {
+    noteGoogleQuota(statusCode: res.statusCode, body: res.body);
+    return const [];
+  }
   final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-  if (data['status'] != 'OK') return const [];
+  if (data['status'] != 'OK') {
+    noteGoogleQuota(
+      statusCode: res.statusCode,
+      status: data['status'] as String?,
+    );
+    return const [];
+  }
   final out = <OsmSuggestion>[];
   for (final r
       in (data['predictions'] as List? ?? []).cast<Map<String, dynamic>>().take(
@@ -712,9 +896,18 @@ Future<(double, double, String)?> googlePlaceDetails(String placeId) async {
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
       .timeout(const Duration(seconds: 15));
-  if (res.statusCode != 200) return null;
+  if (res.statusCode != 200) {
+    noteGoogleQuota(statusCode: res.statusCode, body: res.body);
+    return null;
+  }
   final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-  if (data['status'] != 'OK') return null;
+  if (data['status'] != 'OK') {
+    noteGoogleQuota(
+      statusCode: res.statusCode,
+      status: data['status'] as String?,
+    );
+    return null;
+  }
   final result = data['result'] as Map<String, dynamic>?;
   if (result == null) return null;
   final loc = result['geometry']?['location'] as Map<String, dynamic>?;
@@ -749,9 +942,18 @@ Future<List<(String, double, double)>> googlePlaceTextSearch(
     final res = await http
         .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
         .timeout(const Duration(seconds: 15));
-    if (res.statusCode != 200) return const [];
+    if (res.statusCode != 200) {
+      noteGoogleQuota(statusCode: res.statusCode, body: res.body);
+      return const [];
+    }
     final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-    if (data['status'] != 'OK') return const [];
+    if (data['status'] != 'OK') {
+      noteGoogleQuota(
+        statusCode: res.statusCode,
+        status: data['status'] as String?,
+      );
+      return const [];
+    }
     final results = (data['results'] as List? ?? [])
         .cast<Map<String, dynamic>>();
     final out = <(String, double, double)>[];
@@ -770,4 +972,72 @@ Future<List<(String, double, double)>> googlePlaceTextSearch(
   } catch (_) {
     return const [];
   }
+}
+
+/// Reverse geocode coordinates to a human-readable address or road name.
+/// Tries Google Geocoding (if key configured) -> Nominatim -> nearest offline POI/place.
+/// Never throws; returns a clean address or formatted coordinates string.
+Future<String> reverseGeocode(LatLng pos) async {
+  // 1. Google Geocoding API (if key available)
+  if (VietmapConfig.googleApiKey.isNotEmpty) {
+    try {
+      final key = VietmapConfig.googleApiKey;
+      final url =
+          'https://maps.googleapis.com/maps/api/geocode/json'
+          '?latlng=${pos.latitude},${pos.longitude}'
+          '&language=vi'
+          '&key=$key';
+      final res = await http
+          .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        final results = (data['results'] as List? ?? []).cast<Map<String, dynamic>>();
+        if (results.isNotEmpty) {
+          final addr = results[0]['formatted_address'] as String?;
+          if (addr != null && addr.isNotEmpty) return addr;
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 2. Nominatim Reverse Geocoding (free OSM)
+  if (!forceOffline) {
+    try {
+      final url =
+          '$_nominatimBase/reverse'
+          '?format=jsonv2'
+          '&lat=${pos.latitude}&lon=${pos.longitude}'
+          '&accept-language=vi';
+      final res = await http
+          .get(Uri.parse(url), headers: {'User-Agent': _ua})
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        final name = (data['display_name'] ?? '') as String;
+        if (name.isNotEmpty) return name;
+      }
+    } catch (_) {}
+  }
+
+  // 3. Bundled offline places / POIs
+  try {
+    await _loadOfflinePlaces();
+    const Distance d = Distance();
+    OsmSuggestion? closest;
+    double bestDist = 1000.0; // within 1km
+    for (final p in _offlinePlaces ?? const <OsmSuggestion>[]) {
+      final dist = d.as(LengthUnit.Meter, pos, LatLng(p.lat, p.lng));
+      if (dist < bestDist) {
+        bestDist = dist;
+        closest = p;
+      }
+    }
+    if (closest != null) {
+      return '${closest.display} (~${bestDist.round()}m)';
+    }
+  } catch (_) {}
+
+  // 4. Fallback to coordinates
+  return '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
 }

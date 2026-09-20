@@ -30,13 +30,19 @@ class SignIcon extends StatelessWidget {
   static String? _assetFor(RoadSignKind kind) => switch (kind) {
     RoadSignKind.stop => '$_assetDir/stop.png',
     RoadSignKind.giveWay => '$_assetDir/give_way.png',
-    RoadSignKind.populated => '$_assetDir/populated.png',
-    RoadSignKind.populatedEnd => '$_assetDir/populated_end.png',
     RoadSignKind.noPassing => '$_assetDir/no_passing.png',
     RoadSignKind.noLeftTurn => '$_assetDir/no_left_turn.png',
     RoadSignKind.noRightTurn => '$_assetDir/no_right_turn.png',
     RoadSignKind.noUTurn => '$_assetDir/no_u_turn.png',
     RoadSignKind.endProhibitions => '$_assetDir/end_prohibitions.png',
+    _ => null,
+  };
+
+  /// A short two-line label for signs with no dedicated icon — e.g. the
+  /// reserved-lane info sign ("LÀN RIÊNG") so it stays readable at small
+  /// map sizes. Null means draw a regular painter instead.
+  static String? _infoText(RoadSignKind kind) => switch (kind) {
+    RoadSignKind.reservedLane => 'LÀN\nRIÊNG',
     _ => null,
   };
 
@@ -50,6 +56,14 @@ class SignIcon extends StatelessWidget {
         child: Image.asset(asset, fit: BoxFit.contain, gaplessPlayback: true),
       );
     }
+    final info = _infoText(kind);
+    if (info != null) {
+      return SizedBox(
+        width: size,
+        height: size,
+        child: CustomPaint(painter: _InfoPainter(info)),
+      );
+    }
     return SizedBox(
       width: size,
       height: size,
@@ -57,18 +71,21 @@ class SignIcon extends StatelessWidget {
         RoadSignKind.stop => const CustomPaint(painter: _StopPainter()),
         RoadSignKind.giveWay => const CustomPaint(painter: _YieldPainter()),
         RoadSignKind.speed => CustomPaint(painter: _SpeedPainter(value)),
-        RoadSignKind.populated => const CustomPaint(
-          painter: _PopulatedPainter(),
-        ),
-        RoadSignKind.populatedEnd => const CustomPaint(
-          painter: _PopulatedEndPainter(),
-        ),
         RoadSignKind.signal => const CustomPaint(painter: _SignalPainter()),
         RoadSignKind.noPassing => const CustomPaint(
           painter: _ProhibitionPainter(_ProGlyph.cars),
         ),
         RoadSignKind.noPassingEnd => const CustomPaint(
           painter: _ProhibitionPainter(_ProGlyph.cars, ended: true),
+        ),
+        RoadSignKind.noAuto => const CustomPaint(
+          painter: _ProhibitionPainter(_ProGlyph.auto),
+        ),
+        RoadSignKind.noMoto => const CustomPaint(
+          painter: _ProhibitionPainter(_ProGlyph.moto),
+        ),
+        RoadSignKind.noParking => const CustomPaint(
+          painter: _ProhibitionPainter(_ProGlyph.parking),
         ),
         RoadSignKind.noLeftTurn => const CustomPaint(
           painter: _ProhibitionPainter(_ProGlyph.leftTurn),
@@ -93,6 +110,18 @@ class SignIcon extends StatelessWidget {
         ),
         RoadSignKind.onlyRight => const CustomPaint(
           painter: _CommandPainter(_CmdDir.right),
+        ),
+        RoadSignKind.noStraight => const CustomPaint(
+          painter: _ProhibitionPainter(_ProGlyph.straight),
+        ),
+        RoadSignKind.noTurnBoth => const CustomPaint(
+          painter: _ProhibitionPainter(_ProGlyph.bothTurns),
+        ),
+        RoadSignKind.oneWay => const CustomPaint(
+          painter: _CommandPainter(_CmdDir.straight),
+        ),
+        RoadSignKind.reservedLane => const CustomPaint(
+          painter: _InfoPainter('LÀN\nRIÊNG'),
         ),
         RoadSignKind.endProhibitions => const CustomPaint(
           painter: _EndProhibitionsPainter(),
@@ -331,46 +360,6 @@ class _SpeedPainter extends CustomPainter {
   bool shouldRepaint(covariant _SpeedPainter old) => old.value != value;
 }
 
-/// Biển R.420 "Khu đông dân cư" — white rectangle, red border, a house +
-/// a person (approx. of the official pictogram).
-class _PopulatedPainter extends CustomPainter {
-  const _PopulatedPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width, h = size.height;
-    final rect = Rect.fromLTWH(w * 0.04, h * 0.04, w * 0.92, h * 0.92);
-    final rr = RRect.fromRectAndRadius(rect, Radius.circular(w * 0.10));
-    canvas.drawRRect(rr, Paint()..color = Colors.white);
-    canvas.drawRRect(
-      rr,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = w * 0.05
-        ..color = _signRed,
-    );
-    final ink = Paint()..color = Colors.black87;
-    // House (roof + body).
-    final roof = Path()
-      ..moveTo(w * 0.22, h * 0.46)
-      ..lineTo(w * 0.50, h * 0.26)
-      ..lineTo(w * 0.78, h * 0.46)
-      ..close();
-    canvas.drawPath(roof, ink);
-    canvas.drawRect(Rect.fromLTWH(w * 0.30, h * 0.46, w * 0.40, h * 0.30), ink);
-    canvas.drawRect(
-      Rect.fromLTWH(w * 0.46, h * 0.56, w * 0.16, h * 0.20),
-      Paint()..color = Colors.white,
-    );
-    // A person (head + body) to the right.
-    canvas.drawCircle(Offset(w * 0.76, h * 0.42), w * 0.055, ink);
-    canvas.drawRect(Rect.fromLTWH(w * 0.71, h * 0.50, w * 0.10, h * 0.26), ink);
-  }
-
-  @override
-  bool shouldRepaint(covariant _PopulatedPainter old) => false;
-}
-
 /// Traffic light (used if the app ever renders lights as icons instead of
 /// dots; kept here so the icon set is complete).
 class _SignalPainter extends CustomPainter {
@@ -402,7 +391,19 @@ class _SignalPainter extends CustomPainter {
 // Shared shape: white circle + red ring + red diagonal bar, with a black
 // glyph underneath. `ended: true` swaps the bar to grey ("hết lệnh cấm").
 
-enum _ProGlyph { cars, leftTurn, rightTurn, uTurn, leftUTurn, rightUTurn }
+enum _ProGlyph {
+  cars,
+  moto,
+  auto,
+  parking,
+  leftTurn,
+  rightTurn,
+  uTurn,
+  leftUTurn,
+  rightUTurn,
+  straight,
+  bothTurns,
+}
 
 class _ProhibitionPainter extends CustomPainter {
   const _ProhibitionPainter(this.glyph, {this.ended = false});
@@ -442,6 +443,13 @@ class _ProhibitionPainter extends CustomPainter {
       case _ProGlyph.cars:
         _drawCar(canvas, Offset(w * 0.32, h * 0.40), w * 0.20, h * 0.10, ink);
         _drawCar(canvas, Offset(w * 0.64, h * 0.40), w * 0.20, h * 0.10, ink);
+      case _ProGlyph.auto:
+        // Single car (P.124a "Cấm ô tô").
+        _drawCar(canvas, Offset(w * 0.40, h * 0.40), w * 0.22, h * 0.11, ink);
+      case _ProGlyph.moto:
+        _drawMoto(canvas, Offset(w * 0.42, h * 0.42), w * 0.20, ink);
+      case _ProGlyph.parking:
+        _drawParking(canvas, size, ink);
       case _ProGlyph.leftTurn:
         _drawTurnArrow(canvas, size, left: true, ink: ink);
       case _ProGlyph.rightTurn:
@@ -454,7 +462,78 @@ class _ProhibitionPainter extends CustomPainter {
       case _ProGlyph.rightUTurn:
         _drawTurnArrow(canvas, size, left: false, ink: ink);
         _drawUTurn(canvas, size, left: false, ink: ink, up: h * 0.30);
+      case _ProGlyph.straight:
+        // P.112 Cấm đi thẳng — an up arrow.
+        _drawStraightArrow(canvas, size, ink);
+      case _ProGlyph.bothTurns:
+        _drawTurnArrow(canvas, size, left: true, ink: ink);
+        _drawTurnArrow(canvas, size, left: false, ink: ink);
     }
+  }
+
+  void _drawMoto(Canvas canvas, Offset c, double w, Paint ink) {
+    // Motorcycle silhouette: two wheels + body.
+    canvas.drawCircle(
+      Offset(c.dx, c.dy + w * 0.30),
+      w * 0.14,
+      ink..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      Offset(c.dx + w * 1.0, c.dy + w * 0.30),
+      w * 0.14,
+      ink..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      Offset(c.dx, c.dy + w * 0.30),
+      w * 0.14,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.10,
+    );
+    canvas.drawCircle(
+      Offset(c.dx + w * 1.0, c.dy + w * 0.30),
+      w * 0.14,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.10,
+    );
+    canvas.drawLine(
+      Offset(c.dx + w * 0.16, c.dy + w * 0.26),
+      Offset(c.dx + w * 0.84, c.dy + w * 0.26),
+      ink
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.16,
+    );
+  }
+
+  void _drawParking(Canvas canvas, Size size, Paint ink) {
+    // "P" glyph for P.131a cấm đỗ xe.
+    _drawText(
+      canvas,
+      'P',
+      Offset(size.width / 2, size.height / 2),
+      size.height * 0.42,
+      color: Colors.black87,
+    );
+  }
+
+  void _drawStraightArrow(Canvas canvas, Size size, Paint ink) {
+    final w = size.width, h = size.height;
+    canvas.drawLine(
+      Offset(w * 0.5, h * 0.32),
+      Offset(w * 0.5, h * 0.68),
+      ink
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.10,
+    );
+    final head = Path()
+      ..moveTo(w * 0.5, h * 0.22)
+      ..lineTo(w * 0.32, h * 0.44)
+      ..lineTo(w * 0.68, h * 0.44)
+      ..close();
+    canvas.drawPath(head, ink..style = PaintingStyle.fill);
   }
 
   void _drawCar(Canvas canvas, Offset topLeft, double w, double h, Paint ink) {
@@ -506,15 +585,17 @@ class _ProhibitionPainter extends CustomPainter {
     path.lineTo(stemEnd.dx, stemEnd.dy);
     path.lineTo(tip.dx, tip.dy);
     canvas.drawPath(path, ink..style = PaintingStyle.stroke);
-    // arrowhead (opens toward the turn direction)
-    final a1 = Offset(
-      tip.dx + (left ? -w * 0.10 : w * 0.10),
-      tip.dy + h * 0.06,
-    );
-    final a2 = Offset(
-      tip.dx + (left ? -w * 0.10 : w * 0.10),
-      tip.dy - h * 0.06,
-    );
+    // Arrowhead. The head must sit BEHIND the tip, i.e. on the side the stem
+    // came from (down-right of the tip when turning left, down-left when
+    // turning right), otherwise the apex faces back along the stem and the
+    // glyph reads as a turn the wrong way. The old code put the base on the
+    // opposite side for both cases:
+    //   left  -> base at tip.dx - 0.10w  (base LEFT of the apex => head
+    //            pointed RIGHT while the stem bent left)
+    //   right -> base at tip.dx + 0.10w  (mirror of the same mistake)
+    final back = left ? w * 0.10 : -w * 0.10;
+    final a1 = Offset(tip.dx + back, tip.dy + h * 0.06);
+    final a2 = Offset(tip.dx + back, tip.dy - h * 0.06);
     final head = Path()
       ..moveTo(tip.dx, tip.dy)
       ..lineTo(a1.dx, a1.dy)
@@ -655,50 +736,4 @@ class _CommandPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _CommandPainter old) => old.dir != dir;
-}
-
-/// Biển "Hết khu đông dân cư" — the populated sign with a red diagonal bar.
-class _PopulatedEndPainter extends CustomPainter {
-  const _PopulatedEndPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width, h = size.height;
-    final rect = Rect.fromLTWH(w * 0.04, h * 0.04, w * 0.92, h * 0.92);
-    final rr = RRect.fromRectAndRadius(rect, Radius.circular(w * 0.10));
-    canvas.drawRRect(rr, Paint()..color = Colors.white);
-    canvas.drawRRect(
-      rr,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = w * 0.05
-        ..color = _signRed,
-    );
-    final ink = Paint()..color = Colors.black87;
-    final roof = Path()
-      ..moveTo(w * 0.22, h * 0.46)
-      ..lineTo(w * 0.50, h * 0.26)
-      ..lineTo(w * 0.78, h * 0.46)
-      ..close();
-    canvas.drawPath(roof, ink);
-    canvas.drawRect(Rect.fromLTWH(w * 0.30, h * 0.46, w * 0.40, h * 0.30), ink);
-    canvas.drawRect(
-      Rect.fromLTWH(w * 0.46, h * 0.56, w * 0.16, h * 0.20),
-      Paint()..color = Colors.white,
-    );
-    canvas.drawCircle(Offset(w * 0.76, h * 0.42), w * 0.055, ink);
-    canvas.drawRect(Rect.fromLTWH(w * 0.71, h * 0.50, w * 0.10, h * 0.26), ink);
-    // the "hết" red diagonal bar over the pictogram
-    canvas.drawLine(
-      Offset(w * 0.12, h * 0.12),
-      Offset(w * 0.88, h * 0.88),
-      Paint()
-        ..color = _signRed
-        ..strokeWidth = w * 0.06
-        ..strokeCap = StrokeCap.round,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _PopulatedEndPainter old) => false;
 }

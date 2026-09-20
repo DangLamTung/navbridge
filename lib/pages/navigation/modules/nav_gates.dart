@@ -22,18 +22,20 @@ class _PerSecondGate {
 }
 
 /// Speaks each route item at most twice — once in the "far" zone and once in
-/// the "near" zone — by remembering the last announced signature.
+/// the "near" zone — by remembering announced signatures for the session.
+///
+/// A single `_last` entry is NOT enough: with several cameras close together
+/// (or GPS jitter flipping which camera is nearest), the "nearest ahead"
+/// camera can alternate between A and B, and a `_last`-only dedup would
+/// re-announce each time it flips back. This remembers a bounded SET of
+/// signatures so each physical camera (per zone) is spoken at most once.
 class _ZoneDedupe {
-  String? _last;
+  final Set<String> _seen = {};
 
   /// True if [sig] has already been announced (skip it); false if this is a
   /// new announcement (the caller should speak it).
-  bool seen(String sig) {
-    if (sig == _last) return true;
-    _last = sig;
-    return false;
-  }
+  bool seen(String sig) => !_seen.add(sig);
 
-  /// Forget the last announcement (e.g. a new navigation session).
-  void reset() => _last = null;
+  /// Forget every announcement (e.g. a new navigation session).
+  void reset() => _seen.clear();
 }

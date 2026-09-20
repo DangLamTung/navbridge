@@ -110,6 +110,24 @@ class LocationKalman {
       _pos = fix;
       return;
     }
+    // Re-anchor the flat-earth origin when the vehicle has travelled far from
+    // the first fix, so the fixed cos(lat) east/west scale doesn't drift over
+    // a long trip (e.g. Hanoi → HCMC). The position state is translated so the
+    // car stays at the same absolute location in the new frame (velocity and
+    // covariance are translation-invariant).
+    if (_initialized) {
+      final dLat = fix.latitude - _refLat;
+      final dLng = fix.longitude - _refLng;
+      final northM = dLat * 111320.0;
+      final eastM =
+          dLng * 111320.0 * math.cos(_refLat * math.pi / 180.0);
+      if (northM.abs() > 30000 || eastM.abs() > 30000) {
+        _x[0] -= eastM; // east position
+        _x[1] -= northM; // north position
+        _refLat = fix.latitude;
+        _refLng = fix.longitude;
+      }
+    }
     final dt = (now - _lastAtMs) / 1000.0;
     if (dt > 0) _predict(dt);
     // Adaptive anti-drift: the car is STOPPED when the receiver's speed
@@ -125,7 +143,10 @@ class LocationKalman {
       final moved = math.sqrt(
         (b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]),
       );
-      if (moved / dt < 2.0 || (speedMps != null && speedMps < 2.0)) {
+      final isStopped = speedMps != null
+          ? speedMps < 0.4
+          : (moved / dt < 0.5);
+      if (isStopped) {
         _x[2] = 0;
         _x[3] = 0;
       }

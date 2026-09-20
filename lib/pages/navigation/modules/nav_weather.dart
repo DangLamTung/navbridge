@@ -13,6 +13,10 @@ extension _NavWeather on _NavigationPageState {
   void _startWeather() {
     _stopWeather();
     _rainAheadSpoken = false; // re-arm the rain-ahead warning each trip
+    _rainingHere = null; // learn the state again without announcing it
+    _dryStreak = 0;
+    _lastRainSpoke = null;
+    _rainEndSpoken = false;
     _refreshWeather();
     _refreshWeatherAhead();
     _weatherTimer = Timer.periodic(const Duration(minutes: 3), (_) {
@@ -50,7 +54,46 @@ extension _NavWeather on _NavigationPageState {
     // Real METAR station data (nearest VN airport) merged with Open-Meteo.
     final w = await fetchBestWeather(cur.latitude, cur.longitude);
     if (mounted && w != null) setNavState(() => _weather = w);
+    if (w != null) _announceRainTransition(w);
     if (w != null) await _sendMapWeather(); // push to the ESP banner
+  }
+
+  /// Is this WMO weather code actual precipitation (drizzle / rain / showers /
+  /// thunderstorm)? One helper so every rain test in this file agrees.
+  bool _isRainCode(int? code) =>
+      code != null &&
+      ((code >= 51 && code <= 67) ||
+          (code >= 80 && code <= 86) ||
+          code >= 95);
+
+  /// Speak ONLY when rain starts or stops AT THE CAR — the transitions are the
+  /// useful signal, not a periodic "still raining" (user 2026-09-18).
+  ///   * START → announced on the first wet sample (actionable right now).
+  ///   * STOP  → announced after TWO consecutive dry samples (~6 min), so a
+  ///             gap between showers is not mistaken for the rain ending.
+  /// At most one transition every 8 minutes. The first sample of a trip only
+  /// records the state: the driver can already see it is raining.
+  void _announceRainTransition(WeatherInfo w) {
+    final raining = _isRainCode(w.weatherCode);
+    _dryStreak = raining ? 0 : _dryStreak + 1;
+    final before = _rainingHere;
+    if (before == null) {
+      _rainingHere = raining;
+      return;
+    }
+    if (raining == before) return; // no change → nothing worth saying
+    if (!raining && _dryStreak < 2) return; // debounce the lull
+    final now = DateTime.now();
+    final last = _lastRainSpoke;
+    if (last != null && now.difference(last) < const Duration(minutes: 8)) {
+      return;
+    }
+    _rainingHere = raining;
+    _lastRainSpoke = now;
+    if (!_voiceOn || !_voice.ready) return;
+    final phrase = raining ? 'Trời bắt đầu mưa.' : 'Trời đã tạnh mưa.';
+    _logAnnouncement(phrase, kind: 'rain');
+    _voice.speak(phrase);
   }
 
   /// Weather a few km AHEAD along the route (for the PiP window, so you can
@@ -93,62 +136,109 @@ extension _NavWeather on _NavigationPageState {
       // Nearest sample that is actually raining (worst weather first).
       int? rainMeters;
       for (final (w, m) in paired) {
-        final code = w.weatherCode;
-        if (code != null &&
-            ((code >= 51 && code <= 67) ||
-                (code >= 80 && code <= 86) ||
-                code >= 95)) {
+        if (_isRainCode(w.weatherCode)) {
           rainMeters = m;
           break;
         }
       }
       if (rainMeters == null) {
         for (final (w, m) in paired) {
-          if ((w.rainProbSoon ?? 0) >= 60) {
+          if ((w.rainProbSoon ?? 0) >= 80) {
             rainMeters = m;
             break;
           }
         }
       }
       _announceRainAhead(merged, rainMeters);
+      // Reverse case: it IS raining here but the sampled road ahead is dry —
+      // the driver is about to leave the rain cell, so say when.
+      _announceRainEnding(paired);
       // Re-arm once the ahead-weather clears, so rain appearing later (a new
       // cell moving in) gets announced again instead of being one-shot per
       // trip — "realtime rain ahead" the driver asked for.
-      final code = merged.weatherCode;
-      final raining =
-          code != null &&
-          ((code >= 51 && code <= 67) ||
-              (code >= 80 && code <= 86) ||
-              code >= 95);
+      final raining = _isRainCode(merged.weatherCode);
       final p = merged.rainProbSoon;
-      if (!raining && (p == null || p < 60)) {
+      if (!raining && (p == null || p < 80)) {
         _rainAheadSpoken = false;
       }
     }
   }
 
-  /// Speak a ONE-TIME warning when rain is present or likely on the route
-  /// AHEAD (from the Open-Meteo samples a few km down the road), including
-  /// how far ahead it is. Deduped per nav session so it doesn't nag.
+  /// Warn ONCE per rain episode when rain sits on the route AHEAD — the
+  /// useful half of "weather ahead" (user: "some time say about weather
+  /// ahead"). SILENT while it is already raining at the car, where telling the
+  /// driver about rain further along adds nothing. The "might rain" wording
+  /// needs a high probability (≥80%, was 60 — it fired on 68% and then it
+  /// never rained).
   void _announceRainAhead(WeatherInfo ahead, int? rainMeters) {
-    if (!_voiceOn || _rainAheadSpoken) return;
-    final code = ahead.weatherCode;
-    final raining =
-        code != null &&
-        ((code >= 51 && code <= 67) ||
-            (code >= 80 && code <= 86) ||
-            code >= 95);
+    if (!_voiceOn || _rainAheadSpoken || _rainingHere == true) return;
+    final raining = _isRainCode(ahead.weatherCode);
     final p = ahead.rainProbSoon;
-    if (!raining && (p == null || p < 60)) return;
+    final likely = p != null && p >= 80;
+    if (!raining && !likely) return;
     _rainAheadSpoken = true;
     final kmStr = rainMeters != null && rainMeters > 0
         ? (rainMeters / 1000).clamp(0.1, 99).toStringAsFixed(1)
         : null;
-    final phrase = raining
-        ? (kmStr != null
-              ? 'Trời đang mưa phía trước, cách đây khoảng $kmStr ki lô mét.'
-              : 'Trời đang mưa trên tuyến đường phía trước.')
-        : 'Trời sắp mưa trên tuyến đường phía trước, xác suất $p phần trăm.';
+    // Thunderstorm (WMO >=95) is worth naming separately — "mưa dông" tells
+    // the driver to expect a real cell, not a drizzle.
+    final what = !raining
+        ? 'Có thể có mưa'
+        : ((ahead.weatherCode ?? 0) >= 95 ? 'Mưa dông' : 'Trời đang mưa');
+    final phrase = kmStr != null
+        ? '$what phía trước, cách đây khoảng $kmStr ki lô mét.'
+        : '$what trên tuyến đường phía trước.';
+    _logAnnouncement(phrase, kind: 'rain');
+    _voice.speak(phrase);
+  }
+
+  /// While it IS raining at the car, look at the route AHEAD: when a DRY sample
+  /// appears, the car is driving out of the rain cell — say HOW SOON
+  /// ("Sắp hết mưa, khoảng 4 phút nữa."), which is far more useful than
+  /// reporting the stop after the fact. The estimate is the midpoint between
+  /// the last WET sample and the first DRY one (rain ends somewhere between
+  /// them); at ~1.5 km spacing that is ±0.75 km. Once per dry-ahead episode,
+  /// and never right on top of another rain announcement; re-arms when the
+  /// sampled path ahead is fully wet again, so a later clearing still speaks.
+  void _announceRainEnding(List<(WeatherInfo, int)> paired) {
+    if (paired.isEmpty) return;
+    if (_rainingHere != true) {
+      _rainEndSpoken = false; // not raining → nothing to predict
+      return;
+    }
+    if (_rainEndSpoken) return;
+    int? firstDry;
+    int? lastWet;
+    for (final (w, m) in paired) {
+      if (_isRainCode(w.weatherCode)) {
+        lastWet = m;
+        continue;
+      }
+      firstDry = m;
+      break;
+    }
+    if (firstDry == null) {
+      _rainEndSpoken = false; // still wet all the way ahead — re-arm
+      return;
+    }
+    _rainEndSpoken = true;
+    final est = lastWet == null
+        ? (firstDry / 2).round() // dry from the very first sample → imminent
+        : ((lastWet + firstDry) / 2).round();
+    final speed = _simulating ? 16.0 : _lastSpeedMps;
+    final mins = speed > 2 ? (est / speed / 60).round() : null;
+    final km = (est / 1000).clamp(0.1, 99).toStringAsFixed(1);
+    final phrase = (mins != null && mins >= 1)
+        ? 'Sắp hết mưa, khoảng $mins phút nữa.'
+        : 'Sắp hết mưa, khoảng $km ki lô mét nữa.';
+    if (!_voiceOn || !_voice.ready) return;
+    // Don't stack it on top of a just-spoken transition.
+    final last = _lastRainSpoke;
+    if (last != null && DateTime.now().difference(last) < const Duration(minutes: 3)) {
+      return;
+    }
+    _lastRainSpoke = DateTime.now();
+    _logAnnouncement(phrase, kind: 'rain');
     _voice.speak(phrase);
   }
 
@@ -188,7 +278,10 @@ extension _NavWeather on _NavigationPageState {
       'next=${ahead.isEmpty ? 0 : ahead.first.routeMeters.toStringAsFixed(0)}m',
     );
     if (!mounted) return;
-    final next = ahead.isEmpty ? null : ahead.first;
+    // Warn about the most IMPORTANT camera ahead (red light / speed first),
+    // not merely the nearest — see [mostImportantCameraAhead]. A surveillance
+    // camera a few dozen metres ahead no longer hides the red-light camera.
+    final next = mostImportantCameraAhead(ahead);
     final sig = next == null ? '' : '${next.camera.lat},${next.camera.lng}';
     // PiP chip / AI camera context — only when the on-map camera display is
     // on; the MAP camera layer is route-wide (`_refreshRouteCameras`).
@@ -227,12 +320,32 @@ extension _NavWeather on _NavigationPageState {
         String head;
         if (!confirmed) {
           head = 'Có thể có camera';
+        } else if (cam.source == 'waze' &&
+            cam.focus == 'speed' &&
+            cam.type == null) {
+          // Waze speed-limit point-notice (road segment, NOT an enforcement
+          // camera) — its "speed" focus just means a posted limit, so calling
+          // it "Camera tốc độ" is wrong. Only the posted speed-limit layer
+          // (waze_speed_limits.json) carries this point; don't announce it as
+          // a camera at all.
+          if (_voiceOn) unawaited(NavForegroundService.instance.notifyCamera(cam, m));
+          debugPrint('CAMERA: Waze speed-limit point, not a camera — '
+              '${cam.name} (${cam.source}), skipped voice');
+          return;
         } else {
           switch (cam.type) {
             case 'speed_camera':
-              final lim = cam.speedLimit;
-              head = lim != null && lim > 0
-                  ? 'Camera tốc độ $lim km/h'
+              // Say the SPEED LIMIT that applies here — the same sign-aware,
+              // vehicle-capped value the chip and the overspeed logic use —
+              // NOT `cam.speedLimit`: that field is empty for 97% of speed
+              // cameras and, when filled from a nearby posted point, can
+              // describe a neighbouring road. Only when the limit is unknown
+              // (no road info yet) fall back to the camera's own number.
+              final lim = _effectiveSpeedLimit > 0
+                  ? _effectiveSpeedLimit
+                  : (cam.speedLimit ?? 0);
+              head = lim > 0
+                  ? 'Camera tốc độ, giới hạn $lim km/h'
                   : 'Camera tốc độ';
             case 'traffic_camera':
               head = 'Camera giám sát giao thông';
@@ -260,7 +373,9 @@ extension _NavWeather on _NavigationPageState {
         // The DATA SOURCE goes in the NOTIFICATION (so the driver knows how
         // much to trust it) — it is NOT spoken; the voice stays a clean,
         // short "Camera …". Other alerts (khu dân cư, biển báo…) are already
-        // voiced and don't carry a source either.
+        // voiced and don't carry a source either. No beepbeep chime — the
+        // spoken announcement alone is enough and the beep was annoying.
+        _logAnnouncement(phrase, kind: 'camera');
         _voice.speak(phrase);
         unawaited(NavForegroundService.instance.notifyCamera(cam, m));
         debugPrint('CAMERA: $phrase — ${cam.name} (${cam.source})');

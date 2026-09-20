@@ -55,61 +55,28 @@ class RoadInfoChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Current speed pill (Google style — red when speeding).
-            Container(
-              width: 32,
-              height: 32,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: speeding ? const Color(0xFFD93025) : Colors.white,
-                border: Border.all(
-                  color: speeding ? const Color(0xFFD93025) : kAppBlue,
-                  width: 3,
-                ),
-              ),
-              child: Text(
-                kmh == null ? '--' : '$kmh',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  height: 1.0,
-                  color: speeding ? Colors.white : kAppBlue,
-                ),
-              ),
+            // Current speed dial — BIG (same scale as the floating speed
+            // widget) so it is readable at a glance while riding. Blue ring
+            // normally, red fill while speeding.
+            _Dial(
+              size: 46,
+              ringColor: speeding ? const Color(0xFFD93025) : kAppBlue,
+              fillColor: speeding ? const Color(0xFFD93025) : Colors.white,
+              valueColor: speeding ? Colors.white : kAppBlue,
+              big: kmh == null ? '--' : '$kmh',
             ),
             const SizedBox(width: 6),
-            // Speed-limit sign.
-            Container(
-              width: 32,
-              height: 32,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white,
-                border: Border.all(color: const Color(0xFFD93025), width: 3),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    i == null ? '--' : '${i.speedLimit}',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      height: 1.0,
-                    ),
-                  ),
-                  const Text(
-                    'km/h',
-                    style: TextStyle(
-                      fontSize: 6,
-                      fontWeight: FontWeight.w600,
-                      height: 1.0,
-                    ),
-                  ),
-                ],
-              ),
+            // Speed-limit sign. MUST show the EFFECTIVE limit ([limit] =
+            // sign-aware override), not [RoadInfo.speedLimit] — showing the
+            // road's own tagged value here made the screen disagree with the
+            // voice, which announces the effective limit ("voice said 60
+            // while the screen showed 50").
+            _Dial(
+              size: 46,
+              ringColor: const Color(0xFFFF5252),
+              fillColor: Colors.white,
+              valueColor: Colors.black,
+              big: (limit == null || limit <= 0) ? '--' : '$limit',
             ),
             const SizedBox(width: 6),
             Column(
@@ -161,6 +128,65 @@ class RoadInfoChip extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Big circular dial used by the chip: the current speed and the speed-limit
+/// sign. Mirrors the floating widget's dials (weight-900 number + tiny "km/h"
+/// caption) so both surfaces read the same at a glance.
+class _Dial extends StatelessWidget {
+  const _Dial({
+    required this.size,
+    required this.ringColor,
+    required this.fillColor,
+    required this.valueColor,
+    required this.big,
+  });
+
+  final double size;
+  final Color ringColor;
+  final Color fillColor;
+  final Color valueColor;
+  final String big;
+
+  @override
+  Widget build(BuildContext context) {
+    // 3-digit limits (100/120) need a slightly smaller number to fit the ring.
+    final f = big.length >= 3 ? 0.38 : 0.44;
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: fillColor,
+        border: Border.all(color: ringColor, width: size * 0.12),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            big,
+            style: TextStyle(
+              fontSize: size * f,
+              fontWeight: FontWeight.w900,
+              height: 1.0,
+              letterSpacing: -0.5,
+              color: valueColor,
+            ),
+          ),
+          Text(
+            'km/h',
+            style: TextStyle(
+              fontSize: size * 0.16,
+              fontWeight: FontWeight.w700,
+              height: 1.0,
+              color: valueColor,
+            ),
+          ),
+        ],
       ),
     );
   }

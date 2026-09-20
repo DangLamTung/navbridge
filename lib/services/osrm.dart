@@ -102,6 +102,7 @@ List<LatLng> decodePolyline(String encoded) {
   while (index < len) {
     var b = 0, shift = 0, result = 0;
     do {
+      if (index >= len) return points; // truncated polyline — bail
       b = encoded.codeUnitAt(index++) - 63;
       result |= (b & 0x1f) << shift;
       shift += 5;
@@ -111,6 +112,7 @@ List<LatLng> decodePolyline(String encoded) {
     shift = 0;
     result = 0;
     do {
+      if (index >= len) return points; // truncated polyline — bail
       b = encoded.codeUnitAt(index++) - 63;
       result |= (b & 0x1f) << shift;
       shift += 5;
@@ -135,6 +137,7 @@ Future<OsrmRoute> fetchOsrmRoute(
   bool steps = true,
   String profile = 'driving',
   String? exclude,
+  (double, double)? startBearing,
 }) async {
   final routes = await fetchOsrmRoutes(
     points,
@@ -143,13 +146,26 @@ Future<OsrmRoute> fetchOsrmRoute(
     profile: profile,
     exclude: exclude,
     maxAlternatives: 1,
+    startBearing: startBearing,
   );
   return routes.first;
+}
+
+/// Builds the OSRM `&bearings=` query string.
+/// OSRM requires the number of semicolon-separated elements in `bearings` to
+/// match the number of coordinates (e.g. `90,45;` for 2 pts, `90,45;;` for 3 pts).
+String osrmBearingsParam(int pointCount, (double, double)? startBearing) {
+  if (startBearing == null || pointCount < 2) return '';
+  final b = (startBearing.$1.round() % 360 + 360) % 360;
+  final r = startBearing.$2.round();
+  return '&bearings=$b,$r${';' * (pointCount - 1)}';
 }
 
 /// Like [fetchOsrmRoute] but returns up to [maxAlternatives] route options
 /// (best first) via OSRM's `alternatives=` — Google/Vietmap-style tap-to-choose.
 /// `exclude` may combine classes (e.g. 'motorway,ferry', most undesirable first).
+/// [startBearing] = (bearingDeg, rangeDeg) to direct the route along the vehicle's
+/// travel heading (e.g. during a reroute so it departs forward instead of U-turning).
 Future<List<OsrmRoute>> fetchOsrmRoutes(
   List<LatLng> points, {
   String? baseUrl,
@@ -157,9 +173,11 @@ Future<List<OsrmRoute>> fetchOsrmRoutes(
   String profile = 'driving',
   String? exclude,
   int maxAlternatives = 3,
+  Duration? timeout,
+  (double, double)? startBearing,
 }) async {
   if (points.length < 2) {
-    throw Exception('Cần ít nhất 2 điểm để định tuyến');
+    return const [];
   }
   final coords = points.map((p) => '${p.longitude},${p.latitude}').join(';');
   final base =
@@ -171,20 +189,27 @@ Future<List<OsrmRoute>> fetchOsrmRoutes(
   final exclPart = (exclude != null && exclude.isNotEmpty)
       ? '&exclude=$exclude'
       : '';
+  final bearingsPart = osrmBearingsParam(points.length, startBearing);
   // OSRM: `alternatives=N` = N alternatives IN ADDITION to the best route.
-  var url = base + altPart + exclPart;
+  var url = base + altPart + exclPart + bearingsPart;
+  final reqTimeout = timeout ?? const Duration(seconds: 20);
   var res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
-      .timeout(const Duration(seconds: 20));
-  // Some OSRM servers (e.g. the public demo) don't define exclude classes and
-  // reject them with HTTP 400 — retry WITHOUT the exclusion rather than fail
-  // the whole route (avoid-highway/ferry then only takes effect on servers
-  // that support it).
+      .timeout(reqTimeout);
+  // Some OSRM servers reject bearings with HTTP 400 — retry without bearings.
+  if (res.statusCode != 200 && bearingsPart.isNotEmpty) {
+    url = base + altPart + exclPart;
+    res = await http
+        .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
+        .timeout(reqTimeout);
+  }
+  // Some OSRM servers don't define exclude classes and reject them with HTTP 400 —
+  // retry without the exclusion rather than fail the whole route.
   if (res.statusCode != 200 && exclPart.isNotEmpty) {
     url = base + altPart;
     res = await http
         .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
-        .timeout(const Duration(seconds: 20));
+        .timeout(reqTimeout);
   }
   if (res.statusCode != 200) {
     throw Exception('OSRM HTTP ${res.statusCode}');
@@ -193,10 +218,24 @@ Future<List<OsrmRoute>> fetchOsrmRoutes(
   // massive JSON (tens of MB — the polyline can have 100k+ vertices); doing
   // utf8.decode + jsonDecode + geometry decode on the MAIN thread is what
   // froze the app ("long route → not responding").
-  final routes = await compute(
+  var routes = await compute(
     _parseOsrmRoutes,
     _RouteParseInput(res.bodyBytes, points.last),
   );
+  // If no route exists heading in the departure direction (e.g. dead-end, blind alley,
+  // or one-way street), retry WITHOUT bearings to let OSRM compute the turnaround route.
+  if (routes.isEmpty && bearingsPart.isNotEmpty) {
+    url = base + altPart + exclPart;
+    res = await http
+        .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
+        .timeout(reqTimeout);
+    if (res.statusCode == 200) {
+      routes = await compute(
+        _parseOsrmRoutes,
+        _RouteParseInput(res.bodyBytes, points.last),
+      );
+    }
+  }
   if (routes.isEmpty) {
     throw Exception('Không tìm thấy tuyến đường');
   }

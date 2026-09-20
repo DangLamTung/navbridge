@@ -15,8 +15,16 @@ camera DB (the old vietmap_edog_to_navbridge.py did that and would re-introduce
   TYPE 6 TollBooth    -> vietnam_signs.json   kind=toll_booth
   TYPE 7 Tunnel       -> vietnam_signs.json   kind=tunnel
   TYPE 8 RailWay      -> vietnam_signs.json   kind=railway_crossing
-  TYPE 9 Residental   -> vietnam_signs.json   kind=populated
-  TYPE 10 OutResidental-> vietnam_signs.json  kind=populated_end
+  TYPE 9/10 Residental-> DROPPED (khu đông dân cư boundaries — see below)
+
+TYPE 9 "Residental" / TYPE 10 "OutResidental" are the built-up area
+start/end boundaries. They are DROPPED, not merged: 9,211 points (20.4% of
+the sign DB) buying a built-up limit cap that never fired on any of the 38
+recorded drives and overrides a posted Waze segment value 39% of the time
+it does land on one. The app's cap that consumed them was removed with them
+— see droppedSignKinds in lib/services/offline_road_signs.dart and
+tool/why_drop_kdc.py. Any TYPE 9/10 points already in vietnam_signs.json are
+filtered out at load time by the app, so an older asset stays usable.
 
 Dedup: 5dp coordinate dedup within the source + against the existing DB.
 Originals are backed up to .bak before writing. Add the new speed-limit asset
@@ -49,8 +57,9 @@ SIGN_MAP = {
     6: ("toll_booth", "Trạm thu phí"),
     7: ("tunnel", "Hầm đường bộ"),
     8: ("railway_crossing", "Đường ngang giao với đường sắt"),
-    9: ("populated", "Bắt đầu khu đông dân cư"),
-    10: ("populated_end", "Hết khu đông dân cư"),
+    # 9 (Residental) / 10 (OutResidental) intentionally absent: the khu đông dân
+    # cư boundary layer is dropped (wrong most of the time, and the app's
+    # built-up limit cap that used it is gone).
 }
 
 
@@ -107,7 +116,7 @@ def main() -> int:
             cam_seen[k] = (lat, lon, t)
     print(f"edog camera points (types 2/3/4, deduped): {len(cam_seen)}")
 
-    # --- TYPE 5-10: signs ---
+    # --- TYPE 5-8: signs (khu đông dân cư boundaries are dropped) ---
     sign_seen = {}
     for f in feats:
         p = f.get("properties", {})
@@ -118,7 +127,7 @@ def main() -> int:
         k = (r5(lat), r5(lon))
         if k not in sign_seen:
             sign_seen[k] = (lat, lon, t)
-    print(f"edog sign points (types 5-10, deduped): {len(sign_seen)}")
+    print(f"edog sign points (types 5-8, deduped): {len(sign_seen)}")
 
     # --- speed limit asset ---
     sl_doc = {"version": 1, "points": sl_points}

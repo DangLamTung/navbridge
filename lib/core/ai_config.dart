@@ -33,26 +33,24 @@ class AiConfig {
 
   /// Gemini endpoint builder (v1beta generative). The `key` is the API key.
   static String geminiEndpointFor(String model) =>
-      'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent';
+      'https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent';
 
   /// Primary Gemini endpoint (matches [geminiModel]).
   static const String geminiEndpoint =
       'https://generativelanguage.googleapis.com/v1beta/models/'
-      'gemini-3.7-flash:generateContent';
+      'gemini-2.5-flash:streamGenerateContent';
 
   /// Gemini model ids tried in order — the assistant falls back to the next
-  /// one when a model id is "not found" for the key. gemini-2.0-flash was
-  /// RETIRED by Google (late 2025); the fast line is now 3.7-flash, with
-  /// older ids kept as safe fallbacks for keys without access to it.
+  /// one when a model id is "not found" for the key.
   static const List<String> geminiModels = [
-    'gemini-3.7-flash',
-    'gemini-3.5-flash',
-    'gemini-3.0-flash',
     'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro',
   ];
 
   /// Primary Gemini model id.
-  static const String geminiModel = 'gemini-3.7-flash';
+  static const String geminiModel = 'gemini-2.5-flash';
 
   /// Default system prompt — a Vietnamese navigation assistant grounded in
   /// the live drive context (position, route, ETA, camera ahead, …).

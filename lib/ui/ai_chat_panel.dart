@@ -5,19 +5,24 @@
 /// context passed in from the page ([AiContext]).
 library;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 
 import 'package:navbridge/core/ai_memory.dart';
+import 'package:navbridge/core/settings.dart' show aiPlaceSuggestions;
 import 'package:navbridge/services/ai_assistant.dart';
 import 'package:navbridge/services/voice_commands.dart';
 import 'package:navbridge/ui/widgets.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class AiChatPanel extends StatefulWidget {
   const AiChatPanel({
     super.key,
     this.context,
+    this.liveContext,
     this.initialQuestion,
     this.onMicPressed,
+    this.onMicCancel,
     this.speakAloud = false,
     this.onSpeak,
     this.onNavigate,
@@ -26,11 +31,19 @@ class AiChatPanel extends StatefulWidget {
   /// Live drive context appended to each question.
   final AiContext? context;
 
+  /// Optional live context streamed in AFTER the panel opens (opens instantly
+  /// with [context], then updates when the async drive facts resolve).
+  final ValueListenable<AiContext?>? liveContext;
+
   /// Question to auto-send when the panel opens (e.g. from a voice command).
   final String? initialQuestion;
 
   /// Optional: lets the page run its own mic (shared with the nav screen).
-  final Future<String> Function()? onMicPressed;
+  final Future<String> Function({void Function(String partial)? onPartial})?
+  onMicPressed;
+
+  /// Cancel/stop the page-provided mic session early.
+  final Future<void> Function()? onMicCancel;
 
   /// Speak the assistant answer aloud while it streams (hands-free driving).
   /// [onSpeak] receives complete sentences; pass an empty string to flush.
@@ -128,6 +141,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
   final _ctrl = TextEditingController();
   final _scroll = ScrollController();
   bool _busy = false;
+  bool _listening = false;
   String _streaming = '';
   String _speechBuf = ''; // streamed sentences not yet spoken
 
@@ -143,6 +157,9 @@ class _AiChatPanelState extends State<AiChatPanel> {
 
   @override
   void dispose() {
+    if (_listening) {
+      widget.onMicCancel?.call();
+    }
     _ctrl.dispose();
     _scroll.dispose();
     super.dispose();
@@ -197,7 +214,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
     try {
       final reply = await AiAssistant.instance.ask(
         q,
-        context: widget.context,
+        context: widget.liveContext?.value ?? widget.context,
         history: history,
         onToken: (t) {
           if (!mounted) return;
@@ -212,7 +229,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
         _messages.add(
           _Msg(
             false,
-            _streaming,
+            reply.text.isNotEmpty ? reply.text : _streaming,
             provider: reply.provider,
             places: reply.places,
             navigateTarget: reply.navigateTarget,
@@ -264,6 +281,74 @@ class _AiChatPanelState extends State<AiChatPanel> {
     _ => 'Ngoại tuyến',
   };
 
+  /// Location-aware suggested questions: derived from the live drive context
+  /// (road / speed / hard sections / passes / gas / camera / weather) so the
+  /// one-tap prompts fit where the driver actually is. Empty when the feature
+  /// is off in Settings or there's no context.
+  List<_Suggestion> _placeSuggestions() {
+    if (!aiPlaceSuggestions) return const [];
+    final c = widget.context;
+    if (c == null) return const [];
+    final out = <_Suggestion>[];
+    if (c.road != null) {
+      out.add(_Suggestion(
+        'Con đường',
+        'Mô tả con đường đang đi và có gì đặc biệt',
+        Icons.route,
+        Color(0xFFF09300),
+      ));
+    }
+    if (c.speedKmh != null) {
+      out.add(_Suggestion(
+        'Tốc độ',
+        'Tốc độ hiện tại có phù hợp với giới hạn không?',
+        Icons.speed,
+        kAppBlue,
+      ));
+    }
+    if (c.hardSections != null) {
+      out.add(_Suggestion(
+        'Đoạn khó',
+        'Đoạn đường phía trước có khó đi không?',
+        Icons.warning_amber,
+        Color(0xFFEA4335),
+      ));
+    }
+    if (c.passesAhead != null) {
+      out.add(_Suggestion(
+        'Đèo',
+        'Còn bao nhiêu đèo phía trước?',
+        Icons.terrain,
+        Color(0xFF1E8E3E),
+      ));
+    }
+    if (c.gasNextKm != null) {
+      out.add(_Suggestion(
+        'Trạm xăng',
+        'Trạm xăng gần nhất còn bao xa?',
+        Icons.local_gas_station,
+        Color(0xFFF4B400),
+      ));
+    }
+    if (c.cameraAhead != null) {
+      out.add(_Suggestion(
+        'Camera',
+        'Camera phía trước có xa không?',
+        Icons.videocam,
+        Color(0xFF1A73E8),
+      ));
+    }
+    if (c.weather != null || c.radar != null) {
+      out.add(_Suggestion(
+        'Thời tiết',
+        'Đường sắp tới có mưa gây khó không?',
+        Icons.wb_sunny,
+        Color(0xFFF09300),
+      ));
+    }
+    return out;
+  }
+
   /// Live drive context shown as chips (what the AI already knows).
   List<Widget> _contextChips() {
     final c = widget.context;
@@ -291,15 +376,64 @@ class _AiChatPanelState extends State<AiChatPanel> {
   }
 
   Future<void> _mic() async {
-    if (widget.onMicPressed != null) {
-      final q = await widget.onMicPressed!();
-      if (q.isNotEmpty) await _send(q);
+    if (_listening) {
+      await widget.onMicCancel?.call();
+      if (mounted) setState(() => _listening = false);
       return;
     }
+
+    if (widget.onMicPressed != null) {
+      setState(() => _listening = true);
+      try {
+        final q = await widget.onMicPressed!(
+          onPartial: (p) {
+            if (mounted) {
+              setState(() => _ctrl.text = p);
+            }
+          },
+        );
+        if (mounted) {
+          setState(() => _listening = false);
+          if (q.trim().isNotEmpty) {
+            _ctrl.text = q.trim();
+            await _send(q.trim());
+          }
+        }
+      } catch (e) {
+        debugPrint('AI CHAT: mic error $e');
+        if (mounted) setState(() => _listening = false);
+      }
+      return;
+    }
+
     // Fallback: a minimal one-shot recognizer (no page wiring).
-    final cmd = VoiceCommands();
-    await cmd.init();
-    await cmd.listen((t) => _send(t));
+    final mic = await Permission.microphone.request();
+    if (!mic.isGranted) return;
+    setState(() => _listening = true);
+    try {
+      final cmd = VoiceCommands();
+      final ok = await cmd.init();
+      if (!ok) {
+        if (mounted) setState(() => _listening = false);
+        return;
+      }
+      await cmd.listen(
+        (t) {
+          if (mounted) {
+            setState(() => _listening = false);
+            if (t.trim().isNotEmpty) {
+              _ctrl.text = t.trim();
+              _send(t.trim());
+            }
+          }
+        },
+        onPartial: (p) {
+          if (mounted) setState(() => _ctrl.text = p);
+        },
+        budget: const Duration(seconds: 15),
+      );
+    } catch (_) {}
+    if (mounted) setState(() => _listening = false);
   }
 
   @override
@@ -381,6 +515,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
+                      for (final s in _placeSuggestions()) _suggestionChip(s),
                       for (final s in _suggestions) _suggestionChip(s),
                     ],
                   ),
@@ -392,9 +527,24 @@ class _AiChatPanelState extends State<AiChatPanel> {
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
               child: Row(
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.mic, color: kAppBlue),
-                    onPressed: _busy ? null : _mic,
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    decoration: BoxDecoration(
+                      color: _listening
+                          ? const Color(0xFFFFEBEE)
+                          : Colors.transparent,
+                      shape: BoxShape.circle,
+                    ),
+                    child: IconButton(
+                      icon: Icon(
+                        _listening ? Icons.mic : Icons.mic_none,
+                        color: _listening ? Colors.redAccent : kAppBlue,
+                        size: 24,
+                      ),
+                      tooltip:
+                          _listening ? 'Đang nghe… Nhấn để dừng' : 'Nói câu hỏi',
+                      onPressed: _busy ? null : _mic,
+                    ),
                   ),
                   Expanded(
                     child: TextField(
@@ -404,13 +554,47 @@ class _AiChatPanelState extends State<AiChatPanel> {
                       textInputAction: TextInputAction.send,
                       onSubmitted: _send,
                       decoration: InputDecoration(
-                        hintText: 'Hỏi: xăng gần nhất? ETA? Thời tiết?',
+                        hintText: _listening
+                            ? 'Đang nghe… Hãy nói câu hỏi của bạn'
+                            : 'Hỏi: xăng gần nhất? ETA? Thời tiết?',
+                        hintStyle: TextStyle(
+                          color: _listening
+                              ? Colors.redAccent.shade700
+                              : Colors.grey[600],
+                          fontStyle:
+                              _listening ? FontStyle.italic : FontStyle.normal,
+                        ),
                         isDense: true,
                         filled: true,
-                        fillColor: Colors.grey[100],
+                        fillColor: _listening
+                            ? const Color(0xFFFFF8F8)
+                            : Colors.grey[100],
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(20),
-                          borderSide: BorderSide.none,
+                          borderSide: _listening
+                              ? const BorderSide(
+                                  color: Colors.redAccent,
+                                  width: 1.5,
+                                )
+                              : BorderSide.none,
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: _listening
+                              ? const BorderSide(
+                                  color: Colors.redAccent,
+                                  width: 1.5,
+                                )
+                              : BorderSide.none,
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: _listening
+                              ? const BorderSide(
+                                  color: Colors.redAccent,
+                                  width: 1.5,
+                                )
+                              : BorderSide.none,
                         ),
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 14,

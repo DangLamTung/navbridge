@@ -354,9 +354,9 @@ class RoutePreviewCard extends StatelessWidget {
                 ],
               ),
             ],
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             SizedBox(
-              height: 44,
+              height: 48,
               child: Row(
                 children: [
                   Expanded(
@@ -364,70 +364,97 @@ class RoutePreviewCard extends StatelessWidget {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: kAppBlue,
                         foregroundColor: Colors.white,
+                        elevation: 2,
+                        shadowColor: const Color(0x661A73E8),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(14),
                         ),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
                       ),
                       onPressed: onStart,
                       icon: const Icon(Icons.navigation, size: 20),
                       label: const Text(
-                        'Bắt đầu chỉ đường',
+                        'Bắt đầu',
                         style: TextStyle(
-                          fontSize: 15,
+                          fontSize: 16,
                           fontWeight: FontWeight.w700,
+                          letterSpacing: 0.3,
                         ),
                       ),
                     ),
                   ),
-                  if (onSimulate != null) ...[const SizedBox(width: 8)],
-                  if (onSimulate != null)
+                  if (onSimulate != null) ...[
+                    const SizedBox(width: 8),
                     SizedBox(
-                      height: 44,
-                      width: 52,
+                      height: 48,
+                      width: 48,
                       child: Tooltip(
                         message: 'Mô phỏng lái xe (thử nghiệm)',
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF34A853),
-                            foregroundColor: Colors.white,
+                            backgroundColor: const Color(0xFFE6F4EA),
+                            foregroundColor: const Color(0xFF137333),
+                            elevation: 0,
                             padding: EdgeInsets.zero,
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                              borderRadius: BorderRadius.circular(14),
+                              side: const BorderSide(color: Color(0xFFCEEAD6)),
                             ),
                           ),
                           onPressed: onSimulate,
-                          child: const Icon(Icons.play_arrow, size: 26),
+                          child: const Icon(Icons.play_arrow_rounded, size: 26),
                         ),
                       ),
                     ),
-                  if (onSaveRoute != null) ...[const SizedBox(width: 8)],
-                  if (onSaveRoute != null)
+                  ],
+                  if (onSaveRoute != null) ...[
+                    const SizedBox(width: 8),
                     SizedBox(
-                      height: 44,
-                      width: 52,
+                      height: 48,
+                      width: 48,
                       child: Tooltip(
                         message: 'Lưu tuyến ưa thích',
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFF4B400),
-                            foregroundColor: Colors.white,
+                            backgroundColor: const Color(0xFFFEF7E0),
+                            foregroundColor: const Color(0xFFB06000),
+                            elevation: 0,
                             padding: EdgeInsets.zero,
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                              borderRadius: BorderRadius.circular(14),
+                              side: const BorderSide(color: Color(0xFFFEEFC3)),
                             ),
                           ),
                           onPressed: onSaveRoute,
-                          child: const Icon(Icons.bookmark_add, size: 24),
+                          child: const Icon(Icons.bookmark_add_outlined, size: 22),
                         ),
                       ),
                     ),
+                  ],
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    height: 48,
+                    width: 48,
+                    child: Tooltip(
+                      message: 'Xoá lộ trình',
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFF1F3F4),
+                          foregroundColor: const Color(0xFF5F6368),
+                          elevation: 0,
+                          padding: EdgeInsets.zero,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            side: const BorderSide(color: Color(0xFFDADCE0)),
+                          ),
+                        ),
+                        onPressed: onClear,
+                        child: const Icon(Icons.close, size: 20),
+                      ),
+                    ),
+                  ),
                 ],
               ),
-            ),
-            TextButton.icon(
-              onPressed: onClear,
-              icon: const Icon(Icons.close, size: 16),
-              label: const Text('Xoá lộ trình', style: TextStyle(fontSize: 13)),
             ),
             // Interactive route editing hint — the route is draggable and a
             // long-press on the map inserts a via point (Google-Maps style).

@@ -165,7 +165,7 @@ Uint8List buildMapPosFrame({
   _writeInt32(p, 0, (lat * 1e7).round());
   _writeInt32(p, 4, (lon * 1e7).round());
   p[8] = spd.clamp(0, 255); // km/h
-  _writeUint16(p, 9, hdg % 360); // deg, 0=N
+  _writeUint16(p, 9, (hdg % 360 + 360) % 360); // deg, 0=N (normalise -1 → 359)
   p[11] = speedLimit.clamp(0, 255); // km/h, 0 = unknown
   return _frame(mapTypePos, p);
 }

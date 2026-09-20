@@ -5,30 +5,68 @@ part of '../navigation_page.dart';
 /// ferry).
 extension _NavRouteEdit on _NavigationPageState {
   /// Long-press the map to insert a via point and re-plan (interactive
-  /// route editing on the OSM/offline map).
+  /// route editing on the OSM/offline map). Resolves a real road/place name
+  /// asynchronously via [reverseGeocode].
   void _addViaPoint(LatLng pos) {
     final stops = List<TripStop>.of(_stops);
-    if (stops.isNotEmpty) {
-      stops.insert(
-        stops.length - 1,
-        TripStop(name: 'Điểm giữa', lat: pos.latitude, lng: pos.longitude),
-      );
-    }
+    final insertIdx = stops.isNotEmpty ? stops.length - 1 : 0;
+    stops.insert(
+      insertIdx,
+      TripStop(name: 'Điểm dừng...', lat: pos.latitude, lng: pos.longitude),
+    );
     setNavState(() {
       _stops
         ..clear()
         ..addAll(stops);
     });
     _buildPlanRoute();
+
+    reverseGeocode(pos).then((addr) {
+      if (!mounted) return;
+      final idx = _stops.indexWhere(
+        (s) => s.lat == pos.latitude && s.lng == pos.longitude,
+      );
+      if (idx >= 0) {
+        setNavState(() {
+          _stops[idx] = TripStop(
+            name: addr,
+            lat: pos.latitude,
+            lng: pos.longitude,
+          );
+        });
+      }
+    });
   }
 
-  /// Min distance (meters) from [p] to a polyline — used to make the
-  /// alternative route lines tappable.
+  /// Min distance (metres) from [p] to the polyline — TRUE perpendicular
+  /// distance to each segment (not just to the vertices), so tapping a long
+  /// straight segment in the middle still selects the alternative route.
   double _distToLine(LatLng p, List<LatLng> poly) {
     if (poly.isEmpty) return double.infinity;
-    var best = distanceMeters(p, poly.first);
-    for (var i = 1; i < poly.length; i++) {
-      final d = distanceMeters(p, poly[i]);
+    if (poly.length == 1) return distanceMeters(p, poly.first);
+    var best = double.infinity;
+    for (var i = 0; i < poly.length - 1; i++) {
+      final a = poly[i];
+      final b = poly[i + 1];
+      // Local east/north metre frame centred at `a` (flat approx — fine for
+      // sub-km segments).
+      final cosLat = cos(a.latitude * pi / 180);
+      final bx = (b.longitude - a.longitude) * 111320 * cosLat;
+      final by = (b.latitude - a.latitude) * 111320;
+      final px = (p.longitude - a.longitude) * 111320 * cosLat;
+      final py = (p.latitude - a.latitude) * 111320;
+      final len2 = bx * bx + by * by;
+      if (len2 < 1e-6) {
+        // Degenerate segment — fall back to the endpoint distance.
+        final dd = distanceMeters(p, a);
+        if (dd < best) best = dd;
+        continue;
+      }
+      var t = (px * bx + py * by) / len2;
+      t = t.clamp(0.0, 1.0);
+      final ex = px - t * bx;
+      final ey = py - t * by;
+      final d = sqrt(ex * ex + ey * ey);
       if (d < best) best = d;
     }
     return best;

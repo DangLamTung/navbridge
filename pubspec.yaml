@@ -31,6 +31,7 @@ dependencies:
   # Trip logging (Google Takeout Records.json) + share/export
   path_provider: ^2.1.5
   share_plus: ^10.1.4
+  file_picker: ^8.1.2
   # Online/offline detection (offline mode)
   connectivity_plus: ^6.1.0
   # Voice commands (Android speech recognition) + spoken turn-by-turn guidance
@@ -63,6 +64,12 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  crypto: ^3.0.3
+
+# file_picker 8.x is compiled against android-34, so pin the lifecycle plugin
+# (which newer versions need compiled against android-36) to a compatible one.
+dependency_overrides:
+  flutter_plugin_android_lifecycle: 2.0.20
 
 flutter:
   uses-material-design: true
@@ -80,8 +87,8 @@ flutter:
     - assets/offline_map/vietnam_pois.json
     - assets/offline_map/vietnam_cameras.json
     - assets/offline_map/vietnam_signs.json
-    - assets/offline_map/vietnam_speed_limits.geojson
     - assets/offline_map/waze_speed_limits.json
+    - assets/offline_map/waze_segments.bin
     - assets/offline_map/vietmap_speed_limits.json
     - assets/offline_map/overview_tiles.tar.gz
     - assets/offline_map/icons/
@@ -99,3 +106,7 @@ flutter:
     # speedometer dial (grey/red), turn arrow, speed-camera + hazard icons.
     - assets/waze/
     - assets/waze/vn/
+    # Audio alerts & voice pack (Waze Mod Vietnamese voice + alert chimes)
+    - assets/audio/common/
+    - assets/audio/voice_thai_ngoc_bich/
+    - assets/audio/voice_vn_fast/

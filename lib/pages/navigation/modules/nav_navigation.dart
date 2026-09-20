@@ -12,27 +12,67 @@ extension _NavNavigation on _NavigationPageState {
     // shouldn't yank the route.
     final off = _engine!.offRouteDistance(pos);
     final spd = speedMps.isNaN ? 0.0 : speedMps;
+
+    // Detect if driver is moving in a new direction divergent from route (>65°).
+    final travelHeading = _heading;
+    final routeBearing = _engine!.routeBearing();
+    final headingDiff = travelHeading != null
+        ? ((travelHeading - routeBearing + 540) % 360 - 180).abs()
+        : 0.0;
+    final isNewDirection = headingDiff > 65.0 && spd >= 1.8;
+
     // NETWORK matching override: while a fresh network snap says the nearest
     // road IS on the route (the fix just reads off line — parallel street,
     // lane offset, GPS wander), trust it over the raw distance and skip the
     // reroute. The verdict expires in 2 s so a real deviation (snap will flip
     // it off within ~1 s) always reroutes.
+    // However, if the vehicle is moving in a divergent direction (turning
+    // onto a cross street / ramp), do NOT let network snap suppress it.
     final netOnRoute =
         _netOnRoute &&
+        !isNewDirection &&
         _lastNetMatch != null &&
         DateTime.now().difference(_lastNetMatch!) < const Duration(seconds: 2);
     if (!netOnRoute) {
-      if (off > 50 && spd > 1.4) {
+      if (spd > 1.4) {
         final now = DateTime.now();
         final since = _offRouteSince ??= now;
-        if (off > 250 || now.difference(since) >= const Duration(seconds: 5)) {
+        final elapsed = now.difference(since);
+
+        // Immediate reroute if gone too far (>70 m).
+        // Fast reroute (1.5 s) if heading in a new direction (>35 m).
+        // Standard reroute (2.5 s) if off-route (>45 m).
+        final isTooFar = off > 70;
+        final isFastNewDir =
+            isNewDirection &&
+            off > 35 &&
+            elapsed >= const Duration(milliseconds: 1500);
+        final isOffRoute =
+            off > 45 && elapsed >= const Duration(milliseconds: 2500);
+
+        if (isTooFar || isFastNewDir || isOffRoute) {
           _offRouteSince = null;
-          unawaited(_reRoute(pos, speedMps: speedMps));
+          unawaited(
+            _reRoute(
+              pos,
+              speedMps: speedMps,
+              startHeading: spd >= 1.5 ? travelHeading : null,
+            ),
+          );
           return;
         }
-      } else if (off < 30) {
+      } else if (off < 30 && !isNewDirection) {
         _offRouteSince = null;
       }
+    }
+    // If a reroute calculation is actively in flight, do not snap the car
+    // onto the abandoned old route or advance old maneuvers.
+    if (_isRerouting) {
+      _current = pos;
+      _logFix(pos, speedMps);
+      _map.move(pos, 17);
+      if (mounted) setNavState(() {});
+      return;
     }
     // Project the raw fix onto the route polyline so the car RIDES the road:
     // the puck, the camera bearing and the turn meter all stay stable even
@@ -53,17 +93,21 @@ extension _NavNavigation on _NavigationPageState {
     // Road signs: announce the next STOP / give-way sign ahead (traffic
     // lights are map-only). Offline index, ~1 Hz throttle inside.
     _checkSignAhead(snapped, _route?.geometry ?? const []);
-    // Keep the nav-map camera/sign layer near the car (~5 s) so it stays a
-    // handful of markers instead of a whole route's worth (see
-    // `_refreshRouteCameras`).
+    // Keep the nav-map camera/sign layer near the car (~1 s, same cadence as
+    // the GPS fix) so it stays a handful of markers instead of a whole route's
+    // worth, AND updates as the car moves past a sign/camera (the old 5 s lag
+    // made markers pop in late; the user: "run update near by on route nearby
+    // camera + sign", then "2s still too long, can we update 1s"). The isolate
+    // query + 30-item cap keep it cheap on the low-end phone.
     final nlNow = DateTime.now();
     if (_lastNearbyLayers == null ||
-        nlNow.difference(_lastNearbyLayers!) >= const Duration(seconds: 5)) {
+        nlNow.difference(_lastNearbyLayers!) >= const Duration(seconds: 1)) {
       _lastNearbyLayers = nlNow;
       unawaited(_refreshRouteCameras());
     }
     _refreshRoad(snapped);
-    // Speak when the posted limit changes (crossing a new segment / zone).
+    // Speak when the posted limit changes (crossing onto another road / a new
+    // posted sign).
     _maybeSpeakLimitChange();
     _logFix(pos, speedMps);
     // Background nav: live notification + heads-up at each new maneuver.
@@ -95,31 +139,66 @@ extension _NavNavigation on _NavigationPageState {
   /// Re-navigation: fetch a fresh route from [from] to the destination.
   /// Keeps the current navigation running and snaps straight into the new
   /// route so the UI + clock update immediately.
-  Future<void> _reRoute(LatLng from, {double speedMps = 0}) async {
+  Future<void> _reRoute(
+    LatLng from, {
+    double speedMps = 0,
+    double? startHeading,
+  }) async {
+    if (_isRerouting) return;
     // Cooldown: don't re-route-spam while GPS is jittery off-route.
     final now = DateTime.now();
     if (_lastReRoute != null &&
-        now.difference(_lastReRoute!) < const Duration(seconds: 5)) {
+        now.difference(_lastReRoute!) < const Duration(seconds: 4)) {
       return;
     }
+    _isRerouting = true;
     _lastReRoute = now;
     _offRouteSince = null;
     _netOffSince = null;
-    debugPrint('SIM: REROUTE from=$from');
+    if (mounted) setNavState(() {});
+
+    debugPrint('SIM: REROUTE from=$from heading=$startHeading');
     final dest = _destination;
-    if (dest == null) return;
+    if (dest == null) {
+      _isRerouting = false;
+      if (mounted) setNavState(() {});
+      return;
+    }
+
+    // Throttle reroute speech to at most once every 12 seconds to prevent audio nag.
+    if (_lastRerouteSpeech == null ||
+        now.difference(_lastRerouteSpeech!) >= const Duration(seconds: 12)) {
+      _lastRerouteSpeech = now;
+      _voice.speak(
+        'Đang tính lại lộ trình.',
+        priority: VoiceGuide.priorityHigh,
+      );
+    }
     final sw = Stopwatch()..start();
     try {
+      final currentStopIdx = _engine?.currentStopIndex ?? 0;
+      final remainingStops = _stops.length > currentStopIdx
+          ? _stops.sublist(currentStopIdx)
+          : <TripStop>[];
+      final points = <LatLng>[
+        from,
+        if (remainingStops.isNotEmpty)
+          ...remainingStops.map((s) => s.pos)
+        else
+          dest,
+      ];
+      final effHeading = startHeading ?? (speedMps >= 1.5 ? _heading : null);
       // Fast-fail the ONLINE attempts (Google/Vietmap can block 30–60 s in a
       // dead zone) — cap them at 5 s and fall back to the on-device graph /
       // OSRM so turn-by-turn guidance keeps updating in a tunnel or rural gap.
       final route = await fetchAnyRoute(
-        [from, dest],
+        points,
         profile: _routeProfile,
         avoidHighway: _avoidHighway,
         avoidFerry: _avoidFerry,
         preference: _routePreference,
         onlineTimeout: const Duration(seconds: 5),
+        startHeading: effHeading,
       );
       sw.stop();
       debugPrint(
@@ -140,38 +219,72 @@ extension _NavNavigation on _NavigationPageState {
         _selectedRoute = 0;
         _showSteps = false;
         _routeBearing = 0;
+        _routeStartIndex = 0;
+        if (remainingStops.isNotEmpty) {
+          _stops
+            ..clear()
+            ..addAll(remainingStops);
+        }
         _engine = TurnByTurnEngine(
           bridged,
           stopNames: _engineStopNames(bridged),
           maxSpeedMps: _routeProfile.legalMaxMps,
         );
+        _lastManeuverSig = null;
+        _spokenFar = false;
+        _spokenNear = false;
+        _spokenFinal = false;
+        _arrivedSpoken = false;
       });
-      // Snap straight into the new route (updates distance, icon, clock,
-      // voice) instead of waiting for the next GPS fix.
-      _handleNav(from, speedMps: speedMps);
+      // Snap straight into the new route using the latest position.
+      _isRerouting = false;
+      final latestPos = _lastFixPos ?? _current ?? from;
+      _handleNav(latestPos, speedMps: speedMps);
       _sendMapRoute();
+
+      // If the newly calculated route starts with a turnaround / U-turn (e.g. dead end forward),
+      // tell the driver: "Không có đường đi tiếp, vui lòng quay đầu xe."
+      final firstStep = route.steps.isNotEmpty ? route.steps.first : null;
+      final isTurnBack =
+          firstStep != null &&
+          (firstStep.modifier?.contains('uturn') == true ||
+              firstStep.type == 'uturn');
+      if (isTurnBack) {
+        _voice.speak(
+          'Không có đường đi tiếp, vui lòng quay đầu xe.',
+          priority: VoiceGuide.priorityCritical,
+        );
+      }
     } catch (e) {
       // keep the old route on failure — but TELL the driver so they know the
-      // reroute didn't take (previously silent → the car kept being guided
-      // back onto the original route and the map never updated).
+      // reroute didn't take and they must turn back.
       debugPrint('REROUTE: failed: $e — keeping the old route');
+      _voice.speak(
+        'Không tìm thấy đường đi tiếp, vui lòng quay lại.',
+        priority: VoiceGuide.priorityHigh,
+      );
       if (mounted) {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(
             const SnackBar(
-              content: Text('Không tính được lộ trình mới — giữ tuyến cũ.'),
+              content: Text(
+                'Không tìm thấy đường đi tiếp — vui lòng quay lại.',
+              ),
               duration: Duration(seconds: 3),
             ),
           );
       }
+    } finally {
+      _isRerouting = false;
+      if (mounted) setNavState(() {});
     }
   }
 
   /// Rebuild [route] with the real [from] fix prepended (plus a few
   /// interpolated points toward OSRM's snapped start) so the drawn polyline
-  /// begins at the car, not at the road. No-op when the fix is already on the
-  /// road start.
+  /// begins at the car, not at the road. Also offsets the first step distance
+  /// and stopCumulative by [gap] so maneuver countdowns remain in exact sync.
   OsrmRoute _bridgeRouteFrom(OsrmRoute route, LatLng from) {
     final g = route.geometry;
     if (g.isEmpty) return route;
@@ -190,12 +303,27 @@ extension _NavNavigation on _NavigationPageState {
       );
     }
     pts.addAll(g);
+    final adjustedSteps = route.steps.isEmpty
+        ? route.steps
+        : [
+            OsrmStep(
+              name: route.steps.first.name,
+              distance: route.steps.first.distance + gap,
+              duration: route.steps.first.duration,
+              type: route.steps.first.type,
+              modifier: route.steps.first.modifier,
+              maneuver: route.steps.first.maneuver,
+              congestion: route.steps.first.congestion,
+            ),
+            ...route.steps.skip(1),
+          ];
+    final adjustedStopCum = [for (final s in route.stopCumulative) s + gap];
     return OsrmRoute(
       distance: route.distance + gap,
       duration: route.duration,
       geometry: pts,
-      steps: route.steps,
-      stopCumulative: route.stopCumulative,
+      steps: adjustedSteps,
+      stopCumulative: adjustedStopCum,
       tollCost: route.tollCost,
       tolls: route.tolls,
     );
@@ -204,14 +332,6 @@ extension _NavNavigation on _NavigationPageState {
   Future<void> _sendToClock(NavProgress nav) async {
     // ESP32 2.8" map display overlay feed (no-op when not connected).
     await _sendToMap(nav);
-    if (!_clock.isConnected) return;
-    await _clock.sendNavFrame(
-      meter: nav.meter,
-      iconCode: nav.iconCode,
-      hour: nav.etaHour,
-      minute: nav.etaMinute,
-      text: nav.text,
-    );
   }
 
   /// Push the overlay frames to the ESP32 2.8" display (NAV-OSM board):
@@ -413,6 +533,7 @@ extension _NavNavigation on _NavigationPageState {
         return;
       }
       _navStarting = false; // nav actually started — reopen the latch
+      navigationActive = true;
       setNavState(() => _navigating = true);
       _beginTrip();
       final nav = e2.update(origin, speedMps: 0);
@@ -427,7 +548,7 @@ extension _NavNavigation on _NavigationPageState {
       _lastManeuverSig = null;
       _speedingSpoken = false;
       _lastOverspeedAt = null;
-      _resetSignSpeed(); // speed-limit + zone + announce reset per session
+      _resetSignSpeed(); // speed-limit sign + announce reset per session
       _gpsWeakSpoken = false;
       _lastGpsWeakAt = null;
       _offRouteSince = null;
@@ -444,6 +565,7 @@ extension _NavNavigation on _NavigationPageState {
       return;
     }
     _navStarting = false; // nav actually started — reopen the latch
+    navigationActive = true;
     setNavState(() => _navigating = true);
     _beginTrip(); // auto-record the real drive
     final nav = engine.update(origin, speedMps: 0);
@@ -458,7 +580,7 @@ extension _NavNavigation on _NavigationPageState {
     _lastManeuverSig = null;
     _speedingSpoken = false;
     _lastOverspeedAt = null;
-    _resetSignSpeed(); // speed-limit + zone + announce reset per session
+    _resetSignSpeed(); // speed-limit sign + announce reset per session
     _gpsWeakSpoken = false;
     _lastGpsWeakAt = null;
     _offRouteSince = null;
@@ -489,6 +611,7 @@ extension _NavNavigation on _NavigationPageState {
     if (engine == null || _route == null) return;
     _simTimer?.cancel();
     _simDist = 0; // walk the route from its start
+    navigationActive = true;
     setNavState(() {
       _navigating = true;
       _simulating = true;
@@ -501,7 +624,7 @@ extension _NavNavigation on _NavigationPageState {
     _lastManeuverSig = null;
     _speedingSpoken = false;
     _lastOverspeedAt = null;
-    _resetSignSpeed(); // speed-limit + zone + announce reset per session
+    _resetSignSpeed(); // speed-limit sign + announce reset per session
     _gpsWeakSpoken = false;
     _lastGpsWeakAt = null;
     _cameraDedupe.reset();
@@ -589,10 +712,13 @@ extension _NavNavigation on _NavigationPageState {
     final cur = _current ?? fallback;
     final dest = _destination;
     if (cur == null || dest == null) return null;
-    final destName = _destinationName; // capture before clearing _stops
+    final points = <LatLng>[
+      cur,
+      if (_stops.isNotEmpty) ..._stops.map((s) => s.pos) else dest,
+    ];
     try {
       final route = await fetchAnyRoute(
-        [cur, dest],
+        points,
         profile: _routeProfile,
         avoidHighway: _avoidHighway,
         avoidFerry: _avoidFerry,
@@ -611,11 +737,13 @@ extension _NavNavigation on _NavigationPageState {
         _selectedRoute = 0;
         _showSteps = false;
         _routeBearing = 0;
+        _routeStartIndex = 0;
         _engine = engine;
-        _stops.clear();
-        _stops.add(
-          TripStop(name: destName, lat: dest.latitude, lng: dest.longitude),
-        );
+        _lastManeuverSig = null;
+        _spokenFar = false;
+        _spokenNear = false;
+        _spokenFinal = false;
+        _arrivedSpoken = false;
       });
       unawaited(_refreshRouteCameras());
       return engine;
@@ -638,9 +766,11 @@ extension _NavNavigation on _NavigationPageState {
   Future<void> _exitNavigation() async {
     debugPrint('SIM: EXIT navigation called');
     _stopSimulation(); // cancel the simulated-drive timer if running
+    navigationActive = false;
     setNavState(() {
       _navigating = false;
       _simulating = false;
+      _isRerouting = false;
       _route = null;
       _engine = null;
       _destination = null;
@@ -676,18 +806,14 @@ extension _NavNavigation on _NavigationPageState {
     await _finishTrip(); // save the recorded trip
   }
 
-  /// Single button for both BLE displays (E-ink clock + ESP32 2.8" nav
-  /// display). If any display is connected, tapping disconnects them all;
-  /// otherwise it opens the picker, which routes each device to its own BLE
-  /// client.
+  /// Single button for the ESP32 2.8" nav display (NAV-OSM).
+  /// If connected, tapping disconnects; otherwise it opens the picker.
   Future<void> _toggleDisplays() async {
-    if (_clock.isConnected || _mapClock.isConnected) {
+    if (_mapClock.isConnected) {
       _autoConnect.notifyUserDisconnected();
-      await _clock.disconnect();
       await _mapClock.disconnect();
       if (mounted) {
         setNavState(() {
-          _clockStatus = 'off';
           _mapStatus = 'off';
         });
       }
@@ -701,71 +827,46 @@ extension _NavNavigation on _NavigationPageState {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => DevicePickerSheet(clock: _clock, onPicked: _connectTo),
+      builder: (_) =>
+          DevicePickerSheet(mapClock: _mapClock, onPicked: _connectTo),
     );
   }
 
-  /// The device picker hands us a picked BLE device. Route it by type: the
-  /// ESP 2.8" nav display (NAV-OSM) has its OWN GATT profile, so it goes to
-  /// [_mapClock] — never the E-ink clock's [BleClock] (those UUIDs don't
-  /// exist on the ESP board, which is what caused "not found Write
-  /// characteristic").
+  /// Connect to the picked ESP32 nav display (NAV-OSM / NAVMAP).
   Future<void> _connectTo(ScannedClockDevice device) async {
     if (!mounted) return;
-    final isMap = _isMapDisplay(device);
     _autoConnect.rearm();
     setNavState(() {
-      if (isMap) {
-        _mapStatus = 'connecting';
-      } else {
-        _clockStatus = 'connecting';
-      }
+      _mapStatus = 'connecting';
     });
     try {
-      if (isMap) {
-        await _mapClock.connect(mac: device.id);
-        if (mounted) setNavState(() => _mapStatus = 'connected');
-        // Push the current route + progress so the display shows nav right
-        // away instead of waiting for the next GPS tick.
-        _sendMapRoute();
-        final nav = _progress;
-        if (nav != null) _sendToMap(nav);
-      } else {
-        await _clock.connect(mac: device.id);
-        if (mounted) setNavState(() => _clockStatus = 'connected');
-      }
+      await _mapClock.connect(mac: device.id);
+      if (mounted) setNavState(() => _mapStatus = 'connected');
+      // Push the current route + progress so the display shows nav right
+      // away instead of waiting for the next GPS tick.
+      _sendMapRoute();
+      final nav = _progress;
+      if (nav != null) _sendToMap(nav);
       lastBleMac = device.id;
       lastBleName = device.name;
-      lastBleType = isMap ? 'map' : 'clock';
+      lastBleType = 'map';
       final s = await loadSettings();
       await saveSettings(
         s.copyWith(
           lastBleMac: device.id,
           lastBleName: device.name,
-          lastBleType: isMap ? 'map' : 'clock',
+          lastBleType: 'map',
         ),
       );
     } catch (e) {
       if (mounted) {
         setNavState(() {
-          if (isMap) {
-            _mapStatus = 'off';
-          } else {
-            _clockStatus = 'off';
-          }
+          _mapStatus = 'off';
         });
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('BLE: $e')));
       }
     }
-  }
-
-  /// True when [d] is the ESP 2.8" nav display (NAV-OSM / NAVMAP advertise
-  /// names) — which must be driven by [BleMapClock], not the E-ink
-  /// [BleClock].
-  bool _isMapDisplay(ScannedClockDevice d) {
-    final n = d.name.toUpperCase();
-    return n.contains('NAV-OSM') || n.contains('NAVMAP');
   }
 }

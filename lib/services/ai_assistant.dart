@@ -16,6 +16,8 @@ import 'package:http/http.dart' as http;
 import 'package:navbridge/core/ai_config.dart';
 import 'package:navbridge/core/ai_key_store.dart';
 import 'package:navbridge/core/ai_memory.dart';
+import 'package:navbridge/core/settings.dart'
+    show aiCustomPrompt, aiWebSearch, aiProvider, aiDeepSeekBaseUrl, aiDeepSeekModel;
 import 'package:navbridge/services/offline_poi.dart';
 import 'package:navbridge/services/offline_tiles.dart' show isOnline;
 import 'package:navbridge/services/osm_api.dart';
@@ -145,14 +147,141 @@ class AiPlace {
 /// Matches the record type the chat panel stores.
 typedef ChatTurn = ({bool isUser, String text});
 
+/// A tool (function) call the model requested. For DeepSeek (OpenAI format)
+/// [id] and [arguments] (raw JSON) are populated; for Gemini the parsed
+/// [argsMap] is used.
+class _ToolCall {
+  final String id;
+  final String name;
+  final String arguments;
+  final Map<String, dynamic> argsMap;
+  const _ToolCall(this.id, this.name, this.arguments, [this.argsMap = const {}]);
+}
+
 class AiAssistant {
   static final AiAssistant instance = AiAssistant._();
   AiAssistant._();
+
+  bool _warmedUp = false;
+
+  /// Preload the AI's slow startup cost (encrypted key read from Keystore,
+  /// on-disk memory, and the system prompt asset) so the FIRST question in a
+  /// session answers fast instead of paying for secure-storage + asset IO.
+  /// Idempotent; safe to call from the app-start background preload.
+  Future<void> warmup() async {
+    if (_warmedUp) return;
+    _warmedUp = true;
+    try {
+      await AiKeyStore.instance.read(); // cache the key read
+      await _systemPrompt(); // cache prompt source + memory facts
+    } catch (e) {
+      debugPrint('AI: warmup failed: $e');
+    }
+  }
 
   /// Session memory caps — keep prompts cheap: last ~6 exchanges and at most
   /// ~6000 chars of history (oldest dropped first).
   static const int _maxHistoryMessages = 12;
   static const int _maxHistoryChars = 6000;
+
+  /// Bounded tool-calling loop so a misbehaving model can't loop forever.
+  static const int _maxToolRounds = 2;
+
+  /// `search_places` tool (OpenAI format for DeepSeek).
+  static const Map<String, dynamic> _searchPlacesToolDeepSeek = {
+    'type': 'function',
+    'function': {
+      'name': 'search_places',
+      'description':
+          'Gọi CHỈ khi tài xế hỏi tìm MỘT ĐỊA ĐIỂM thật (trạm xăng, nhà hàng, '
+          'quán ăn, cà phê/võng, khách sạn/nhà nghỉ, ATM/ngân hàng, bệnh viện, '
+          'hoặc nơi có tên cụ thể). TRƯỚC TIÊN hiểu ý câu hỏi: nếu là hỏi ngữ '
+          'cảnh lái xe (còn bao lâu, hướng đi, camera, thời tiết, ETA…) thì '
+          'KHÔNG gọi — trả lời trực tiếp. Trả về tên + toạ độ + khoảng cách; '
+          'tuyệt đối không bịa tên/toạ độ.',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'query': {
+            'type': 'string',
+            'description': 'Mô tả nơi cần tìm, ví dụ "trạm xăng", "quán phở Hùng", '
+                '"cà phê võng".',
+          },
+        },
+        'required': ['query'],
+      },
+    },
+  };
+
+  /// `web_search` tool (OpenAI format for DeepSeek).
+  static const Map<String, dynamic> _webSearchToolDeepSeek = {
+    'type': 'function',
+    'function': {
+      'name': 'web_search',
+      'description':
+          'Gọi CHỈ khi cần dữ kiện MỚI/thời gian thực mà ngữ cảnh không có '
+          '(giá xăng hôm nay, tin tức, giờ mở cửa, đánh giá). TRƯỚC TIÊN hiểu ý '
+          'câu hỏi: nếu là hỏi ngữ cảnh lái xe hoặc tìm địa điểm thì KHÔNG gọi '
+          '(dùng search_places); trả lời trực tiếp khi đã có đủ. Trả về văn bản '
+          'ngắn; không bịa số liệu.',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'query': {'type': 'string', 'description': 'Câu hỏi cần tra cứu.'},
+        },
+        'required': ['query'],
+      },
+    },
+  };
+
+  /// The DeepSeek tools available (web_search only when enabled in Settings).
+  List<Map<String, dynamic>> _deepSeekTools() => [
+    _searchPlacesToolDeepSeek,
+    if (aiWebSearch) _webSearchToolDeepSeek,
+  ];
+
+  /// `search_places` tool (Gemini functionDeclaration).
+  static const Map<String, dynamic> _searchPlacesToolGemini = {
+    'name': 'search_places',
+    'description':
+        'Gọi CHỈ khi tài xế hỏi tìm MỘT ĐỊA ĐIỂM thật (trạm xăng, nhà hàng, cà '
+        'phê võng, khách sạn, ATM, bệnh viện, nơi có tên cụ thể). Trước tiên hiểu '
+        'ý câu hỏi: nếu là ngữ cảnh lái xe (còn bao lâu, hướng đi, camera, thời '
+        'tiết, ETA) thì không gọi — trả lời trực tiếp. Trả về tên + toạ độ + '
+        'khoảng cách; không bịa tên/toạ độ.',
+    'parameters': {
+      'type': 'object',
+      'properties': {
+        'query': {'type': 'string', 'description': 'Mô tả nơi cần tìm.'},
+      },
+      'required': ['query'],
+    },
+  };
+
+  /// `web_search` tool (Gemini functionDeclaration).
+  static const Map<String, dynamic> _webSearchToolGemini = {
+    'name': 'web_search',
+    'description':
+        'Gọi CHỈ khi cần dữ kiện mới/thời gian thực (giá xăng hôm nay, tin tức, '
+        'đánh giá). Trước tiên hiểu ý câu hỏi: nếu là ngữ cảnh lái xe hoặc tìm '
+        'địa điểm thì không gọi (dùng search_places). Trả về văn bản ngắn; '
+        'không bịa số liệu.',
+    'parameters': {
+      'type': 'object',
+      'properties': {
+        'query': {'type': 'string', 'description': 'Câu hỏi cần tra cứu.'},
+      },
+      'required': ['query'],
+    },
+  };
+
+  /// The Gemini tools available (web_search only when enabled in Settings).
+  List<Map<String, dynamic>> _geminiTools() => [
+    {'functionDeclarations': [
+      _searchPlacesToolGemini,
+      if (aiWebSearch) _webSearchToolGemini,
+    ]},
+  ];
 
   /// Ask the assistant. [question] is the driver's text; [context] grounds it;
   /// [history] is the previous chat turns (session memory — trimmed to stay
@@ -177,15 +306,7 @@ class AiAssistant {
     );
     final ctx = context?.toPrompt() ?? '';
     final center = context?.center;
-    var userText = ctx.isEmpty ? question : '$question$ctx';
-
-    // REAL grounding: run the app's POI search for fuel/food/cafe/hotel/ATM
-    // and hand the actual places (name + distance) to the model so it NEVER
-    // invents coordinates. The same places are returned as [AiReply.places]
-    // so the chat can offer "Đi đến" buttons.
-    final grounding = await _groundPlaces(question, center);
-    if (grounding.$1.isNotEmpty) userText = '$userText${grounding.$1}';
-    final places = grounding.$2;
+    final userText = ctx.isEmpty ? question : '$question$ctx';
 
     final sys = await _systemPrompt();
     final trimmed = _trimHistory(history);
@@ -195,40 +316,125 @@ class AiAssistant {
       final off = await _offlineAnswer(question, context, center);
       if (off != null) return off;
     }
-    // WEB grounding — HIGH priority: runs for almost every online question
-    // (place queries too, so the answer can combine real places with current
-    // web facts like ratings/news). Only pure nav-state / current-weather /
-    // greeting questions skip it (answered from live drive context).
-    if (_shouldWebSearch(question)) {
-      final web = await _webSearch(question);
-      if (web.isNotEmpty) userText = '$userText\n\n$web';
-    }
     if (deepSeekKey.isEmpty && geminiKey.isEmpty) {
       throw Exception(
         'Chưa cấu hình khoá AI. Vào ⚙ Cài đặt → Trợ lý AI để nhập khoá.',
       );
     }
 
-    // DeepSeek first (cheap + strong Vietnamese).
-    if (deepSeekKey.isNotEmpty) {
-      try {
-        final r = await _askDeepSeek(
-          deepSeekKey,
-          userText,
-          trimmed,
-          sys,
-          onToken,
-        );
-        final (txt, target) = _extractNavigate(r.text, places);
-        return AiReply(txt, r.provider, places: places, navigateTarget: target);
-      } catch (e) {
-        debugPrint('AI: deepseek failed: $e — trying Gemini');
-        if (geminiKey.isEmpty) rethrow;
+    // Provider preference ('auto' | 'deepseek' | 'gemini'). DeepSeek is
+    // primary unless Gemini is preferred; when the preferred provider's key
+    // is missing the assistant falls back to the other so it still answers.
+    final pref = aiProvider;
+    final deepOk = deepSeekKey.isNotEmpty && pref != 'gemini';
+    final gemOk = geminiKey.isNotEmpty && pref != 'deepseek';
+
+    // Conversation in OpenAI style (DeepSeek native; translated for Gemini).
+    final messages = <Map<String, dynamic>>[
+      {'role': 'system', 'content': sys},
+      for (final t in trimmed)
+        {'role': t.isUser ? 'user' : 'assistant', 'content': t.text},
+      {'role': 'user', 'content': userText},
+    ];
+
+    // TOOL-CALLING loop (bounded). Instead of pre-injecting grounding, the
+    // model decides when to call `search_places` (Google/Overpass real POIs)
+    // or `web_search` (Tavily/DDG/Wikipedia). It may do this across up to
+    // [_maxToolRounds] rounds; the model's asked-for tools are executed and
+    // their results fed back so the final answer is grounded in REAL data
+    // (never invented names/coords).
+    final places = <AiPlace>[];
+    for (var round = 0; round <= _maxToolRounds; round++) {
+      if (deepOk) {
+        try {
+          final r = await _deepSeekRound(deepSeekKey, messages, onToken);
+          if (r.toolCalls.isEmpty) {
+            final (txt, target) = _extractNavigate(r.text, places);
+            return AiReply(
+              txt,
+              'deepseek',
+              places: places,
+              navigateTarget: target,
+            );
+          }
+          // Record the assistant's tool-call message so the following
+          // `tool` role results are accepted (OpenAI requires this ordering).
+          messages.add({
+            'role': 'assistant',
+            'content': r.text,
+            'tool_calls': [
+              for (final tc in r.toolCalls)
+                {
+                  'id': tc.id,
+                  'type': 'function',
+                  'function': {
+                    'name': tc.name,
+                    'arguments': tc.arguments,
+                  },
+                },
+            ],
+          });
+          for (final tc in r.toolCalls) {
+            final res = await _execTool(
+              tc.name,
+              _decodeArgs(tc.arguments),
+              center,
+            );
+            places.addAll(res.places);
+            messages.add({
+              'role': 'tool',
+              'tool_call_id': tc.id,
+              'content': res.text,
+            });
+          }
+          continue;
+        } catch (e) {
+          debugPrint('AI: deepseek failed: $e — trying Gemini');
+          if (!gemOk) rethrow;
+        }
       }
+      if (gemOk) {
+        try {
+          final g = await _geminiRound(geminiKey, messages, onToken);
+          if (g.toolCalls.isEmpty) {
+            final (txt, target) = _extractNavigate(g.text, places);
+            return AiReply(
+              txt,
+              'gemini',
+              places: places,
+              navigateTarget: target,
+            );
+          }
+          // Record the model's functionCall so Gemini accepts the
+          // functionResponse that follows.
+          messages.add({
+            'role': 'assistant',
+            'content': g.text,
+            'function_calls': [
+              for (final tc in g.toolCalls)
+                {'name': tc.name, 'args': tc.argsMap},
+            ],
+          });
+          for (final tc in g.toolCalls) {
+            final res = await _execTool(tc.name, tc.argsMap, center);
+            places.addAll(res.places);
+            // Gemini: feed the function result back as a 'function' content.
+            messages.add({
+              'role': 'function',
+              'name': tc.name,
+              'content': res.text,
+            });
+          }
+          continue;
+        } catch (e) {
+          debugPrint('AI: gemini failed: $e');
+          rethrow;
+        }
+      }
+      // Neither provider usable.
+      throw Exception('Chưa cấu hình khoá AI.');
     }
-    final g = await _askGemini(geminiKey, userText, trimmed, sys, onToken);
-    final (txt, target) = _extractNavigate(g.text, places);
-    return AiReply(txt, g.provider, places: places, navigateTarget: target);
+    throw Exception('AI không trả lời được.');
   }
 
   /// System prompt = base prompt (from the repo asset, so it's easy to edit)
@@ -240,7 +446,70 @@ class AiAssistant {
       base = await rootBundle.loadString('assets/ai/system_prompt.txt');
     } catch (_) {}
     final mem = await AiMemory.instance.factsPrompt();
-    return mem.isEmpty ? base : '$base\n\n$mem';
+    final custom = aiCustomPrompt.trim();
+    var sys = mem.isEmpty ? base : '$base\n\n$mem';
+    if (custom.isNotEmpty) {
+      sys = '$sys\n\nNgười dùng yêu cầu: $custom';
+    }
+    // Intent-first rule: understand what the driver is asking, then search
+    // only when genuinely needed. Keeps tool use purposeful & low-latency.
+    sys = '$sys\n\nQuy tắc:\n'
+        '  - Trước khi trả lời, hãy hiểu rõ tài xế đang hỏi GÌ (ngữ cảnh lái xe '
+        'hay tìm địa điểm hay cần dữ kiện mới).\n'
+        '  - Câu hỏi ngữ cảnh lái xe (còn bao lâu, hướng đi, camera, thời tiết, '
+        'ETA) hoặc chào hỏi → trả lời trực tiếp, KHÔNG gọi tool.\n'
+        '  - Cần tìm địa điểm thật → gọi search_places (một lần, đúng truy vấn).\n'
+        '  - Cần dữ kiện mới trên web → gọi web_search (một lần, đúng truy vấn).\n'
+        '  - Chỉ gọi tool khi thật sự cần; nếu ngữ cảnh đã đủ thì đừng gọi.';
+    return sys;
+  }
+
+  /// Decode an OpenAI tool-call `arguments` JSON string into a map.
+  static Map<String, dynamic> _decodeArgs(String raw) {
+    if (raw.trim().isEmpty) return const {};
+    try {
+      final j = jsonDecode(raw);
+      return j is Map<String, dynamic> ? j : const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// Execute a model-requested tool call and return the text to feed back to
+  /// the model, plus any real places for the "Đi đến" chips.
+  Future<({String text, List<AiPlace> places})> _execTool(
+    String name,
+    Map<String, dynamic> args,
+    LatLng? center,
+  ) async {
+    final query = (args['query'] ?? args['q'] ?? '').toString().trim();
+    if (query.isEmpty) {
+      return (text: 'Thiếu truy vấn.', places: const <AiPlace>[]);
+    }
+    if (name == 'search_places') {
+      if (center == null) {
+        return (
+          text: 'Chưa có vị trí hiện tại để tìm địa điểm gần đây.',
+          places: const <AiPlace>[],
+        );
+      }
+      final (block, places) = await _groundPlaces(query, center);
+      if (block.isNotEmpty) return (text: block, places: places);
+      final (nb, np) = await _groundNamedPlace(query, center);
+      if (nb.isNotEmpty) return (text: nb, places: np);
+      return (
+        text: 'Không tìm thấy địa điểm nào cho "$query".',
+        places: const <AiPlace>[],
+      );
+    }
+    if (name == 'web_search') {
+      final w = await _webSearch(query);
+      return (
+        text: w.isEmpty ? 'Không có kết quả web cho "$query".' : w,
+        places: const <AiPlace>[],
+      );
+    }
+    return (text: 'Tool "$name" không tồn tại.', places: const <AiPlace>[]);
   }
 
   /// Keeps session memory light: at most the last [_maxHistoryMessages] turns
@@ -393,7 +662,7 @@ class AiAssistant {
         lines.add('${p.name.isNotEmpty ? p.name : type.label} (cách ~$m m)');
       }
       final block =
-          '\n\n$type.label gần đây (OSM thật — chỉ dùng danh sách này, kèm '
+          '\n\n${type.label} gần đây (OSM thật — chỉ dùng danh sách này, kèm '
           'khoảng cách):\n- ${lines.join('\n- ')}';
       return (block, [for (final p in pois) AiPlace(p.name, p.lat, p.lng)]);
     } catch (e) {
@@ -584,14 +853,38 @@ class AiAssistant {
     if (AiConfig.tavilyApiKey.isNotEmpty) {
       futures.insert(0, _tavilySearch(query));
     }
-    final results = await Future.wait(futures);
-    debugPrint(
-      'AI: web "$query" → ${results.map((r) => r.length).join('/')} chars',
-    );
-    for (final r in results) {
-      if (r.isNotEmpty) return r;
+    // Return as soon as ANY source yields a non-empty result, instead of
+    // `Future.wait` (which blocks on the slowest — DDG/Wikipedia can be 8-10 s).
+    final result = await _firstNonEmpty(futures);
+    debugPrint('AI: web "$query" → ${result.length} chars');
+    return result;
+  }
+
+  /// Race [futures], resolving with the first non-empty string; completes
+  /// with '' only when every source returns empty (or errors). Keeps latency
+  /// low even when one source is slow.
+  static Future<String> _firstNonEmpty(List<Future<String>> futures) {
+    if (futures.isEmpty) return Future.value('');
+    final completer = Completer<String>();
+    var remaining = futures.length;
+    void checkDone() {
+      remaining--;
+      if (remaining == 0 && !completer.isCompleted) {
+        completer.complete('');
+      }
     }
-    return '';
+    for (final f in futures) {
+      f.then((res) {
+        if (!completer.isCompleted && res.isNotEmpty) {
+          completer.complete(res);
+        } else if (!completer.isCompleted) {
+          checkDone();
+        }
+      }).catchError((_) {
+        if (!completer.isCompleted) checkDone();
+      });
+    }
+    return completer.future;
   }
 
   /// Tavily Search API (real-time, AI-optimized): POST /search with the key
@@ -932,25 +1225,32 @@ class AiAssistant {
   @visibleForTesting
   bool shouldWebSearchForTest(String q) => _shouldWebSearch(q);
 
-  Future<AiReply> _askDeepSeek(
+  /// One DeepSeek chat round. Streams text via [onToken] and returns whatever
+  /// text it produced plus any tool (function) calls it requested. The caller
+  /// executes the tools and re-calls with the results for the final answer.
+  Future<({String text, List<_ToolCall> toolCalls})> _deepSeekRound(
     String key,
-    String userText,
-    List<ChatTurn> history,
-    String sys,
+    List<Map<String, dynamic>> messages,
     void Function(String)? onToken,
   ) async {
-    final request = http.Request('POST', Uri.parse(AiConfig.deepSeekEndpoint))
+    // Use the configured base URL (empty → default endpoint) + model override.
+    final base = aiDeepSeekBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final endpoint = base.isEmpty
+        ? AiConfig.deepSeekEndpoint
+        : base.endsWith('/chat/completions')
+        ? base
+        : '$base/chat/completions';
+    final model = aiDeepSeekModel.trim().isEmpty
+        ? AiConfig.deepSeekModel
+        : aiDeepSeekModel;
+    final request = http.Request('POST', Uri.parse(endpoint))
       ..headers['Content-Type'] = 'application/json'
       ..headers['Authorization'] = 'Bearer $key'
       ..body = jsonEncode({
-        'model': AiConfig.deepSeekModel,
+        'model': model,
         'stream': true,
-        'messages': [
-          {'role': 'system', 'content': sys},
-          for (final t in history)
-            {'role': t.isUser ? 'user' : 'assistant', 'content': t.text},
-          {'role': 'user', 'content': userText},
-        ],
+        'messages': messages,
+        'tools': _deepSeekTools(),
       });
     final client = http.Client();
     try {
@@ -964,12 +1264,13 @@ class AiAssistant {
       // SSE: "data: {...}\n\n" lines, read incrementally so tokens stream.
       final buffer = StringBuffer();
       final lineBuf = StringBuffer();
+      final toolAcc = <int, Map<String, dynamic>>{};
       await for (final chunk in res.stream.transform(utf8.decoder)) {
         lineBuf.write(chunk);
         var s = lineBuf.toString();
         var nl = s.indexOf('\n');
         while (nl != -1) {
-          _consumeDeepSeekLine(s.substring(0, nl), buffer, onToken);
+          _consumeDeepSeekLine(s.substring(0, nl), buffer, onToken, toolAcc);
           s = s.substring(nl + 1);
           nl = s.indexOf('\n');
         }
@@ -978,12 +1279,20 @@ class AiAssistant {
           ..write(s);
       }
       if (lineBuf.isNotEmpty) {
-        _consumeDeepSeekLine(lineBuf.toString(), buffer, onToken);
+        _consumeDeepSeekLine(lineBuf.toString(), buffer, onToken, toolAcc);
       }
-      if (buffer.isEmpty) {
+      if (toolAcc.isEmpty && buffer.isEmpty) {
         throw Exception('DeepSeek không trả về nội dung.');
       }
-      return AiReply(buffer.toString(), 'deepseek');
+      final toolCalls = [
+        for (final e in toolAcc.entries)
+          _ToolCall(
+            (e.value['id'] ?? '') as String,
+            (e.value['name'] ?? '') as String,
+            (e.value['args'] ?? '') as String,
+          ),
+      ];
+      return (text: buffer.toString(), toolCalls: toolCalls);
     } on TimeoutException {
       throw Exception('DeepSeek hết thời gian chờ (60s). Thử lại.');
     } finally {
@@ -991,58 +1300,128 @@ class AiAssistant {
     }
   }
 
-  /// Parse one SSE "data: …" line from DeepSeek and stream any content token.
+  /// Parse one SSE "data: …" line from DeepSeek and stream any content token
+  /// or accumulate a tool-call delta (OpenAI tool_calls arrive piece by piece
+  /// across chunks keyed by index).
   void _consumeDeepSeekLine(
     String line,
     StringBuffer buffer,
     void Function(String)? onToken,
+    Map<int, Map<String, dynamic>> toolAcc,
   ) {
     if (!line.startsWith('data:')) return;
     final payload = line.substring(5).trim();
     if (payload.isEmpty || payload == '[DONE]') return;
     try {
       final j = jsonDecode(payload) as Map<String, dynamic>;
-      final delta = (j['choices'] as List? ?? const []);
-      if (delta.isEmpty) return;
-      final c = (delta.first as Map? ?? const {})['delta'] as Map?;
-      final piece = c?['content'] as String? ?? '';
+      final choices = (j['choices'] as List? ?? const []);
+      if (choices.isEmpty) return;
+      final delta = (choices.first as Map? ?? const {})['delta'] as Map? ??
+          const {};
+      final piece = delta['content'] as String? ?? '';
       if (piece.isNotEmpty) {
         buffer.write(piece);
         onToken?.call(piece);
+      }
+      final tools = delta['tool_calls'] as List? ?? const [];
+      for (final raw in tools) {
+        final t = (raw as Map? ?? const {});
+        final idx = (t['index'] ?? 0) as int;
+        final acc = toolAcc.putIfAbsent(idx, () {
+          return {'id': '', 'name': '', 'args': ''};
+        });
+        final id = t['id'];
+        if (id is String && id.isNotEmpty) acc['id'] = id;
+        final fn = t['function'] as Map? ?? const {};
+        final name = fn['name'];
+        if (name is String && name.isNotEmpty) acc['name'] = name;
+        final args = fn['arguments'];
+        if (args is String && args.isNotEmpty) {
+          acc['args'] = (acc['args'] as String) + args;
+        }
       }
     } catch (_) {
       // skip malformed SSE frames
     }
   }
 
-  Future<AiReply> _askGemini(
+  /// Translate an OpenAI-style message list (system/user/assistant/function)
+  /// into Gemini `contents`.
+  List<Map<String, dynamic>> _toGeminiContents(
+    List<Map<String, dynamic>> messages,
+  ) {
+    final contents = <Map<String, dynamic>>[];
+    for (final m in messages) {
+      final role = (m['role'] ?? 'user') as String;
+      if (role == 'system') continue; // handled via systemInstruction
+      if (role == 'function' || role == 'tool') {
+        final name = (m['name'] ?? m['tool_call_id'] ?? 'function').toString();
+        contents.add({
+          'role': 'function',
+          'parts': [
+            {
+              'functionResponse': {
+                'name': name,
+                'response': {'content': m['content'] ?? ''},
+              },
+            },
+          ],
+        });
+        continue;
+      }
+      if (role == 'assistant') {
+        final parts = <Map<String, dynamic>>[];
+        final text = (m['content'] ?? '') as String;
+        if (text.isNotEmpty) parts.add({'text': text});
+        final fcs = m['function_calls'] as List? ?? const [];
+        for (final fc in fcs) {
+          final fcm = (fc as Map?) ?? const {};
+          parts.add({
+            'functionCall': {'name': fcm['name'], 'args': fcm['args'] ?? const {}},
+          });
+        }
+        final tcs = m['tool_calls'] as List? ?? const [];
+        for (final tc in tcs) {
+          final tcm = (tc as Map?) ?? const {};
+          final fn = tcm['function'] as Map? ?? const {};
+          final fnName = fn['name'] as String? ?? '';
+          final fnArgs = _decodeArgs(fn['arguments'] as String? ?? '');
+          parts.add({
+            'functionCall': {'name': fnName, 'args': fnArgs},
+          });
+        }
+        contents.add({'role': 'model', 'parts': parts});
+        continue;
+      }
+      contents.add({
+        'role': role == 'assistant' ? 'model' : (role == 'model' ? 'model' : 'user'),
+        'parts': [
+          {'text': (m['content'] ?? '') as String},
+        ],
+      });
+    }
+    return contents;
+  }
+
+  /// One Gemini chat round. Streams text via [onToken] and returns whatever
+  /// text it produced plus any function (tool) calls it requested.
+  Future<({String text, List<_ToolCall> toolCalls})> _geminiRound(
     String key,
-    String userText,
-    List<ChatTurn> history,
-    String sys,
+    List<Map<String, dynamic>> messages,
     void Function(String)? onToken,
   ) async {
+    final sys = messages
+        .where((m) => m['role'] == 'system')
+        .map((m) => (m['content'] ?? '') as String)
+        .join('\n');
     final body = jsonEncode({
       'systemInstruction': {
         'parts': [
           {'text': sys},
         ],
       },
-      'contents': [
-        for (final t in history)
-          {
-            'role': t.isUser ? 'user' : 'model',
-            'parts': [
-              {'text': t.text},
-            ],
-          },
-        {
-          'role': 'user',
-          'parts': [
-            {'text': userText},
-          ],
-        },
-      ],
+      'contents': _toGeminiContents(messages),
+      'tools': _geminiTools(),
       'generationConfig': {'temperature': 0.6},
     });
 
@@ -1053,11 +1432,14 @@ class AiAssistant {
     var lastSc = 503;
     var lastBody = '{"error":{"message":"model overloaded"}}';
     for (final model in AiConfig.geminiModels) {
+      // Send the key in a header, not the URL query string — query params
+      // leak into proxy/server access logs.
       final uri = Uri.parse(
-        '${AiConfig.geminiEndpointFor(model)}?alt=sse&key=$key',
+        '${AiConfig.geminiEndpointFor(model)}?alt=sse',
       );
       final request = http.Request('POST', uri)
         ..headers['Content-Type'] = 'application/json'
+        ..headers['x-goog-api-key'] = key
         ..body = body;
       final client = http.Client();
       http.StreamedResponse streamed;
@@ -1094,13 +1476,14 @@ class AiAssistant {
 
       final buffer = StringBuffer();
       final lineBuf = StringBuffer();
+      final toolCalls = <_ToolCall>[];
       try {
         await for (final chunk in streamed.stream.transform(utf8.decoder)) {
           lineBuf.write(chunk);
           var s = lineBuf.toString();
           var nl = s.indexOf('\n');
           while (nl != -1) {
-            _consumeGeminiLine(s.substring(0, nl), buffer, onToken);
+            _consumeGeminiLine(s.substring(0, nl), buffer, onToken, toolCalls);
             s = s.substring(nl + 1);
             nl = s.indexOf('\n');
           }
@@ -1109,24 +1492,26 @@ class AiAssistant {
             ..write(s);
         }
         if (lineBuf.isNotEmpty) {
-          _consumeGeminiLine(lineBuf.toString(), buffer, onToken);
+          _consumeGeminiLine(lineBuf.toString(), buffer, onToken, toolCalls);
         }
       } finally {
         client.close();
       }
-      if (buffer.isEmpty) {
+      if (buffer.isEmpty && toolCalls.isEmpty) {
         throw Exception('Gemini không trả về nội dung.');
       }
-      return AiReply(buffer.toString(), 'gemini');
+      return (text: buffer.toString(), toolCalls: toolCalls);
     }
     throw Exception(_friendlyGeminiError(lastSc, lastBody));
   }
 
-  /// Parse one SSE "data: …" line from Gemini and stream any text token out.
+  /// Parse one SSE "data: …" line from Gemini: stream any text token and
+  /// collect any `functionCall` part (the model asking for a tool).
   void _consumeGeminiLine(
     String line,
     StringBuffer buffer,
     void Function(String)? onToken,
+    List<_ToolCall> toolCalls,
   ) {
     if (!line.startsWith('data:')) return;
     final payload = line.substring(5).trim();
@@ -1139,10 +1524,22 @@ class AiAssistant {
           (cands.first as Map? ?? const {})['content']?['parts'] as List? ??
           const [];
       for (final p in parts) {
-        final piece = (p as Map? ?? const {})['text'] as String? ?? '';
+        final pm = (p as Map? ?? const {});
+        final piece = pm['text'] as String? ?? '';
         if (piece.isNotEmpty) {
           buffer.write(piece);
           onToken?.call(piece);
+        }
+        final fn = pm['functionCall'] as Map?;
+        if (fn != null) {
+          final name = (fn['name'] ?? '') as String;
+          final args = fn['args'];
+          toolCalls.add(_ToolCall(
+            '',
+            name,
+            '',
+            args is Map<String, dynamic> ? args : const {},
+          ));
         }
       }
     } catch (_) {

@@ -3,19 +3,19 @@ part of '../navigation_page.dart';
 extension _NavVoice on _NavigationPageState {
   /// Open the AI assistant chat panel. [question] is auto-sent on open (e.g.
   /// from the voice command "hỏi AI …"); null opens an empty chat.
+  ///
+  /// OPENS INSTANTLY: the sheet shows right away, while the route-aware drive
+  /// context (weather, cameras/đèo/gas ahead) is computed in the background and
+  /// streamed in via a [ValueNotifier]. Before this, both `_ensureWeather` and
+  /// `_aiContextAsync` were awaited BEFORE the sheet opened, so the AI mode
+  /// could take seconds to appear (up to ~8 s for weather + DB lookups).
   Future<void> _openAiAssistant({String? question}) async {
     if (!mounted) return;
-    // Fetch weather now (if not already) so the AI can answer weather
-    // questions even before a route starts. Open-Meteo is fast (~1 s).
-    await _ensureWeather();
-    if (!mounted) return;
-    // Compute the route-aware trip context (cameras/đèo/gas ahead from the
-    // offline DB) so the AI can answer "còn bao nhiêu camera", "bao giờ hết
-    // đèo", "trạm xăng còn xa không" grounded in real data.
-    final aiCtx = await _aiContextAsync();
-    if (!mounted) return;
-    // Let the panel use OUR mic (shares permissions/state with the nav
-    // screen) instead of spinning up its own recognizer.
+    // Context starts as the fast, already-known pieces (position/route/speed)
+    // so the first question is answerable immediately.
+    final live = ValueNotifier<AiContext?>(_aiContext());
+    // Compute the slow drive facts in the background; update the notifier.
+    unawaited(_fillAiContextAsync(live));
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -29,7 +29,8 @@ extension _NavVoice on _NavigationPageState {
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
         child: AiChatPanel(
-          context: aiCtx,
+          context: _aiContext(),
+          liveContext: live,
           initialQuestion: question?.trim(),
           // Opened by a voice command → speak the answer aloud while it streams
           // so the driver never has to look at the screen.
@@ -45,22 +46,56 @@ extension _NavVoice on _NavigationPageState {
           onNavigate: (name, lat, lng) {
             unawaited(_planToPoint(name, lat, lng));
           },
-          onMicPressed: () async {
+          onMicPressed: ({void Function(String partial)? onPartial}) async {
             final mic = await Permission.microphone.request();
-            if (!mic.isGranted) return '';
+            if (!mic.isGranted) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Cần quyền micro để nói chuyện với Trợ lý AI.',
+                    ),
+                  ),
+                );
+              }
+              return '';
+            }
             if (!mounted) return '';
-            return _recognizeOnePhrase();
+            return _recognizeOnePhrase(onPartial: onPartial);
+          },
+          onMicCancel: () async {
+            await _commands.stop();
           },
         ),
       ),
     );
+    live.dispose();
+  }
+
+  /// Compute the slow route-aware drive facts (weather, cameras/đèo/gas ahead)
+  /// in the background and publish them to [live] so the already-open AI panel
+  /// gets grounded context as soon as they're ready.
+  Future<void> _fillAiContextAsync(ValueNotifier<AiContext?> live) async {
+    if (!mounted) return;
+    await _ensureWeather();
+    if (!mounted) return;
+    final aiCtx = await _aiContextAsync();
+    if (mounted) live.value = aiCtx;
   }
 
   /// One-shot voice recognition returning the recognized phrase (or '').
   /// The window is capped (~15 s) and ALWAYS resolves — a failed session on
   /// this device (no_match) would otherwise leave the chat mic waiting forever.
-  Future<String> _recognizeOnePhrase() async {
-    if (!_commands.available) return '';
+  Future<String> _recognizeOnePhrase({
+    void Function(String partial)? onPartial,
+  }) async {
+    if (!_commands.available) {
+      final ok = await _commands.init();
+      if (!ok) {
+        debugPrint('VOICE: speech_to_text init failed');
+        return '';
+      }
+    }
     // If the nav voice (or the always-on wake word) is already listening, a
     // SECOND recognizer start returns no result (speech_to_text throws/silent
     // on double-start) — stop it first so the AI mic actually works while
@@ -75,8 +110,10 @@ extension _NavVoice on _NavigationPageState {
     _listening = true;
     if (mounted) setNavState(() {});
     await _commands.listen(
-      completer.complete,
-      onPartial: (_) {},
+      (text) {
+        if (!completer.isCompleted) completer.complete(text);
+      },
+      onPartial: onPartial ?? (_) {},
       budget: const Duration(seconds: 15),
     );
     _listening = false;
@@ -104,7 +141,11 @@ extension _NavVoice on _NavigationPageState {
                     : road.name.isNotEmpty
                     ? road.name
                     : road.highway}'
-                '${road.speedLimit > 0 ? ' (${road.speedLimit} km/h)' : ''}',
+                // The SIGN-AWARE effective limit — the same number the chip
+                // shows and the voice announces. Using the road's own tagged
+                // value here made the AI answer a different limit than the
+                // screen ("voice said 60 while the screen showed 50").
+                '${_effectiveSpeedLimit > 0 ? ' (giới hạn $_effectiveSpeedLimit km/h)' : ''}',
       speedKmh: _lastSpeedMps > 0
           ? '${(_lastSpeedMps * 3.6).round()} km/h'
           : null,
@@ -164,6 +205,7 @@ extension _NavVoice on _NavigationPageState {
               route,
               LatLng(p.lat, p.lng),
               startIndex: startIdx,
+              carPos: cur,
             );
             if (proj.aheadMeters >= -100 &&
                 (ng == null || proj.aheadMeters < ng)) {
@@ -345,10 +387,10 @@ extension _NavVoice on _NavigationPageState {
           }
         }
       }
-      _voice.speak(
-        side.isEmpty ? 'Bạn đã đến nơi.' : 'Điểm đến$side',
-        priority: VoiceGuide.priorityCritical,
-      );
+      unawaited(SoundAlerts.instance.playArrival());
+      final arriveTxt = side.isEmpty ? 'Bạn đã đến nơi.' : 'Điểm đến$side';
+      _logAnnouncement(arriveTxt, kind: 'maneuver');
+      _voice.speak(arriveTxt, priority: VoiceGuide.priorityCritical);
       return;
     }
     final m = nav.meter;
@@ -388,19 +430,24 @@ extension _NavVoice on _NavigationPageState {
     if (isNew && m > far) {
       // Fresh turn → announce it immediately with its distance.
       _spokenFar = true;
-      _voice.speak(_announce(nav, m), priority: VoiceGuide.priorityCritical);
+      final txt = _announce(nav, m);
+      _logAnnouncement(txt, kind: 'maneuver');
+      _voice.speak(txt, priority: VoiceGuide.priorityCritical);
     } else if (!_spokenFar && m <= far && m > near) {
       _spokenFar = true;
-      _voice.speak(_announce(nav, m), priority: VoiceGuide.priorityCritical);
+      final txt = _announce(nav, m);
+      _logAnnouncement(txt, kind: 'maneuver');
+      _voice.speak(txt, priority: VoiceGuide.priorityCritical);
     } else if (!_spokenNear && m <= near && m > finalM) {
       _spokenNear = true;
-      _voice.speak(_announce(nav, m), priority: VoiceGuide.priorityCritical);
+      final txt = _announce(nav, m);
+      _logAnnouncement(txt, kind: 'maneuver');
+      _voice.speak(txt, priority: VoiceGuide.priorityCritical);
     } else if (!_spokenFinal && m <= finalM) {
       _spokenFinal = true;
-      _voice.speak(
-        _announce(nav, m, now: true),
-        priority: VoiceGuide.priorityCritical,
-      );
+      final txt = _announce(nav, m, now: true);
+      _logAnnouncement(txt, kind: 'maneuver');
+      _voice.speak(txt, priority: VoiceGuide.priorityCritical);
     }
   }
 
@@ -430,7 +477,13 @@ extension _NavVoice on _NavigationPageState {
     // value shown in the road-info chip (sign-aware: the last speed-limit sign
     // passed wins over the road's default). Omitted when unknown (0).
     final limit = _effectiveSpeedLimit;
-    final limitTxt = limit > 0 ? ' Tốc độ tối đa $limit km/h.' : '';
+    // A sign adopted EARLY (up to 400 m before it is reached) is not the limit
+    // in force yet — say "tiếp theo", never "hiện tại".
+    final limitTxt = limit > 0
+        ? (_limitIsUpcoming
+              ? ' Tốc độ tối đa tiếp theo $limit km/h.'
+              : ' Tốc độ tối đa $limit km/h.')
+        : '';
     if (now) {
       return '$verb$into$nextNext.$limitTxt';
     }
@@ -469,6 +522,10 @@ extension _NavVoice on _NavigationPageState {
         final msg = over < 10
             ? 'Vượt quá tốc độ ${over.round()} km/h.'
             : 'Giảm tốc độ! Vượt quá tốc độ.';
+        if (over >= 10) {
+          unawaited(SoundAlerts.instance.playSpeedAlarm());
+        }
+        _logAnnouncement(msg, kind: 'overspeed');
         _voice.speak(msg, priority: VoiceGuide.priorityHigh);
       }
     } else {
@@ -477,9 +534,9 @@ extension _NavVoice on _NavigationPageState {
   }
 
   /// Speak when the effective speed limit CHANGES — crossing onto a road with
-  /// a different posted limit (e.g. "Giới hạn 60 km/h") or entering/leaving a
-  /// populated zone. Waits for the new limit to be stable ~2 s (road info can
-  /// flicker) and never repeats within ~4 s, so a bumpy boundary can't spam.
+  /// a different posted limit (e.g. "Giới hạn 60 km/h"). Waits for the new limit
+  /// to be stable ~2 s (road info can flicker) and never repeats within ~4 s,
+  /// so a bumpy boundary can't spam.
   void _maybeSpeakLimitChange() {
     if (!_voiceOn || !_voice.ready) return;
     if (!_navigating && !_simulating) return;
@@ -509,7 +566,24 @@ extension _NavVoice on _NavigationPageState {
     _lastSpokenLimit = limit;
     _pendingLimit = null;
     _pendingSince = null;
-    _voice.speak('Giới hạn $limit km/h', priority: VoiceGuide.priorityHigh);
+    // The pre-recorded clip says "Tốc độ giới hạn HIỆN TẠI là N" — it must not
+    // be played for a sign adopted 400 m early. Say "tiếp theo" via TTS instead.
+    final upcoming = _limitIsUpcoming;
+    final txt = upcoming
+        ? 'Tốc độ tối đa tiếp theo $limit km/h'
+        : 'Giới hạn $limit km/h';
+    _logAnnouncement(txt, kind: 'limit');
+    if (upcoming) {
+      _voice.speak(txt, priority: VoiceGuide.priorityHigh);
+      return;
+    }
+    unawaited(
+      SoundAlerts.instance.playCurrentSpeedLimit(limit).then((played) {
+        if (!played) {
+          _voice.speak(txt, priority: VoiceGuide.priorityHigh);
+        }
+      }),
+    );
   }
 
   /// Warn by voice when GPS quality is poor (reported accuracy ≥ 30 m) so the
@@ -528,11 +602,22 @@ extension _NavVoice on _NavigationPageState {
               now.difference(last) >= const Duration(seconds: 60))) {
         _gpsWeakSpoken = true;
         _lastGpsWeakAt = now;
-        _voice.speak('Tín hiệu GPS yếu, vị trí có thể không chính xác.');
+        const gpsTxt = 'Tín hiệu GPS yếu, vị trí có thể không chính xác.';
+        _logAnnouncement(gpsTxt, kind: 'gps');
+        _voice.speak(gpsTxt);
       }
     } else if (accuracyM < 15) {
       _gpsWeakSpoken = false;
     }
+  }
+
+  /// Append a spoken announcement to the active trip log (with the car's
+  /// current position) so it can be compared against the fixes + street data.
+  void _logAnnouncement(String text, {String kind = 'voice'}) {
+    final t = _trip;
+    final p = _current;
+    if (t == null || p == null || text.isEmpty) return;
+    t.logAnnouncement(p, text, kind: kind);
   }
 
   Future<void> _toggleListening() async {
@@ -550,16 +635,6 @@ extension _NavVoice on _NavigationPageState {
       }
       return;
     }
-    if (!_commands.available) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Thiết bị này không hỗ trợ nhận diện giọng nói.'),
-          ),
-        );
-      }
-      return;
-    }
     final mic = await Permission.microphone.request();
     if (!mic.isGranted) {
       if (mounted) {
@@ -570,6 +645,19 @@ extension _NavVoice on _NavigationPageState {
         );
       }
       return;
+    }
+    if (!_commands.available) {
+      final ok = await _commands.init();
+      if (!ok) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Thiết bị này không hỗ trợ nhận diện giọng nói.'),
+            ),
+          );
+        }
+        return;
+      }
     }
     if (!mounted) return;
     // Set the listening state and banner TOGETHER so the first frame already
@@ -592,6 +680,7 @@ extension _NavVoice on _NavigationPageState {
     // full command plus a natural pause, short enough to never leave the mic
     // "hanging" if the driver stops talking and the recognizer doesn't
     // finalize on its own.
+    unawaited(SoundAlerts.instance.playMicStart());
     await _commands.listen(
       _onVoiceResult,
       onPartial: _onVoicePartial,
@@ -600,11 +689,18 @@ extension _NavVoice on _NavigationPageState {
     // Window closed with no result → free the mic and tell the driver.
     if (!mounted) return;
     if (_listening) {
+      unawaited(SoundAlerts.instance.playMicEnd());
+      final heard = _voiceText;
       setNavState(() {
         _listening = false;
-        _voiceText = '';
       });
-      _showVoiceBanner(); // shows "Không nghe rõ, thử lại"
+      if (heard.trim().isNotEmpty) {
+        // The recognizer transcribed text (partials) but never delivered a
+        // final result — use what was heard instead of "Không nghe rõ".
+        _onVoiceResult(heard);
+      } else {
+        _showVoiceBanner(); // shows "Không nghe rõ, thử lại"
+      }
     }
   }
 

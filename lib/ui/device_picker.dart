@@ -1,25 +1,21 @@
 /// Modal bottom sheet that live-scans for nearby BLE devices and lets the
-/// user pick which one to connect to. The E-ink clock advertises only
-/// periodically, so the scan keeps restarting while the sheet is open (it
-/// highlights anything named *EINK* or matching the configured MAC).
+/// user pick which one to connect to (highlights NAV-OSM / NAVMAP displays).
 library;
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'package:navbridge/services/ble_clock.dart';
-import 'package:navbridge/core/config.dart';
-
 import 'package:navbridge/core/settings.dart';
+import 'package:navbridge/services/ble_map_clock.dart';
 
 class DevicePickerSheet extends StatefulWidget {
-  final BleClock clock;
+  final BleMapClock mapClock;
   final Future<void> Function(ScannedClockDevice device) onPicked;
 
   const DevicePickerSheet({
     super.key,
-    required this.clock,
+    required this.mapClock,
     required this.onPicked,
   });
 
@@ -36,7 +32,7 @@ class _DevicePickerSheetState extends State<DevicePickerSheet> {
   @override
   void initState() {
     super.initState();
-    _sub = widget.clock.deviceStream.listen((list) {
+    _sub = widget.mapClock.deviceStream.listen((list) {
       if (!mounted || _closed) return;
       setState(() {
         _devices
@@ -48,15 +44,13 @@ class _DevicePickerSheetState extends State<DevicePickerSheet> {
   }
 
   Future<void> _scanLoop() async {
-    // Continuous scan; restart it whenever the adapter drops it (itel OS
-    // aggressively powers Bluetooth off, killing the scan).
-    await widget.clock.startScan();
+    await widget.mapClock.startScan();
     while (mounted && !_closed) {
-      if (!widget.clock.isScanning) {
-        await widget.clock.startScan();
+      if (!widget.mapClock.isScanning) {
+        await widget.mapClock.startScan();
       }
       if (!mounted || _closed) return;
-      setState(() => _scanning = widget.clock.isScanning);
+      setState(() => _scanning = widget.mapClock.isScanning);
       await Future<void>.delayed(const Duration(seconds: 3));
     }
   }
@@ -65,19 +59,11 @@ class _DevicePickerSheetState extends State<DevicePickerSheet> {
   void dispose() {
     _closed = true;
     _sub?.cancel();
-    widget.clock.stopScan();
+    widget.mapClock.stopScan();
     super.dispose();
   }
 
-  bool _isClock(ScannedClockDevice d) {
-    final n = d.name.toUpperCase();
-    return n.contains('EINK') ||
-        d.id.toUpperCase() == AppConfig.clockMac.toUpperCase();
-  }
-
-  /// The ESP 2.8" nav display advertises as NAV-OSM / NAVMAP. It has its own
-  /// GATT profile and must be driven by the map BLE client — not the E-ink
-  /// clock's, whose Write characteristic UUID it does not expose.
+  /// The ESP 2.8" nav display advertises as NAV-OSM / NAVMAP.
   bool _isMap(ScannedClockDevice d) {
     final n = d.name.toUpperCase();
     return n.contains('NAV-OSM') || n.contains('NAVMAP');
@@ -125,8 +111,7 @@ class _DevicePickerSheetState extends State<DevicePickerSheet> {
               ),
               const SizedBox(height: 4),
               const Text(
-                'Đồng hồ E-ink chỉ quảng bá định kỳ — giữ màn hình này mở '
-                'cho đến khi thấy nó rồi chạm để kết nối.',
+                'Màn hình hiển thị NAV-OSM / NAVMAP — chạm để kết nối.',
                 style: TextStyle(fontSize: 12, color: Colors.grey),
               ),
               const SizedBox(height: 8),
@@ -147,18 +132,12 @@ class _DevicePickerSheetState extends State<DevicePickerSheet> {
                     itemCount: sorted.length,
                     itemBuilder: (_, i) {
                       final d = sorted[i];
-                      final isClock = _isClock(d);
                       final isMap = _isMap(d);
-                      final target = isClock || isMap;
                       return ListTile(
                         dense: true,
                         leading: Icon(
-                          isClock
-                              ? Icons.watch
-                              : isMap
-                              ? Icons.map_outlined
-                              : Icons.devices,
-                          color: target ? Colors.green : null,
+                          isMap ? Icons.map_outlined : Icons.devices,
+                          color: isMap ? Colors.green : null,
                         ),
                         title: Row(
                           children: [
@@ -168,7 +147,7 @@ class _DevicePickerSheetState extends State<DevicePickerSheet> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontWeight: target
+                                  fontWeight: isMap
                                       ? FontWeight.bold
                                       : FontWeight.normal,
                                 ),
@@ -198,7 +177,7 @@ class _DevicePickerSheetState extends State<DevicePickerSheet> {
                           ],
                         ),
                         subtitle: Text('${d.id}  •  ${d.rssi} dBm'),
-                        trailing: target
+                        trailing: isMap
                             ? const Icon(
                                 Icons.check_circle,
                                 color: Colors.green,

@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import 'package:navbridge/services/api_notice.dart' show noteVietmapQuota;
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/vietmap_config.dart';
 
@@ -23,27 +24,25 @@ Future<OsrmRoute> fetchVietmapRoute(
   String vehicle = 'car',
 }) async {
   final routes = await fetchVietmapRoutes(points, vehicle: vehicle);
-  if (routes.isEmpty) throw Exception('Không tìm thấy tuyến đường');
   return routes.first;
 }
 
-/// Fetch up to [maxAlternatives] route options (Vietmap `alternative=true`).
-/// The best route is first; the rest are alternatives for the preview UI.
-/// Each route carries its own toll data (`annotations=congestion,toll`).
+/// Route [points] via Vietmap route v4, returning primary + alternatives.
 Future<List<OsrmRoute>> fetchVietmapRoutes(
   List<LatLng> points, {
   String vehicle = 'car',
-  int maxAlternatives = 3,
+  int maxAlternatives = 2,
 }) async {
-  if (points.length < 2) throw Exception('Cần ít nhất 2 điểm để định tuyến');
+  if (points.length < 2) return const [];
   final pts = points.map((p) => 'point=${p.latitude},${p.longitude}').join('&');
   // `points_encoded=true` (Google polyline) is ESSENTIAL on slow phones: the
   // raw `false` format returns a giant nested [[lon,lat],...] array — ~1 MB
   // and tens of thousands of points for a long route (e.g. HCMC → Hà Giang),
   // which the low-end itel chokes on (slow download + JSON parse) and it kept
   // "stopping" / timing out. Encoded = ~2.6× smaller and far cheaper to parse.
+  final key = VietmapConfig.nextKey();
   final url =
-      '${VietmapConfig.route}?apikey=${VietmapConfig.nextKey()}'
+      '${VietmapConfig.route}?apikey=$key'
       '&$pts&vehicle=$vehicle&points_encoded=true'
       '&annotations=congestion,toll&alternative=true';
   // Server-side route computation for a long route can take 10–15 s even on
@@ -52,7 +51,14 @@ Future<List<OsrmRoute>> fetchVietmapRoutes(
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': _ua})
       .timeout(const Duration(seconds: 60));
-  if (res.statusCode != 200) throw Exception('Vietmap HTTP ${res.statusCode}');
+  if (res.statusCode != 200) {
+    if (res.statusCode == 401 || res.statusCode == 403 || res.statusCode == 429) {
+      VietmapConfig.markKeyFailed(key);
+      noteVietmapQuota(statusCode: res.statusCode, body: res.body);
+    }
+    throw Exception('Vietmap HTTP ${res.statusCode}');
+  }
+
   // CRITICAL: parse in a background ISOLATE — a long route's JSON + polyline
   // decode on the main thread is the same freeze as OSRM's.
   final routes = await compute(

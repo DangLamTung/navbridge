@@ -141,7 +141,8 @@ Future<String?> handleMemoryIntent(String text) async {
     return 'Mình đang nhớ: ${fs.join('; ')}.';
   }
   if (t.startsWith('quên ') || t.startsWith('forget ')) {
-    final kw = text.trim().substring(4).trim();
+    final prefixLen = t.startsWith('forget ') ? 'forget '.length : 'quên '.length;
+    final kw = text.trim().substring(prefixLen).trim();
     if (kw.isEmpty) return null;
     final before = await AiMemory.instance.facts;
     await AiMemory.instance.forget(kw);
@@ -152,7 +153,8 @@ Future<String?> handleMemoryIntent(String text) async {
     return 'Đã quên "$kw".';
   }
   if (t.startsWith('nhớ ') || t.startsWith('remember ')) {
-    final fact = text.trim().substring(4).trim();
+    final prefixLen = t.startsWith('remember ') ? 'remember '.length : 'nhớ '.length;
+    final fact = text.trim().substring(prefixLen).trim();
     if (fact.isEmpty) return null;
     await AiMemory.instance.remember(fact);
     return 'Đã nhớ: $fact.';

@@ -137,9 +137,50 @@ class TurnByTurnEngine {
 
   double get currentCumulative => _cum[_curIdx];
 
-  /// Distance from [pos] to the nearest route point (off-route detection).
-  double offRouteDistance(LatLng pos) =>
-      distanceMeters(pos, route.geometry[_nearestIndex(pos)]);
+  /// Index of the stop currently being approached (0-indexed).
+  int get currentStopIndex {
+    final cum = _cum[_curIdx.clamp(0, _cum.length - 1)];
+    var passed = 0;
+    while (passed < _stopCum.length && _stopCum[passed] < cum) {
+      passed++;
+    }
+    return _stopCum.isEmpty ? 0 : passed.clamp(0, _stopCum.length - 1);
+  }
+
+  /// Distance from [pos] to the nearest route segment (perpendicular projection),
+  /// in meters. Used for off-route detection.
+  ///
+  /// Searches a window around [_curIdx] first (O(1)) and falls back to a full
+  /// scan only if the local window is far.
+  double offRouteDistance(LatLng pos) {
+    final pts = route.geometry;
+    if (pts.isEmpty) return double.infinity;
+    if (pts.length == 1) return distanceMeters(pos, pts.first);
+
+    const win = 60;
+    final start = _curIdx.clamp(0, pts.length - 2);
+    final lo = (start - win).clamp(0, pts.length - 2);
+    final hi = (start + win).clamp(0, pts.length - 2);
+    var bestD2 = double.infinity;
+    for (var i = lo; i <= hi; i++) {
+      final (_, d2) = _closestOnSegment(pos, pts[i], pts[i + 1]);
+      if (d2 < bestD2) bestD2 = d2;
+    }
+    // If the fix is within 50m of the local window, it is on/near this stretch.
+    if (bestD2 <= 2500) {
+      return math.sqrt(bestD2);
+    }
+    // Otherwise scan the rest of the route to check if the car is anywhere on it.
+    for (var i = 0; i < pts.length - 1; i++) {
+      if (i >= lo && i <= hi) continue;
+      final (_, d2) = _closestOnSegment(pos, pts[i], pts[i + 1]);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        if (bestD2 <= 100) return math.sqrt(bestD2); // within 10m, fast exit
+      }
+    }
+    return math.sqrt(bestD2);
+  }
 
   /// Project [pos] onto the route polyline — the closest point on the nearest
   /// segment (not just the nearest vertex). This is the "car on the road"

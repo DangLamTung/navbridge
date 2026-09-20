@@ -12,13 +12,18 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'package:navbridge/core/settings.dart';
 import 'package:navbridge/services/offline_cameras.dart';
 import 'package:navbridge/services/offline_road_signs.dart';
+import 'package:navbridge/services/offline_router.dart';
 import 'package:navbridge/services/offline_speed_limits.dart';
+import 'package:navbridge/services/overpass.dart';
 import 'package:navbridge/ui/sign_icons.dart';
+import 'package:navbridge/ui/speed_dial.dart' show SpeedDialPainter;
 import 'package:navbridge/ui/widgets.dart';
 
 /// One nearby road-sign chip the floating widget renders (icon + distance).
@@ -41,6 +46,12 @@ class _OverlayAppState extends State<OverlayApp> {
   double _kmh = 0;
   int? _limit;
 
+  /// The configured vehicle ('car' | 'motorbike' | 'truck'), loaded from
+  /// settings so the standalone floating widget caps the posted limit to the
+  /// vehicle's statutory class default — the raw DATMAP/Waze/VietMap value is
+  /// a CAR limit, so a motorbike must never show 80 km/h.
+  String _vehicle = 'car';
+
   /// Last raw fix — used to DERIVE speed from the distance travelled between
   /// fixes when the phone GPS reports speed = 0 (common on cheap devices).
   LatLng? _lastGpsPos;
@@ -51,7 +62,7 @@ class _OverlayAppState extends State<OverlayApp> {
   List<int> _nearCams = const [];
 
   /// Nearby traffic-sign chips pushed by the main app or self-computed:
-  /// every sign within 600 m + zone-boundary signs (khu dân cư / city).
+  /// every sign within 600 m.
   List<_SignChip> _nearSigns = const [];
 
   /// Chosen layout id ('dial' | 'vertical' | 'horizontal'), pushed by the main app
@@ -65,6 +76,12 @@ class _OverlayAppState extends State<OverlayApp> {
   /// below ~z15 or the rain-radar / weather-satellite layer is on.
   bool _hidden = false;
 
+  /// True while the MAIN app is actively navigating. When set, the main app's
+  /// turn-by-turn voice is already speaking, so the overlay must NOT announce
+  /// cameras/signs itself (two TTS engines talking at once = overlap). The
+  /// overlay only self-announces when it's standalone (main app backgrounded).
+  bool _navigating = false;
+
   /// Maneuver state pushed by the main app's nav engine.
   int? _mIconCode;
   int? _mMeters;
@@ -77,6 +94,12 @@ class _OverlayAppState extends State<OverlayApp> {
   DateTime? _lastMsgAt;
   DateTime? _lastSelfRefresh;
 
+  /// TTS for camera / sign announcements while the floating widget is shown.
+  final FlutterTts _tts = FlutterTts();
+  DateTime? _lastCamAnnounce;
+  DateTime? _lastSignAnnounce;
+  String _lastSignKind = '';
+
   @override
   void initState() {
     super.initState();
@@ -84,6 +107,16 @@ class _OverlayAppState extends State<OverlayApp> {
     // Start GPS immediately so speed, limit & camera work standalone over
     // other apps (Google Maps, Waze) even when NavBridge is backgrounded.
     _startGps();
+    _tts.setLanguage('vi-VN');
+    _tts.setSpeechRate(0.48);
+    // Load the vehicle type for the speed-limit cap (best-effort; the widget
+    // also receives the main app's vehicle-capped limit via [syncOverlayState]
+    // while navigating, so this only matters standalone over another app).
+    loadSettings()
+        .then((s) {
+          if (mounted) setState(() => _vehicle = s.vehicleType);
+        })
+        .catchError((_) {});
 
     _msgSub = FlutterOverlayWindow.overlayListener.listen((msg) {
       final m = msg is Map ? msg : const <dynamic, dynamic>{};
@@ -95,6 +128,7 @@ class _OverlayAppState extends State<OverlayApp> {
       _lastMsgAt = DateTime.now();
       setState(() {
         _hidden = m['hidden'] == true;
+        _navigating = m['navigating'] == true;
         _mIconCode = m['mIcon'] as int?;
         _mMeters = m['mMeters'] as int?;
         _mText = (m['mText'] ?? '') as String;
@@ -147,7 +181,63 @@ class _OverlayAppState extends State<OverlayApp> {
       } else {
         _startGps();
       }
+      _announceNearby();
     });
+  }
+
+  /// Speak the nearest camera / sign once, so the floating widget announces
+  /// what's ahead (Waze-Mod style) even when NavBridge is backgrounded.
+  ///
+  /// The overlay must NOT speak while the MAIN app is actively navigating —
+  /// the main app's turn-by-turn voice is already announcing cameras/signs,
+  /// so two TTS engines would talk over each other. Only self-announce when
+  /// the widget is standalone (main app backgrounded / not navigating).
+  void _announceNearby() {
+    if (_hidden || _navigating) return;
+    // Self-announce only when the main-app push is stale (>2 s) — i.e. the
+    // widget is truly standalone over another app, not fighting the push.
+    final lastMsg = _lastMsgAt;
+    if (lastMsg != null &&
+        DateTime.now().difference(lastMsg) < const Duration(seconds: 2)) {
+      return;
+    }
+    final now = DateTime.now();
+    // Camera: nearest within 300 m, announced once per camera zone.
+    if (_nearCams.isNotEmpty) {
+      final nearest = _nearCams.reduce(math.min);
+      if (nearest <= 300) {
+        if (_lastCamAnnounce == null ||
+            now.difference(_lastCamAnnounce!) > const Duration(seconds: 45)) {
+          _lastCamAnnounce = now;
+          _tts.speak('Camera phía trước $nearest mét');
+        }
+      } else if (nearest > 450) {
+        _lastCamAnnounce = null;
+      }
+    }
+    // Sign: nearest important sign within 300 m.
+    if (_nearSigns.isNotEmpty) {
+      final sorted = [..._nearSigns]
+        ..sort((a, b) => a.meters.compareTo(b.meters));
+      final s = sorted.first;
+      if (s.meters <= 300) {
+        if (s.kind != _lastSignKind ||
+            _lastSignAnnounce == null ||
+            now.difference(_lastSignAnnounce!) > const Duration(seconds: 45)) {
+          _lastSignKind = s.kind;
+          _lastSignAnnounce = now;
+          _tts.speak(_signSpeech(s));
+        }
+      } else if (s.meters > 450) {
+        _lastSignAnnounce = null;
+        _lastSignKind = '';
+      }
+    }
+  }
+
+  String _signSpeech(_SignChip s) {
+    final label = RoadSignKind.fromKey(s.kind).label;
+    return '$label phía trước ${s.meters} mét';
   }
 
   Future<void> _startGps() async {
@@ -160,6 +250,10 @@ class _OverlayAppState extends State<OverlayApp> {
       if (perm == LocationPermission.denied) {
         perm = await Geolocator.requestPermission();
       }
+      // The widget must keep working while the user is in ANOTHER app (its
+      // main use is floating over Google Maps / Waze), so background location
+      // access is needed. If the OS grants "always" keep it; if it only gives
+      // whileInUse, an in-use fix is still better than nothing.
       if (perm == LocationPermission.denied ||
           perm == LocationPermission.deniedForever) {
         return;
@@ -226,25 +320,57 @@ class _OverlayAppState extends State<OverlayApp> {
   }
 
   Future<void> _selfContainedAhead(LatLng pos) async {
-    final lastMsg = _lastMsgAt;
-    if (lastMsg != null &&
-        DateTime.now().difference(lastMsg) < const Duration(seconds: 3)) {
-      return;
-    }
     final now = DateTime.now();
+    // The main app pushes limit/cameras/signs at ~1 Hz WHILE FOREGROUND, so
+    // trust its (vehicle-capped, route-aware) values when fresh. But once the
+    // push goes stale (app backgrounded — the widget's main use over Google
+    // Maps/Waze), the overlay MUST recompute from its own GPS so speed, limit,
+    // cameras and place keep updating. A hard "return if fresh" left the
+    // widget frozen whenever a push was 1-2 s old. Refresh every ~1 s to
+    // match the GPS cadence (the user wants the widget to update at 1 s too).
     if (_lastSelfRefresh != null &&
-        now.difference(_lastSelfRefresh!) < const Duration(seconds: 2)) {
+        now.difference(_lastSelfRefresh!) < const Duration(seconds: 1)) {
       return;
     }
     _lastSelfRefresh = now;
+    // The main app pushes its own street-matched, vehicle-capped speed + limit
+    // at ~1 Hz. Trust those values (they're outlier-gated / route-aware, and
+    // matched to the real road the car is on) instead of recomputing our own
+    // point-based limit here — only self-compute once the push goes stale
+    // (app backgrounded, the widget's main use over Google Maps / Waze).
+    final pushedFresh =
+        _lastMsgAt != null &&
+        now.difference(_lastMsgAt!) < const Duration(seconds: 2);
+    if (pushedFresh) return;
     try {
-      final l = await speedLimitAt(pos);
-      if (mounted && l != null && l != _limit) setState(() => _limit = l);
+      // Best-effort road class (used as the statutory-default fallback).
+      String hw = 'unclassified';
+      try {
+        final g = await OfflineRouter.instance.roadInfo(pos);
+        final gh = (g?['highway'] ?? '') as String;
+        if (gh.isNotEmpty) hw = gh;
+      } catch (_) {}
+
+      int? limit = await speedLimitAt(pos);
+      if (limit == null || limit <= 0) {
+        // No posted sign within range → fall back to the statutory VN default
+        // for this road class (so the widget shows a real limit instead of "--"
+        // when stopped between signs / slightly off the road segment). Same
+        // rule as the main nav's _effectiveSpeedLimit.
+        limit = effectiveLimit(hw, vehicle: _vehicle);
+      } else if (_vehicle != 'car') {
+        // Cap a (car) posted limit to the vehicle's statutory class default.
+        limit = effectiveLimit(hw, vehicle: _vehicle, taggedKmh: limit);
+      }
+      if (mounted && limit > 0 && limit != _limit) {
+        setState(() => _limit = limit);
+      }
     } catch (_) {}
     try {
       final cams = await camerasForWidgetChips(pos, maxDistM: 600);
       if (!mounted) return;
       setState(() => _nearCams = cams);
+      _announceNearby();
     } catch (_) {}
     try {
       // The widget shows just the SINGLE nearest / most important sign.
@@ -255,6 +381,7 @@ class _OverlayAppState extends State<OverlayApp> {
           for (final (s, m) in chips) _SignChip(s.kind.key, s.value, s.name, m),
         ];
       });
+      _announceNearby();
     } catch (_) {}
   }
 
@@ -684,7 +811,7 @@ class _OverlayAppState extends State<OverlayApp> {
   }
 
   /// Compact stack of the nearby sign chips (icon + distance) — every sign
-  /// within 600 m + zone-boundary signs. Shows up to [max], then a "+N".
+  /// within 600 m. Shows up to [max], then a "+N".
   Widget _signChips({int max = 3}) {
     final chips = _nearSigns.take(max).toList();
     final more = _nearSigns.length - chips.length;
@@ -829,84 +956,16 @@ class _OverlayAppState extends State<OverlayApp> {
 }
 
 /// Paints the round speedometer gauge used by the "Đồng hồ tốc độ" layout:
-/// dark circular face, orange/red progressive perimeter tick-marks, matching the reference image.
-class _DialPainter extends CustomPainter {
-  final double kmh;
-  final int? limit;
-  final bool speeding;
-
-  const _DialPainter({required this.kmh, this.limit, required this.speeding});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final c = Offset(size.width / 2, size.height / 2);
-    final r = size.width / 2;
-
-    // Dark circular gauge background
-    final bgPaint = Paint()
-      ..color = const Color(0xFF2C3238)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(c, r * 0.96, bgPaint);
-
-    // Subtle outer ring
-    final ringPaint = Paint()
-      ..color = const Color(0xFF23282E)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
-    canvas.drawCircle(c, r * 0.96, ringPaint);
-
-    // Segmented ticks around circumference
-    const totalTicks = 34;
-    const startAngle = 135.0 * (math.pi / 180.0);
-    const sweepAngle = 270.0 * (math.pi / 180.0);
-
-    final maxKmh = math.max(120.0, (limit ?? 90) * 1.3);
-    final fraction = (kmh / maxKmh).clamp(0.0, 1.0);
-    final activeTickCount = (fraction * totalTicks).round();
-
-    final tickWidth = r * 0.085;
-    final tickLength = r * 0.15;
-    final tickRadius = r * 0.88;
-
-    for (var i = 0; i < totalTicks; i++) {
-      final angle = startAngle + (i / (totalTicks - 1)) * sweepAngle;
-      final isActive = i < activeTickCount;
-
-      Color tickColor;
-      if (isActive) {
-        if (speeding) {
-          tickColor = const Color(0xFFFF5252);
-        } else {
-          final progress = i / totalTicks;
-          tickColor = Color.lerp(
-            const Color(0xFFFF9500),
-            const Color(0xFFFF3B30),
-            progress,
-          )!;
-        }
-      } else {
-        tickColor = const Color(0xFF434B54);
-      }
-
-      final p = Paint()
-        ..color = tickColor
-        ..strokeWidth = tickWidth
-        ..strokeCap = StrokeCap.butt;
-
-      final inner = Offset(
-        c.dx + (tickRadius - tickLength) * math.cos(angle),
-        c.dy + (tickRadius - tickLength) * math.sin(angle),
-      );
-      final outer = Offset(
-        c.dx + tickRadius * math.cos(angle),
-        c.dy + tickRadius * math.sin(angle),
-      );
-
-      canvas.drawLine(inner, outer, p);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _DialPainter old) =>
-      old.kmh != kmh || old.limit != limit || old.speeding != speeding;
+/// dark circular face, orange/red progressive perimeter tick-marks, matching
+/// the reference image.
+///
+/// The implementation lives in `ui/speed_dial.dart` ([SpeedDialPainter]) so the
+/// NAV screen can offer the same gauge as a display style — one painter, no
+/// drift between the widget and the nav chip.
+class _DialPainter extends SpeedDialPainter {
+  const _DialPainter({
+    required super.kmh,
+    super.limit,
+    required super.speeding,
+  });
 }

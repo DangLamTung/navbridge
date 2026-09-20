@@ -1,8 +1,37 @@
 part of '../navigation_page.dart';
 
 extension _NavSearch on _NavigationPageState {
+  /// Whether the "previous searches" list should be shown right now: a search
+  /// field is focused with nothing typed, there are no live suggestions and no
+  /// planned stops in the way (Google-Maps style).
+  bool get _showRecentSearches =>
+      !_navigating &&
+      _stops.isEmpty &&
+      _searchCtrl.text.trim().isEmpty &&
+      (_searchFocus.hasFocus || _startFocus.hasFocus) &&
+      !RecentSearches.instance.isEmpty;
+
+  /// Tap on a previous search. Re-runs the normal selection path so the entry
+  /// behaves exactly like a fresh result (pin + place card + "Chỉ đường"), but
+  /// with the coordinates already known — no search request is made.
+  void _selectRecentSearch(OsmSuggestion s) {
+    // In directions mode the focused field decides which end is filled; the
+    // stored entry may be tapped before anything is typed, so [_navField]
+    // still holds a stale value.
+    if (_directionsMode && _startFocus.hasFocus) {
+      _navField = _NavField.start;
+    }
+    unawaited(_selectSuggestion(s));
+  }
+
+  void _removeRecentSearch(OsmSuggestion s) =>
+      unawaited(RecentSearches.instance.remove(s));
+
+  void _clearRecentSearches() => unawaited(RecentSearches.instance.clear());
+
   void _onSearchChanged(String text) {
     _debounce?.cancel();
+    final seq = ++_searchSeq; // supersede any in-flight autocomplete call
     // Typing in the END field (bottom of the directions bar) makes it the
     // active field for suggestion taps / map-taps.
     _navField = _NavField.end;
@@ -14,6 +43,7 @@ extension _NavSearch on _NavigationPageState {
       return;
     }
     _debounce = Timer(const Duration(milliseconds: 400), () async {
+      if (seq != _searchSeq) return;
       setNavState(() => _searching = true);
       try {
         // Bias online geocoding toward the live GPS position so street names
@@ -32,7 +62,7 @@ extension _NavSearch on _NavigationPageState {
             _searchOfflineDeclined = true; // don't nag again this session
           }
         }
-        if (!mounted) return;
+        if (!mounted || seq != _searchSeq) return;
         final top = r.take(6).toList();
         setNavState(() {
           _suggestions = top;
@@ -42,14 +72,16 @@ extension _NavSearch on _NavigationPageState {
           _searchResults = _rankSearchForMap(top);
         });
       } catch (_) {
-        if (mounted) {
+        if (mounted && seq == _searchSeq) {
           setNavState(() {
             _suggestions = [];
             _searchResults = [];
           });
         }
       } finally {
-        if (mounted) setNavState(() => _searching = false);
+        if (mounted && seq == _searchSeq) {
+          setNavState(() => _searching = false);
+        }
       }
     });
   }
@@ -76,6 +108,7 @@ extension _NavSearch on _NavigationPageState {
       ],
       route,
       startIndex: startIdx,
+      carPos: _current ?? _origin,
     );
   }
 
@@ -124,6 +157,8 @@ extension _NavSearch on _NavigationPageState {
   }
 
   void _clearSearch() {
+    _debounce?.cancel();
+    _searchSeq++; // discard any in-flight search response
     _searchCtrl.clear();
     setNavState(() {
       _suggestions = [];
@@ -146,6 +181,12 @@ extension _NavSearch on _NavigationPageState {
   }
 
   Future<void> _selectSuggestion(OsmSuggestion s) async {
+    // Guard: a slow place-detail lookup must not be duplicated by a second
+    // tap, and the search pill should show busy while resolving coordinates.
+    if (_resolvingSuggestion) return;
+    _resolvingSuggestion = true;
+    setNavState(() => _searching = true);
+    try {
     _searchFocus.unfocus();
     _startFocus.unfocus();
     debugPrint(
@@ -190,6 +231,9 @@ extension _NavSearch on _NavigationPageState {
       lng = p.$2;
       s = OsmSuggestion(refId: s.refId, display: s.display, lat: lat, lng: lng);
     }
+    // Remember the picked place as a recent search (newest first, de-duped) so
+    // it can be re-selected from the history list with one tap and no network.
+    unawaited(RecentSearches.instance.add(s));
     // Directions mode: the selected suggestion fills the ACTIVE field
     // (start = origin override, end = destination) and builds the route.
     if (_directionsMode) {
@@ -235,6 +279,10 @@ extension _NavSearch on _NavigationPageState {
     if (mounted) {
       _map.move(LatLng(lat, lng), 15);
     }
+    } finally {
+      _resolvingSuggestion = false;
+      if (mounted) setNavState(() => _searching = false);
+    }
   }
 
   /// The "Chỉ đường" button on the search-mode place card → enter directions
@@ -272,21 +320,25 @@ extension _NavSearch on _NavigationPageState {
   /// start field (a green dot), and picking one overrides the origin.
   void _onStartChanged(String text) {
     _debounce?.cancel();
+    final seq = ++_searchSeq; // supersede any in-flight autocomplete call
     if (text.trim().length < 2) {
       setNavState(() => _suggestions = []);
       return;
     }
     _navField = _NavField.start;
     _debounce = Timer(const Duration(milliseconds: 400), () async {
+      if (seq != _searchSeq) return;
       setNavState(() => _searching = true);
       try {
         final r = await osmAutocomplete(text.trim(), focus: _current);
-        if (!mounted) return;
+        if (!mounted || seq != _searchSeq) return;
         setNavState(() => _suggestions = r.take(6).toList());
       } catch (_) {
-        if (mounted) setNavState(() => _suggestions = []);
+        if (mounted && seq == _searchSeq) setNavState(() => _suggestions = []);
       } finally {
-        if (mounted) setNavState(() => _searching = false);
+        if (mounted && seq == _searchSeq) {
+          setNavState(() => _searching = false);
+        }
       }
     });
   }
@@ -338,6 +390,18 @@ extension _NavSearch on _NavigationPageState {
         _stops.insert(_stops.length - 1, stop);
       } else {
         _stops.add(stop);
+      }
+    });
+    // Resolve a real road/place name for the new via point (non-blocking).
+    reverseGeocode(stop.pos).then((addr) {
+      if (!mounted || addr.isEmpty) return;
+      final idx = _stops.indexWhere(
+        (s) => s.lat == stop.lat && s.lng == stop.lng && s.name == 'Điểm giữa',
+      );
+      if (idx >= 0) {
+        setNavState(() {
+          _stops[idx] = TripStop(name: addr, lat: stop.lat, lng: stop.lng);
+        });
       }
     });
     await _buildPlanRoute();
@@ -708,7 +772,7 @@ extension _NavSearch on _NavigationPageState {
         profile: _routeProfile.osrm,
         exclude: osrmExclude(
           avoidHighway:
-              _avoidHighway || _routeProfile == RouteProfile.motorbike,
+              _avoidHighway && _routeProfile != RouteProfile.motorbike,
           avoidFerry: _avoidFerry,
         ),
       );
@@ -732,6 +796,7 @@ extension _NavSearch on _NavigationPageState {
       );
       _destination = _stops.last.pos;
       _navigating = false;
+      navigationActive = false;
       _progress = null;
       _routeStartIndex = 0; // brand-new route → draw the whole thing
     });
@@ -919,6 +984,25 @@ extension _NavSearch on _NavigationPageState {
       _voice.speak('Bạn muốn tìm địa điểm nào?');
       return;
     }
+    // "chỉ đường về nhà" / "về cơ quan" are NOT place names. The voice parser
+    // matches the "chỉ đường" prefix and hands us the literal tail ("về nhà"),
+    // which geocodes to nothing — so the user heard
+    // "Không tìm thấy địa điểm về nhà." Resolve the saved QuickPlaces slot
+    // (Nhà riêng / Cơ quan) and search for its stored address instead. When the
+    // slot is unset, say so instead of blaming the search.
+    final slot = _quickPlaceSlotFor(query);
+    if (slot != null) {
+      final saved = QuickPlaces.instance.byId(slot);
+      if (saved == null) {
+        final label = slot == 'home' ? 'Nhà riêng' : 'Cơ quan';
+        _voice.speak(
+          'Bạn chưa lưu địa chỉ $label. Vào Cài đặt để thêm $label.',
+        );
+        return;
+      }
+      query = saved.name.isNotEmpty ? saved.name : saved.label;
+      debugPrint('VOICE: quick place "$slot" -> "$query"');
+    }
     _searchCtrl.text = query;
     // POI category phrases ("cà phê võng", "nhà hàng", "trạm xăng", …) →
     // run the quick POI search (route-aware) instead of a plain geocode,
@@ -946,6 +1030,34 @@ extension _NavSearch on _NavigationPageState {
       _voice.speak('Bắt đầu chỉ đường.');
       _startNavigation();
     }
+  }
+
+  /// Map a spoken phrase to a saved quick-place slot ('home' / 'work'), or
+  /// null when the phrase is an ordinary place name to geocode.
+  ///
+  /// Accents are stripped first, so "về nhà" / "về nhà đi" both land here.
+  String? _quickPlaceSlotFor(String q) {
+    final s = _stripDiacritics(q.toLowerCase()).trim();
+    const homeWords = {
+      've nha',
+      'nha',
+      'nha rieng',
+      'nha cua toi',
+      'toi nha',
+      'home',
+      've home',
+    };
+    const workWords = {
+      've co quan',
+      'co quan',
+      'cong ty',
+      'toi co quan',
+      'work',
+      've work',
+    };
+    if (homeWords.contains(s)) return 'home';
+    if (workWords.contains(s)) return 'work';
+    return null;
   }
 
   /// Map a voice/search phrase to a quick-POI category, or null for a plain

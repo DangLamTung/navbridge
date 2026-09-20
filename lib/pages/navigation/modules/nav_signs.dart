@@ -17,30 +17,56 @@ extension _NavSigns on _NavigationPageState {
   Future<void> _signAheadAsync(LatLng snapped, List<LatLng> geometry) async {
     // Look ~1 km ahead so a speed-limit DROP can be warned about BEFORE the
     // driver reaches it, while the limit itself (chip / overspeed) only takes
-    // effect within ~400 m — nothing changes too early.
+    // effect within [kSignAdoptM] — nothing changes too early.
     final ahead = await signsAheadOnRoute(
       snapped,
       geometry,
-      maxAheadMeters: 1000,
+      maxAheadMeters: kSignWarnM,
     );
     if (!mounted) return;
     // Speed-limit signs (incl. the Waze speed data copied onto each road
-    // segment) set the EFFECTIVE limit: as the car approaches the next
-    // speed-limit sign it becomes the current limit (~400 m out), so the
-    // overspeed alert and the speed chip preview the segment you're entering.
+    // segment) set the EFFECTIVE limit — but only once the car REACHES them:
+    // while one is merely ahead (`routeMeters` up to [kSignAdoptM]) it is a
+    // preview, used for the "tiếp theo" wording and the drop-ahead warning
+    // below. See [signLimitInForce] for why applying it early is wrong.
     for (final a in ahead) {
       if (a.sign.kind == RoadSignKind.speed && a.sign.value != null) {
-        if (a.routeMeters <= 400 && a.sign.value != _signSpeedLimit) {
-          _signSpeedLimit = a.sign.value;
-          if (mounted) setNavState(() {});
+        if (a.routeMeters <= kSignAdoptM) {
+          _signAheadM = a.routeMeters; // >kSignReachedM ⇒ preview only
+          if (a.sign.value != _signSpeedLimit) {
+            _signSpeedLimit = a.sign.value;
+            _signSpeedLimitRoad = _roadInfo?.name;
+            if (mounted) setNavState(() {});
+          }
         }
         break;
       }
     }
-    // ADVANCE warning: a LOWER speed limit is coming up (400–1000 m) — say it
-    // once per sign so the driver can slow down BEFORE the sign, not after.
-    // A higher limit ahead needs no warning (the normal "Giới hạn X" fires
-    // when it takes effect).
+    // Bind a held sign to the road it stands on as soon as that road is KNOWN.
+    // A sign adopted before the first road lookup left `_signSpeedLimitRoad`
+    // null, and `signLimitInForce` reads a missing road as "trusted" — so
+    // without this the value could outlive every road change for the rest of
+    // the drive.
+    if (_signSpeedLimit != null &&
+        _signAheadM <= kSignReachedM &&
+        (_signSpeedLimitRoad == null || _signSpeedLimitRoad!.isEmpty)) {
+      final name = _roadInfo?.name;
+      if (name != null && name.isNotEmpty) _signSpeedLimitRoad = name;
+    }
+    // The nearest speed sign is already behind the car (or further than the
+    // [kSignAdoptM] adoption window) → whatever limit we hold is now IN FORCE.
+    if (!ahead.any(
+      (a) =>
+          a.sign.kind == RoadSignKind.speed &&
+          a.sign.value != null &&
+          a.routeMeters <= kSignAdoptM,
+    )) {
+      _signAheadM = 0;
+    }
+    // ADVANCE warning: a LOWER speed limit is coming up ([kSignAdoptM]..
+    // [kSignWarnM]) — say it once per sign so the driver can slow down BEFORE
+    // the sign, not after. A higher limit ahead needs no warning (the normal
+    // "Giới hạn X" fires when it takes effect).
     if (_voiceOn && _voice.ready) {
       for (final a in ahead) {
         final k = a.sign.kind;
@@ -49,76 +75,41 @@ extension _NavSigns on _NavigationPageState {
         // the speed-drop warning for a speed sign further ahead.
         if (k != RoadSignKind.speed || v == null || v <= 0) continue;
         final cur = _effectiveSpeedLimit;
-        if (a.routeMeters > 400 &&
-            a.routeMeters <= 1000 &&
+        if (a.routeMeters > kSignAdoptM &&
+            a.routeMeters <= kSignWarnM &&
             cur > 0 &&
             v < cur) {
           final sig =
               'spd-${a.sign.lat.toStringAsFixed(5)},'
               '${a.sign.lng.toStringAsFixed(5)}';
           if (!_speedChangeDedupe.seen(sig)) {
-            _voice.speak(
-              'Giảm tốc độ, giới hạn $v km/h phía trước '
-              '${formatDistanceSpoken(a.routeMeters)}',
-              priority: VoiceGuide.priorityHigh,
-            );
+            final spdTxt =
+                'Giảm tốc độ, giới hạn $v km/h phía trước '
+                '${formatDistanceSpoken(a.routeMeters)}';
+            _logAnnouncement(spdTxt, kind: 'sign');
+            _voice.speak(spdTxt, priority: VoiceGuide.priorityHigh);
           }
         }
         break; // only the NEAREST speed sign matters
       }
     }
-    // Populated-area boundary: entering "khu đông dân cư" drops the limit to
-    // the VN statutory built-up limit (motorbike 40 / car 50 / truck 40 km/h —
-    // QCVN 41); leaving clears it back to the road default. `ahead` is
-    // ordered by distance, so the first boundary sign is the one we are about
-    // to cross. The boundary is ALSO announced once per crossing ("Vào khu
-    // đông dân cư, giới hạn X") so the driver knows WHY the limit just
-    // dropped — this was the residential content the old camera flattening
-    // hid.
+    // The "bắt đầu / hết khu đông dân cư" boundary used to set a built-up zone
+    // flag here, which capped the speed limit for the rest of the drive.
+    // REMOVED: 9,211 points (20.4% of the sign DB) bought a limit source that
+    // never fired on a recorded drive (0 boundary points within 200 m of any of
+    // the 38 recorded tracks) and that overrides a posted segment value 39% of
+    // the time it does land on one. The limit is now posted signs + the road's
+    // own class value only — see [droppedSignKinds] in offline_road_signs.dart.
     //
-    // Thông tư 38/2024/TT-BGTVT (hiệu lực 01/01/2025) — trong khu đông dân cư,
-    // đường hai chiều / 1 làn: xe mô tô = 50, xe con = 50, xe tải = 40 km/h.
-    // (40 is the xe GẮN MÁY / moped limit — the app's 'motorbike' mode is xe
-    // mô tô, so it must be 50. This now matches statutoryLimit('residential',
-    // vehicle:'motorbike') = 50; previously it wrongly dropped to 40.)
-    final zoneLimit = switch (vehicleType) {
-      'car' => 50,
-      'motorbike' => 50,
-      'truck' => 40,
-      _ => 50,
-    };
-    for (final a in ahead) {
-      if (a.routeMeters > 400) break; // apply the boundary only when close
-      final k = a.sign.kind;
-      if (k == RoadSignKind.populated) {
-        if (_zoneSpeedLimit != zoneLimit) {
-          _zoneSpeedLimit = zoneLimit;
-          if (mounted) setNavState(() {});
-          if (_voiceOn) {
-            _voice.speak('Vào khu đông dân cư, giới hạn $zoneLimit km/h');
-          }
-        }
-        break;
-      }
-      if (k == RoadSignKind.populatedEnd) {
-        if (_zoneSpeedLimit != null) {
-          _zoneSpeedLimit = null;
-          if (mounted) setNavState(() {});
-          if (_voiceOn) {
-            _voice.speak('Hết khu đông dân cư');
-          }
-        }
-        break;
-      }
-    }
     // Nearest sign ahead that we ANNOUNCE: STOP, give-way, the VN prohibitions
     // drivers must slow for (cấm vượt / cấm rẽ / cấm quay đầu), and traffic
-    // lights. Speed + "đông dân cư" signs are map-only.
+    // lights. Speed signs are map-only.
     if (!_voiceOn) return;
     RoadSign? next;
     var m = 0.0;
     for (final a in ahead) {
-      if (a.routeMeters > 400) break; // only announce signs within ~400 m
+      // Only announce signs inside the adoption window.
+      if (a.routeMeters > kSignAdoptM) break;
       final k = a.sign.kind;
       if (k == RoadSignKind.stop ||
           k == RoadSignKind.giveWay ||
@@ -129,10 +120,17 @@ extension _NavSigns on _NavigationPageState {
           k == RoadSignKind.noUTurn ||
           k == RoadSignKind.noLeftUTurn ||
           k == RoadSignKind.noRightUTurn ||
+          k == RoadSignKind.noAuto ||
+          k == RoadSignKind.noMoto ||
+          k == RoadSignKind.noParking ||
+          k == RoadSignKind.noStraight ||
+          k == RoadSignKind.noTurnBoth ||
           k == RoadSignKind.onlyStraight ||
           k == RoadSignKind.onlyLeft ||
           k == RoadSignKind.onlyRight ||
           k == RoadSignKind.endProhibitions ||
+          k == RoadSignKind.oneWay ||
+          k == RoadSignKind.reservedLane ||
           k == RoadSignKind.signal) {
         next = a.sign;
         m = a.routeMeters;
@@ -222,6 +220,34 @@ extension _NavSigns on _NavigationPageState {
         near
             ? 'Hầm đường bộ sắp tới'
             : 'Hầm đường bộ phía trước ${formatDistanceSpoken(m)}',
+      RoadSignKind.noAuto =>
+        near
+            ? 'Cấm ô tô sắp tới'
+            : 'Cấm ô tô phía trước ${formatDistanceSpoken(m)}',
+      RoadSignKind.noMoto =>
+        near
+            ? 'Cấm xe máy sắp tới'
+            : 'Cấm xe máy phía trước ${formatDistanceSpoken(m)}',
+      RoadSignKind.noParking =>
+        near
+            ? 'Cấm đỗ xe sắp tới'
+            : 'Cấm đỗ xe phía trước ${formatDistanceSpoken(m)}',
+      RoadSignKind.noStraight =>
+        near
+            ? 'Cấm đi thẳng sắp tới'
+            : 'Cấm đi thẳng phía trước ${formatDistanceSpoken(m)}',
+      RoadSignKind.noTurnBoth =>
+        near
+            ? 'Cấm rẽ trái và rẽ phải sắp tới'
+            : 'Cấm rẽ trái và rẽ phải phía trước ${formatDistanceSpoken(m)}',
+      RoadSignKind.oneWay =>
+        near
+            ? 'Đường một chiều sắp tới'
+            : 'Đường một chiều phía trước ${formatDistanceSpoken(m)}',
+      RoadSignKind.reservedLane =>
+        near
+            ? 'Làn dành riêng sắp tới'
+            : 'Làn dành riêng phía trước ${formatDistanceSpoken(m)}',
       RoadSignKind.signal =>
         // Near-only (see above), so the `near` branch is the one used.
         near
@@ -232,6 +258,7 @@ extension _NavSigns on _NavigationPageState {
             ? 'Cấm rẽ phải và quay đầu sắp tới'
             : 'Cấm rẽ phải và quay đầu phía trước ${formatDistanceSpoken(m)}',
     };
+    _logAnnouncement(phrase, kind: 'sign');
     _voice.speak(phrase);
     if (mounted) setNavState(() {});
   }

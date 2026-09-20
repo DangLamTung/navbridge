@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="vi"><head><meta charset="utf-8">
+<title>NavBridge test bench</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+ html,body{margin:0;height:100%;font:13px/1.45 -apple-system,Segoe UI,Roboto,sans-serif}
+ #app{display:flex;flex-direction:column;height:100%}
+ #bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;background:#f6f7f9;border-bottom:1px solid #dcdfe4}
+ #bar select,#bar button,#bar input[type=range]{font:inherit}
+ button{padding:4px 10px;border:1px solid #c8ccd2;border-radius:6px;background:#fff;cursor:pointer}
+ button.primary{background:#1a73e8;border-color:#1a73e8;color:#fff}
+ #wrap{display:flex;flex:1;min-height:0}
+ #map{flex:1;min-width:0}
+ #side{width:520px;max-width:52vw;display:flex;flex-direction:column;border-left:1px solid #dcdfe4;min-height:0}
+ #tabs{display:flex;border-bottom:1px solid #e3e6ea;background:#fff}
+ #tabs div{padding:7px 12px;cursor:pointer;font-size:12.5px;border-bottom:2px solid transparent}
+ #tabs div.on{border-bottom-color:#1a73e8;color:#1a73e8;font-weight:600}
+ .pane{display:none;overflow:auto;flex:1;min-height:0}
+ .pane.on{display:block}
+ .row{padding:6px 10px;border-bottom:1px solid #f1f1f1}
+ .row.hit{cursor:pointer}
+ .row.hit:hover{background:#f6f9ff}
+ .t{color:#888;font-size:11px;font-variant-numeric:tabular-nums}
+ .k{display:inline-block;padding:0 6px;border-radius:8px;color:#fff;font-size:10px;margin-left:6px}
+ .meta{color:#666;font-size:11px}
+ .bad{color:#b3261e;font-weight:600}
+ .good{color:#137333}
+ .warnc{color:#b06000}
+ #hud{display:grid;grid-template-columns:repeat(3,1fr);gap:4px 10px;padding:8px 10px;background:#0f1216;color:#e8eaed}
+ #hud b{display:block;font-size:16px;font-weight:800}
+ #hud span{font-size:10.5px;color:#9aa0a6;text-transform:uppercase;letter-spacing:.4px}
+ table{width:100%;border-collapse:collapse;font-size:12px}
+ th,td{padding:5px 8px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
+ th{background:#fafbfc;font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:#5f6368}
+ code{background:#f1f3f4;padding:0 3px;border-radius:3px}
+ .pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;background:#eef1f4}
+ button.spk{float:right;padding:0 6px;font-size:11px;line-height:1.5;border-radius:6px;background:#fff}
+</style></head>
+<body>
+<div id="app">
+  <div id="bar">
+    <b>NavBridge test bench</b>
+    <select id="trip"></select>
+    <button id="play" class="primary">▶ Replay</button>
+    <select id="speed"><option value="1">1×</option><option value="4" selected>4×</option><option value="16">16×</option><option value="60">60×</option></select>
+    <input id="seek" type="range" min="0" max="100" value="0" style="flex:1;min-width:180px">
+    <span id="clock" class="t"></span>
+    <label class="pill"><input id="follow" type="checkbox" checked> follow</label>
+    <label class="pill" title="Speak each announcement as the replay reaches it (browser TTS — the app plays the speed-limit lines from pre-recorded clips)">
+      <input id="voiceOn" type="checkbox" checked> 🔊 voice</label>
+    <label class="pill">rate
+      <select id="rate">
+        <option value="0.55">0.55 (app)</option>
+        <option value="0.8">0.8</option>
+        <option value="1" selected>1.0</option>
+      </select>
+    </label>
+    <button id="shutup" title="Stop the voice">⏹</button>
+    <label class="pill"><input type="file" id="file" accept=".json" style="width:170px"> load log</label>
+    <span id="gen" class="t"></span>
+  </div>
+  <div id="wrap">
+    <div id="map"></div>
+    <div id="side">
+      <div id="hud">
+        <div><span>speed</span><b id="hSpeed">–</b></div>
+        <div><span>limit (effective)</span><b id="hEff">–</b></div>
+        <div><span>road / source</span><b id="hRoad">–</b></div>
+      </div>
+      <div id="tabs">
+        <div class="on" data-p="replay">Replay</div>
+        <div data-p="checks">Log check</div>
+        <div data-p="voice">Voice bench</div>
+        <div data-p="trips">Trips</div>
+      </div>
+      <div class="pane on" id="p-replay"></div>
+      <div class="pane" id="p-checks"></div>
+      <div class="pane" id="p-voice"></div>
+      <div class="pane" id="p-trips"></div>
+    </div>
+  </div>
+</div>
+<script src="testbench_trip.js"></script>
+<script src="testbench_voice.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const KIND = {limit:'#1a73e8', overspeed:'#d93025', camera:'#e8710a', sign:'#f9ab00',
+              rain:'#7b1fa2', maneuver:'#9aa0a6', gps:'#5f6368', voice:'#5f6368'};
+const TRIPS = (window.BENCH_DATA && window.BENCH_DATA.trips) || [];
+const FIX = (window.VOICE_FIXTURE && window.VOICE_FIXTURE.phrases) || [];
+
+const $ = (id) => document.getElementById(id);
+// The trip logs store `timestampMs` as a numeric STRING, announcements as ISO —
+// accept both (Date.parse of "1786194363099" is NaN, which broke the clock).
+const ms = (x) => {
+  if (typeof x === 'number') return x;
+  if (!x) return 0;
+  const n = Number(x);
+  return Number.isFinite(n) ? n : Date.parse(x);
+};
+const hhmmss = (t) => new Date(t).toTimeString().slice(0, 8);
+const R = (x, n = 0) => (x == null ? '–' : Number(x).toFixed(n));
+const inVN = (v) => v >= 8 && v <= 24 && typeof v === 'number';
+
+let trip = TRIPS.length ? TRIPS[0] : {name:'(no data)',fixes:[],announcements:[],places:[]};
+let simT = 0, playing = false, raf = null, last = 0, shown = 0;
+let map, track, driven, marker, trail = [], annLayer;
+
+// ------------------------------------------------------------------ voice --
+// Browser TTS stands in for the app's voice: everything except the speed-limit
+// lines is Android TTS at rate 0.55 (see the rate selector), while the limits
+// come from pre-recorded clips ("Tốc độ giới hạn hiện tại là N") whose audio we
+// cannot play here — the row is tagged "clip" so the difference is visible.
+let viVoice = null;
+function pickVoice() {
+  const vs = window.speechSynthesis ? speechSynthesis.getVoices() : [];
+  viVoice = vs.find(v => /vi(-|_)VN/i.test(v.lang)) || vs.find(v => /^vi/i.test(v.lang)) || null;
+}
+if (window.speechSynthesis) {
+  pickVoice();
+  speechSynthesis.onvoiceschanged = pickVoice;
+}
+function speak(text, {rate} = {}) {
+  if (!window.speechSynthesis || !text) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'vi-VN';
+  if (viVoice) u.voice = viVoice;
+  u.rate = rate != null ? rate : Number($('rate').value);
+  speechSynthesis.speak(u);
+}
+function voiceEnabled() { return $('voiceOn') && $('voiceOn').checked; }
+
+// ---------------------------------------------------------------- helpers --
+function nearestFix(t) {
+  const f = trip.fixes;
+  if (!f.length) return null;
+  let lo = 0, hi = f.length - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; (Number(f[m].t) < t) ? lo = m + 1 : hi = m; }
+  const best = f[lo];
+  for (const c of [f[lo - 1], f[lo], f[lo + 1]]) {
+    if (c && Math.abs(Number(c.t) - t) < Math.abs(Number(best.t) - t)) return c;
+  }
+  return best;
+}
+function distanceM(a, b) {
+  const dy = (a.lat - b.lat) * 111320, dx = (a.lng - b.lng) * 111320 * Math.cos(a.lat * Math.PI / 180);
+  return Math.hypot(dx, dy);
+}
+
+// -------------------------------------------------------------------- map --
+function buildMap() {
+  if (map) { map.remove(); }
+  map = L.map('map');
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {maxZoom:19, attribution:'© OpenStreetMap'}).addTo(map);
+  annLayer = L.layerGroup().addTo(map);
+  const pts = trip.fixes.map(f => [f.lat, f.lng]);
+  if (!pts.length) { map.setView([10.7769, 106.7009], 13); return; }
+  L.polyline(pts, {color:'#9aa0a6', weight:3, opacity:.7}).addTo(map);
+  driven = L.polyline([], {color:'#1a73e8', weight:5, opacity:.9}).addTo(map);
+  marker = L.circleMarker(pts[0], {radius:7, color:'#fff', weight:2, fillColor:'#d93025', fillOpacity:1}).addTo(map);
+  map.fitBounds(L.latLngBounds(pts), {padding:[20, 20]});
+  if (trip.places && trip.places.length) {
+    for (const p of trip.places) {
+      if (!inVN(p.lat)) continue;
+      L.circleMarker([p.lat, p.lng], {radius:5, color:'#fff', weight:1.5,
+        fillColor:'#188038', fillOpacity:1}).addTo(map)
+        .bindPopup((p.name || 'stop') + '<br>' + (p.enteredAt || '').slice(0,19));
+    }
+  }
+}
+
+// ----------------------------------------------------------------- replay --
+function renderAnnouncements(upto) {
+  const pane = $('p-replay');
+  const list = trip.announcements.filter(a => ms(a.time) <= upto);
+  pane.innerHTML = list.length ? '' : '<div class="row meta">No announcement yet — press ▶ (or move the slider).</div>';
+  for (const a of list) {
+    const t = ms(a.time), f = nearestFix(t);
+    const el = document.createElement('div');
+    el.className = 'row hit';
+    const lim = f && (f.road != null || f.eff != null)
+      ? `<span class="meta">road ${f.road ?? '–'} · eff ${f.eff ?? '–'}${f.lsrc ? ' (' + f.lsrc + ')' : ''} · ${f.street ?? ''}</span>` : '';
+    el.innerHTML = `<div><span class="t">${hhmmss(t)}</span>` +
+      `<span class="k" style="background:${KIND[a.kind] || '#5f6368'}">${a.kind || 'voice'}</span>` +
+      `${a.kind === 'limit' ? '<span class="pill" title="the app plays this from a pre-recorded clip">clip</span>' : ''}` +
+      `<button class="spk" title="speak this line">🔊</button></div>` +
+      `<div>${a.text || ''}</div>${lim}`;
+    el.querySelector('.spk').onclick = (e) => { e.stopPropagation(); speak(a.text); };
+    el.onclick = () => { if (f) { map.setView([f.lat, f.lng], 17); } };
+    pane.appendChild(el);
+  }
+  pane.scrollTop = pane.scrollHeight;
+}
+function setPlayhead(t, reveal = true, speakNew = true) {
+  simT = t;
+  const f = nearestFix(t);
+  if (!f) return;
+  const idx = trip.fixes.indexOf(f);
+  driven.setLatLngs(trip.fixes.slice(0, idx + 1).map(x => [x.lat, x.lng]));
+  marker.setLatLng([f.lat, f.lng]);
+  if ($('follow').checked) map.panTo([f.lat, f.lng], {animate:false});
+  const kmh = (f.v || 0) * 3.6;
+  $('hSpeed').textContent = kmh.toFixed(0) + ' km/h';
+  $('hEff').textContent = f.eff != null ? f.eff + ' km/h'
+    : (f.road != null ? f.road + ' km/h (road only)' : '–');
+  $('hRoad').textContent = (f.street || '–') + ' · ' + (f.lsrc || f.src || '');
+  $('clock').textContent = new Date(t).toLocaleString() + '  ·  fix ' + (idx + 1) + '/' + trip.fixes.length;
+  if (reveal) {
+    const hits = trip.announcements.filter(a => ms(a.time) <= t);
+    while (shown < hits.length) {
+      const a = hits[shown++];
+      if (a.lat != null) {
+        L.circleMarker([a.lat, a.lng], {radius:5, color:'#fff', weight:1.5,
+          fillColor:KIND[a.kind] || '#5f6368', fillOpacity:1}).addTo(annLayer)
+          .bindPopup(`<b>${a.kind}</b> ${hhmmss(ms(a.time))}<br>${a.text || ''}`);
+      }
+      if (voiceEnabled() && speakNew) speak(a.text);
+    }
+    renderAnnouncements(t);
+  }
+  $('seek').value = trip.fixes.length <= 1 ? 100 : (idx / (trip.fixes.length - 1)) * 100;
+}
+function tick(now) {
+  if (!playing) return;
+  const dt = now - last; last = now;
+  const step = dt * Number($('speed').value) * 4; // a bit faster than real time at 1x
+  const lastT = ms(trip.fixes[trip.fixes.length - 1].t);
+  if (simT + step >= lastT) { setPlayhead(lastT); playing = false; $('play').textContent = '▶ Replay'; return; }
+  setPlayhead(simT + step);
+  raf = requestAnimationFrame(tick);
+}
+function playPause() {
+  if (playing) { playing = false; cancelAnimationFrame(raf); $('play').textContent = '▶ Replay'; return; }
+  if (!trip.fixes.length) return;
+  if (simT >= ms(trip.fixes[trip.fixes.length - 1].t)) { resetReplay(); }
+  playing = true; $('play').textContent = '⏸ Pause'; last = performance.now();
+  raf = requestAnimationFrame(tick);
+}
+function resetReplay() {
+  annLayer.clearLayers(); shown = 0;
+  if (window.speechSynthesis) speechSynthesis.cancel();
+  setPlayhead(ms(trip.fixes[0].t), true, false);
+}
+
+// -------------------------------------------------------------- log check --
+function checks() {
+  const out = [];
+  const ann = trip.announcements, fx = trip.fixes;
+  const spanMin = fx.length ? (ms(fx[fx.length-1].t) - ms(fx[0].t)) / 60000 : 0;
+
+  // F1 — spoken limit vs the numbers recorded at that moment.
+  const limLines = ann.filter(a => /km\/h/i.test(a.text || '') && ['limit','sign','maneuver'].includes(a.kind));
+  let eqEff = 0, neEff = 0, eqRoad = 0, neRoad = 0, noEff = 0;
+  const bad = [];
+  for (const a of limLines) {
+    const n = Number((/(\d+)\s*km\/h/i.exec(a.text) || [])[1]);
+    const f = nearestFix(ms(a.time));
+    if (!f || !n) continue;
+    if (f.eff != null) { n === f.eff ? eqEff++ : (neEff++, bad.push([a, f, n])); }
+    else { noEff++; (n === f.road) ? eqRoad++ : neRoad++; }
+  }
+  out.push(['F1 spoken limit vs logged limit',
+    noEff ? 'warn' : (neEff ? 'fail' : 'pass'),
+    `${limLines.length} spoken-limits · with limitEffective: ${eqEff} match / ${neEff} differ · ` +
+    `legacy rows (no limitEffective): ${eqRoad} match road / ${neRoad} differ`]);
+
+  // F2 — one warning per camera, no repeats within 2 min.
+  const cam = ann.filter(a => a.kind === 'camera');
+  const camText = {}; let camRepeat = 0;
+  for (const a of cam) {
+    const k = (a.text || '').slice(0, 40);
+    const prev = camText[k];
+    if (prev != null && ms(a.time) - prev < 120000) camRepeat++;
+    camText[k] = ms(a.time);
+  }
+  out.push(['F2 camera warnings',
+    camRepeat ? 'warn' : 'pass',
+    `${cam.length} warnings · repeated within 2 min: ${camRepeat}`]);
+
+  // F3 — rain: transitions only, never the same line twice in 10 min.
+  const rain = ann.filter(a => a.kind === 'rain');
+  const shapes = {batdau:0, tanh:0, saphet:0, phiatruoc:0, khac:0};
+  let rainRepeat = 0, lastRain = {};
+  for (const a of rain) {
+    const t = (a.text || '').toLowerCase();
+    if (t.startsWith('trời bắt đầu mưa')) shapes.batdau++;
+    else if (t.startsWith('trời đã tạnh mưa')) shapes.tanh++;
+    else if (t.startsWith('sắp hết mưa')) shapes.saphet++;
+    else if (t.includes('phía trước')) shapes.phiatruoc++;
+    else shapes.khac++;
+    if (lastRain[t] != null && ms(a.time) - lastRain[t] < 600000) rainRepeat++;
+    lastRain[t] = ms(a.time);
+  }
+  out.push(['F3 rain announcements',
+    rainRepeat ? 'warn' : 'pass',
+    `${rain.length} total · bắt đầu ${shapes.batdau} · tạnh ${shapes.tanh} · sắp hết ${shapes.saphet} · ` +
+    `phía trước ${shapes.phiatruoc} · other ${shapes.khac} · repeated <10 min: ${rainRepeat}`]);
+
+  // F4 — nagging rate.
+  const per10 = spanMin ? ann.length / (spanMin / 10) : 0;
+  out.push(['F4 announcement rate',
+    per10 > 25 ? 'warn' : 'pass',
+    `${ann.length} announcements in ${spanMin.toFixed(1)} min = ${per10.toFixed(1)} per 10 min`]);
+
+  // F5 — fix quality.
+  const gaps = [];
+  for (let i = 1; i < fx.length; i++) gaps.push((ms(fx[i].t) - ms(fx[i-1].t)) / 1000);
+  gaps.sort((a, b) => a - b);
+  const med = gaps.length ? gaps[gaps.length >> 1] : 0;
+  const acc = fx.map(f => f.acc).filter(a => a > 0).sort((a,b) => a-b);
+  const esp = fx.filter(f => (f.src || '').toUpperCase().includes('ESP')).length;
+  const fast = fx.filter(f => (f.v || 0) * 3.6 > 140).length;
+  out.push(['F5 fix quality',
+    (med > 2 || fast > 0) ? 'warn' : 'pass',
+    `median gap ${med.toFixed(2)} s · gaps >5 s: ${gaps.filter(g => g > 5).length} · ` +
+    `accuracy median ${acc.length ? acc[acc.length>>1] : '–'} m · ESP fixes ${esp}/${fx.length} · ` +
+    `>140 km/h fixes: ${fast}`]);
+
+  // F6 — did a speed-drop warning actually precede a lower limit?
+  const drops = ann.filter(a => a.kind === 'sign' && /giới hạn/i.test(a.text || ''));
+  let followed = 0;
+  for (const d of drops) {
+    const t = ms(d.time);
+    const later = ann.some(a => a.kind === 'limit' && ms(a.time) > t && ms(a.time) - t < 120000);
+    if (later) followed++;
+  }
+  out.push(['F6 speed-drop warning → limit change',
+    drops.length && !followed ? 'warn' : 'pass',
+    `${drops.length} "giảm tốc độ … phía trước" warnings · followed by a limit change ≤2 min: ${followed}`]);
+
+  return {rows: out, bad};
+}
+function drawChecks() {
+  const {rows, bad} = checks();
+  let html = '<table><tr><th>check</th><th>result</th><th>detail</th></tr>';
+  for (const [name, verdict, detail] of rows) {
+    const cls = verdict === 'pass' ? 'good' : (verdict === 'fail' ? 'bad' : 'warnc');
+    html += `<tr><td>${name}</td><td class="${cls}">${verdict.toUpperCase()}</td><td>${detail}</td></tr>`;
+  }
+  html += '</table>';
+  if (bad.length) {
+    html += '<div class="row"><b>Spoken limit ≠ limitEffective</b> (each row: time · spoken · eff · street)</div>';
+    html += '<table><tr><th>time</th><th>spoken</th><th>limitEffective</th><th>source</th><th>street</th></tr>';
+    for (const [a, f, n] of bad.slice(0, 40)) {
+      html += `<tr><td>${hhmmss(ms(a.time))}</td><td class="bad">${n}</td><td>${f.eff}</td>` +
+              `<td>${f.lsrc || ''}</td><td>${f.street || ''}</td></tr>`;
+    }
+    html += '</table>';
+  }
+  html += '<div class="row meta">Note: only trips recorded AFTER the 2026-09-18 logging change carry ' +
+          '<code>limitEffective</code> / <code>limitSource</code> per fix; older ones show the road value only.</div>';
+  $('p-checks').innerHTML = html;
+}
+
+// -------------------------------------------------------------- voice bench --
+function drawVoice() {
+  const meta = window.VOICE_FIXTURE || {};
+  if (!FIX.length) {
+    $('p-voice').innerHTML = '<div class="row">No fixture. Run ' +
+      '<code>flutter test test/voice_phrase_fixture_test.dart</code></div>';
+    return;
+  }
+  const groups = {searchAndNavigate: [], askAi: [], none: [], other: []};
+  for (const p of FIX) {
+    const g = groups[p.type] ? p.type : 'other';
+    groups[g].push(p);
+  }
+  let html = `<div class="row meta">Parsed by the REAL parser — regenerate with ` +
+    `<code>flutter test test/voice_phrase_fixture_test.dart</code> · fixture ${String(meta.generated||'').slice(0,19)}</div>`;
+  html += '<div class="row"><input id="vfilter" placeholder="filter phrases…" style="width:100%"></div>';
+  const table = (title, list) => {
+    if (!list.length) return '';
+    let t = `<table><tr><th colspan="4">${title} (${list.length})</th></tr>` +
+            '<tr><th>phrase</th><th>type</th><th>query</th><th>auto-nav</th></tr>';
+    for (const p of list) {
+      t += `<tr class="vrow"><td>${p.phrase}</td><td>${p.type}</td><td>${p.query || ''}</td>` +
+           `<td>${p.navigate ? 'yes' : ''}</td></tr>`;
+    }
+    return t + '</table>';
+  };
+  html += table('Destination (search + auto-navigate)', groups.searchAndNavigate);
+  html += table('Assistant', groups.askAi);
+  html += table('Other commands', groups.other);
+  html += table('Not understood', groups.none);
+  $('p-voice').innerHTML = html;
+  const f = $('vfilter');
+  f.oninput = () => {
+    const q = f.value.toLowerCase();
+    document.querySelectorAll('.vrow').forEach(r => {
+      r.style.display = r.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
+}
+
+// --------------------------------------------------------------- trip list --
+function drawTrips() {
+  let html = '<table><tr><th>trip</th><th>fixes</th><th>km</th><th>min</th><th>ann</th><th>rain</th><th>cam</th></tr>';
+  for (const t of TRIPS) {
+    let km = 0, min = 0;
+    if (t.fixes.length) {
+      for (let i = 1; i < t.fixes.length; i++) km += distanceM(t.fixes[i-1], t.fixes[i]);
+      min = (ms(t.fixes[t.fixes.length-1].t) - ms(t.fixes[0].t)) / 60000;
+    }
+    const rain = t.announcements.filter(a => a.kind === 'rain').length;
+    const cam = t.announcements.filter(a => a.kind === 'camera').length;
+    html += `<tr><td>${t.name}</td><td>${t.fixes.length}</td><td>${(km/1000).toFixed(2)}</td>` +
+            `<td>${min.toFixed(1)}</td><td>${t.announcements.length}</td><td>${rain}</td><td>${cam}</td></tr>`;
+  }
+  html += '</table><div class="row meta">Add more logs with <code>python3 tool/testbench_gen.py --trips 8</code> ' +
+          '(reads docs/trips/device) then reload.</div>';
+  $('p-trips').innerHTML = html;
+}
+
+// --------------------------------------------------------------- bootstrap --
+function selectTrip(i, keep) {
+  trip = TRIPS[i];
+  simT = 0; shown = 0; playing = false; if (raf) cancelAnimationFrame(raf);
+  $('play').textContent = '▶ Replay';
+  buildMap();
+  renderAnnouncements(-1);
+  drawChecks(); drawVoice(); drawTrips();
+  if (!trip.fixes.length) return;
+  const lastT = ms(trip.fixes[trip.fixes.length-1].t);
+  if (!keep) simT = ms(trip.fixes[0].t);
+  // Selecting a trip re-reveals nothing yet (start of the log) — and never
+  // speaks: only playback does.
+  if (window.speechSynthesis) speechSynthesis.cancel();
+  setPlayhead(simT, true, false);
+  $('seek').max = 100;
+}
+function init() {
+  $('gen').textContent = window.BENCH_DATA ? 'data ' + window.BENCH_DATA.generated : 'no data file';
+  const sel = $('trip');
+  TRIPS.forEach((t, i) => {
+    const o = document.createElement('option');
+    o.value = i; o.textContent = `${t.name} (${t.fixes.length} fixes, ${t.announcements.length} ann)`;
+    sel.appendChild(o);
+  });
+  sel.onchange = () => selectTrip(Number(sel.value));
+  $('play').onclick = playPause;
+  $('shutup').onclick = () => { if (window.speechSynthesis) speechSynthesis.cancel(); };
+  $('seek').oninput = (e) => {
+    playing = false; $('play').textContent = '▶ Replay';
+    const i = Math.round((e.target.value / 100) * (trip.fixes.length - 1));
+    annLayer.clearLayers();
+    shown = 0;
+    const t = ms(trip.fixes[i].t);
+    // Re-reveal everything up to this point WITHOUT speaking it — seeking is not
+    // playback, and a burst of 40 utterances helps nobody.
+    simT = ms(trip.fixes[0].t);
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    setPlayhead(t, true, false);
+  };
+  $('file').onchange = (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const raw = JSON.parse(rd.result);
+        const fixes = (raw.locations || []).map(x => ({
+          t: x.timestampMs, lat: x.latitudeE7/1e7, lng: x.longitudeE7/1e7,
+          v: x.velocity || 0, acc: x.accuracy, src: x.source,
+          street: x.street, hw: x.highway, road: x.speedLimit,
+          eff: x.limitEffective, lsrc: x.limitSource,
+        })).filter(x => inVN(x.lat) && typeof x.lng === 'number');
+        TRIPS.push({name: f.name.replace('.json',''), fixes,
+                    announcements: raw.announcements || [], places: raw.places || []});
+        const sel2 = $('trip');
+        const o = document.createElement('option');
+        o.value = TRIPS.length - 1;
+        o.textContent = `${TRIPS[TRIPS.length-1].name} (loaded, ${fixes.length} fixes)`;
+        sel2.appendChild(o); sel2.value = o.value;
+        selectTrip(TRIPS.length - 1);
+      } catch (err) { alert('Could not read that JSON: ' + err); }
+    };
+    rd.readAsText(f);
+  };
+  document.querySelectorAll('#tabs div').forEach(d => {
+    d.onclick = () => {
+      document.querySelectorAll('#tabs div').forEach(x => x.classList.remove('on'));
+      document.querySelectorAll('.pane').forEach(x => x.classList.remove('on'));
+      d.classList.add('on'); $('p-' + d.dataset.p).classList.add('on');
+    };
+  });
+  if (TRIPS.length) selectTrip(0); else { drawVoice(); drawTrips(); }
+}
+init();
+</script>
+</body></html>

@@ -18,10 +18,9 @@ import 'dart:math' as math;
 
 import 'package:latlong2/latlong.dart';
 
-class OutlierGate {
-  /// Fixes worse than this are dropped outright.
-  static const double _maxAccuracyM = 35.0;
+import 'package:navbridge/core/settings.dart' show gpsFilterStrength;
 
+class OutlierGate {
   /// EMA weight for the smoothed speed (fast enough to follow, slow enough to
   /// not spike on one bad fix).
   static const double _speedAlpha = 0.5;
@@ -32,11 +31,32 @@ class OutlierGate {
   /// still low, while a short-interval burst is still rejected.
   static const double _minPlausibleMps = 5.0;
 
-  /// How many times the (floored) speed a jump may exceed before it's rejected.
-  static const double _jumpFactor = 3.0;
+  /// Fixes worse than this are dropped outright (set per strength).
+  double _maxAccuracyM = 35.0;
+
+  /// How many times the (floored) speed a jump may exceed before it's rejected
+  /// (set per strength).
+  double _jumpFactor = 3.0;
 
   double _smoothSpeedMps = 0.0;
   LatLng? _lastFix;
+
+  /// Re-apply thresholds from the persisted strength ('light' | 'standard' |
+  /// 'strong'). Called on construction and again per-fix so a settings change
+  /// takes effect immediately on the next GPS fix.
+  void _applyStrength(String? s) {
+    switch (s) {
+      case 'light':
+        _maxAccuracyM = 50.0;
+        _jumpFactor = 4.0;
+      case 'strong':
+        _maxAccuracyM = 25.0;
+        _jumpFactor = 2.2;
+      default: // 'standard'
+        _maxAccuracyM = 35.0;
+        _jumpFactor = 3.0;
+    }
+  }
 
   /// Smoothed speed (EMA of accepted fix-to-fix speed), m/s — the prior the
   /// jump gate compares against.
@@ -49,6 +69,9 @@ class OutlierGate {
   /// Returns true to ACCEPT [pos]; false rejects the outlier. [dt] = seconds
   /// since the last ACCEPTED fix (null on the first fix).
   bool accept(LatLng pos, {double? accuracy, double? dt}) {
+    // Reflect the persisted GPS-filter strength on every fix so a settings
+    // change applies without restarting navigation.
+    _applyStrength(gpsFilterStrength);
     if (accuracy != null && accuracy > _maxAccuracyM) {
       rejected++;
       return false;

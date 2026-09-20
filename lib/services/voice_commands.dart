@@ -48,64 +48,166 @@ String _stripVi(String s) {
   return b.toString();
 }
 
+/// Natural "go to a place" prefixes, matched on the DIACRITIC-STRIPPED phrase —
+/// the recognizer frequently returns "chi duong toi …" / "duong den …", and
+/// drivers say "đường đến X" or just "dẫn đường X" as often as the canonical
+/// "chỉ đường tới X". Longest first, so "chỉ đường tới" wins over "chỉ đường".
+const List<String> _navPrefixes = [
+  'chi duong toi',
+  'chi duong den',
+  'chi duong di',
+  'chi duong ve',
+  'chi duong',
+  'dan duong toi',
+  'dan duong den',
+  'dan duong ve',
+  'dan duong',
+  'tim duong toi',
+  'tim duong den',
+  'tim duong ve',
+  'tim duong',
+  'duong den',
+  'duong toi',
+  'duong ve',
+  'dua toi den',
+  'dua toi toi',
+  'cho toi den',
+  'cho toi toi',
+  'muon den',
+  'muon toi',
+  'navigate to',
+  'go to',
+  'take me to',
+  'direction to',
+  'drive to',
+];
+
+/// Weaker "go to" prefixes, tried LAST so they can never shadow a real command:
+/// "đi thôi" is START, "dừng lại" is STOP, and "đèn đỏ …" must not become a
+/// place called "đỏ …".
+const List<String> _travelPrefixes = ['den ', 'toi ', 'di ', 've '];
+
+/// Markers that make an utterance a QUESTION (the AI assistant's job) rather
+/// than a destination — used only by the bare-place fallback below.
+const List<String> _questionMarkers = [
+  'the nao',
+  'nhu the nao',
+  'bao nhieu',
+  'bao lau',
+  'may gio',
+  'khi nao',
+  'tai sao',
+  'vi sao',
+  'lam sao',
+  'the nao',
+  'o dau',
+  'o day',
+  'co khong',
+  'khong?',
+  '?',
+];
+
+/// Words that mean the utterance is a COMMAND/control phrase, never a place —
+/// guards the bare-place fallback.
+const List<String> _controlWords = [
+  'bat',
+  'tat',
+  'dung',
+  'huy',
+  'thoat',
+  'ket thuc',
+  'phong',
+  'thu nho',
+  'giup',
+  'help',
+  'stop',
+  'cancel',
+  'zoom',
+  'mute',
+  'unmute',
+  'start',
+  'bat dau',
+  'begin',
+  'nghe',
+  'hoi',
+  'ask',
+];
+
+bool _startsPhrase(String stripped, String prefix) {
+  if (!stripped.startsWith(prefix)) return false;
+  // A prefix ending in a space already carries its own boundary ("den "), so
+  // the next character is the start of the place name, not a boundary.
+  if (prefix.endsWith(' ')) return true;
+  final next = stripped.length == prefix.length ? '' : stripped[prefix.length];
+  return next.isEmpty || ' ,.:;!?-'.contains(next);
+}
+
 /// Keyword parser (Vietnamese first, English fallback).
 VoiceCommand parseVoiceCommand(String raw) {
   final s = raw.trim().toLowerCase();
   if (s.isEmpty) return const VoiceCommand(VoiceCommandType.none);
+  // Diacritic-stripped copy — SAME length as [s] (the map is 1:1), so a prefix
+  // length measured here can cut the original phrase for the query.
+  final flat = _stripVi(s);
 
-  final nav = RegExp(
-    r'^(chỉ đường tới|chỉ đường đến|chỉ đường|đi đến|đi tới|navigate to|go to|take me to|direction to)\b',
-  );
-  final search = RegExp(r'^(tìm kiếm|tìm|search for|search)\b');
-  if (nav.hasMatch(s)) {
+  // "chỉ đường tới X" / "đường đến X" / "dẫn đường X" / "navigate to X" → auto
+  // start navigation. Longest prefix first (the list is ordered).
+  for (final p in _navPrefixes) {
+    if (_startsPhrase(flat, p)) {
+      return VoiceCommand(
+        VoiceCommandType.searchAndNavigate,
+        s.substring(p.length).trim(),
+        true,
+      );
+    }
+  }
+  final search = RegExp(r'^(tim kiem|tim|search for|search)\b');
+  if (search.hasMatch(flat)) {
     return VoiceCommand(
       VoiceCommandType.searchAndNavigate,
-      s.substring(nav.stringMatch(s)!.length).trim(),
-      true, // navigate → auto-start after building the route
+      s.substring(search.stringMatch(flat)!.length).trim(),
     );
   }
-  if (search.hasMatch(s)) {
-    return VoiceCommand(
-      VoiceCommandType.searchAndNavigate,
-      s.substring(search.stringMatch(s)!.length).trim(),
-    );
-  }
-  if (RegExp(r'^(bắt đầu|đi thôi|start|begin)\b').hasMatch(s)) {
+  if (RegExp(r'^(bat dau|di thoi|start|begin)\b').hasMatch(flat)) {
     return const VoiceCommand(VoiceCommandType.start);
   }
   // Always-on wake-word toggles. These must be checked BEFORE the generic
   // "dừng/stop" pattern: "dừng nghe" / "tắt nghe luôn" would otherwise be
   // parsed as stop.
-  if (s.contains('tắt nghe') ||
-      s.contains('ngừng nghe') ||
-      s.contains('dừng nghe')) {
+  if (flat.contains('tat nghe') ||
+      flat.contains('ngung nghe') ||
+      flat.contains('dung nghe')) {
     return const VoiceCommand(VoiceCommandType.alwaysOnOff);
   }
-  if (s.contains('nghe liên tục') ||
-      s.contains('nghe luôn') ||
-      s.contains('nghe suốt')) {
+  if (flat.contains('nghe lien tuc') ||
+      flat.contains('nghe luon') ||
+      flat.contains('nghe suot')) {
     return const VoiceCommand(VoiceCommandType.alwaysOnOn);
   }
   if (RegExp(
-    r'^(dừng|dừng lại|hủy|hủy bỏ|thoát|kết thúc|stop|cancel|quit|end)\b',
-  ).hasMatch(s)) {
+    r'^(dung|dung lai|huy|huy bo|thoat|ket thuc|stop|cancel|quit|end)\b',
+  ).hasMatch(flat)) {
     return const VoiceCommand(VoiceCommandType.stop);
   }
-  if (s.contains('phóng to') || s.contains('zoom in')) {
+  if (flat.contains('phong to') || flat.contains('zoom in')) {
     return const VoiceCommand(VoiceCommandType.zoomIn);
   }
-  if (s.contains('thu nhỏ') || s.contains('zoom out')) {
+  if (flat.contains('thu nho') || flat.contains('zoom out')) {
     return const VoiceCommand(VoiceCommandType.zoomOut);
   }
   // Check "unmute" BEFORE "mute": "unmute" contains the substring "mute",
   // so the off-check must not run first.
-  if (s.contains('unmute') || s.contains('bật tiếng') || s.contains('bật âm')) {
+  if (flat.contains('unmute') ||
+      flat.contains('bat tieng') ||
+      flat.contains('bat am')) {
     return const VoiceCommand(VoiceCommandType.voiceOn);
   }
-  if (s.contains('tắt tiếng') || s.contains('im lặng') || s.contains('mute')) {
+  if (flat.contains('tat tieng') ||
+      flat.contains('im lang') ||
+      flat.contains('mute')) {
     return const VoiceCommand(VoiceCommandType.voiceOff);
   }
-  if (s.contains('giúp') || s.contains('help')) {
+  if (flat.contains('giup') || flat.contains('help')) {
     return const VoiceCommand(VoiceCommandType.help);
   }
   // AI assistant: "hỏi AI …" / "hỏi trợ lý …" / "hỏi …" / "ask ai …". The rest
@@ -115,7 +217,7 @@ VoiceCommand parseVoiceCommand(String raw) {
   // "hoi ai" for "hỏi ai" / "cho toi hoi" for "cho tôi hỏi"), longest prefix
   // first, WITHOUT a trailing `\b` (Dart's `\b` is ASCII-based and fails after
   // Vietnamese text). The returned query keeps the ORIGINAL phrase.
-  final ai = _stripVi(s);
+  final ai = flat;
   final aiPrefixes = [
     'cho toi hoi tro ly',
     'xin hoi tro ly',
@@ -138,6 +240,26 @@ VoiceCommand parseVoiceCommand(String raw) {
       return VoiceCommand(VoiceCommandType.askAi, s.substring(p.length).trim());
     }
   }
+  // LAST RESORT — a bare destination: "đường Nguyễn Trãi", "chợ Bến Thành",
+  // "sân bay Tân Sơn Nhất", "đến Vũng Tàu". The user: "just tell the location
+  // should start the navigation". Every command above (and the wake-word
+  // toggles) has already had its chance, so anything left that is NOT a
+  // question and NOT a control word is treated as a place to drive to; the
+  // caller searches it and can still fall back to the assistant when the search
+  // finds nothing.
+  if (flat.length >= 3 &&
+      !_questionMarkers.any(flat.contains) &&
+      !_controlWords.any((w) => _startsPhrase(flat, w))) {
+    for (final p in _travelPrefixes) {
+      if (_startsPhrase(flat, p)) {
+        final q = s.substring(p.length).trim();
+        if (q.isNotEmpty) {
+          return VoiceCommand(VoiceCommandType.searchAndNavigate, q, true);
+        }
+      }
+    }
+    return VoiceCommand(VoiceCommandType.searchAndNavigate, s.trim(), true);
+  }
   return const VoiceCommand(VoiceCommandType.none);
 }
 
@@ -156,29 +278,38 @@ class VoiceCommands {
   void Function()? _onWake;
   void Function(String)? _onPartial;
 
+  @visibleForTesting
+  static String? wakeCommand(String text) => _wakeCommand(text);
+
   /// Wake word matcher. Returns the command text AFTER the wake word, or null
   /// when the phrase has no wake word. The wake word is user-configurable
-  /// (default "dậy đi"). Matching is DIACRITIC-INSENSITIVE + space-insensitive
-  /// so the recognizer's unaccented transcription ("day di") still matches
-  /// the configured "dậy đi".
+  /// (default "dậy đi"). Matching is DIACRITIC-INSENSITIVE + space-insensitive,
+  /// but preserves the original spaces and words in the remaining command so
+  /// [parseVoiceCommand] can match keywords.
   static String? _wakeCommand(String text) {
-    final norm = _norm(text);
-    final ww = _norm(wakeWord);
-    if (ww.isNotEmpty && norm.startsWith(ww)) {
-      return norm.substring(ww.length).trim();
-    }
-    return null;
+    final clean = text.trim();
+    if (clean.isEmpty) return null;
+    final normWw = _normWords(wakeWord);
+    if (normWw.isEmpty) return null;
+
+    final stripped = _stripVi(clean);
+    final pattern = RegExp(
+      r'^\s*' + normWw.map(RegExp.escape).join(r'[\s,.-]+') + r'[\s,.:;!?-]*',
+      caseSensitive: false,
+    );
+    final m = pattern.firstMatch(stripped);
+    if (m == null) return null;
+    return clean.substring(m.end).trim();
   }
 
-  /// Normalize for wake-word matching: lowercase, strip Vietnamese diacritics
-  /// (recognizers often return "day di" for "dậy đi"), drop spaces/dashes.
-  static String _norm(String s) {
-    final lower = s.toLowerCase();
-    final b = StringBuffer();
-    for (final ch in lower.split('')) {
-      b.write(_viMap[ch] ?? ch);
-    }
-    return b.toString().replaceAll(RegExp(r'[\s\-]'), '');
+  /// Split [s] into diacritic-stripped, lowercase words for wake-word matching.
+  static List<String> _normWords(String s) {
+    final stripped = _stripVi(s);
+    return stripped
+        .toLowerCase()
+        .split(RegExp(r'[\s,.-]+'))
+        .where((w) => w.isNotEmpty)
+        .toList();
   }
 
   /// Vietnamese → ASCII accent map (tone marks + đ).
@@ -252,6 +383,8 @@ class VoiceCommands {
     'đ': 'd',
   };
 
+  void Function(String status)? _sessionStatusCallback;
+
   bool get available => _available;
   bool get listening => _listening;
   bool get alwaysOn => _alwaysOn;
@@ -260,21 +393,16 @@ class VoiceCommands {
     try {
       _available = await _speech.initialize(
         onStatus: (s) {
-          // IMPORTANT: 'done' / 'notListening' fire when EACH short recognizer
-          // session ends — on the itel that's ~1 s of silence. They must NOT
-          // clear [_listening]: the one-shot [listen] loop bridges those gaps
-          // by restarting the session, and clearing the flag here would kill
-          // that loop after the first ~1 s → "it doesn't listen anything".
-          // Only a hard 'error' frees the mic (the loop would just churn on a
-          // broken recognizer). [stop] / a delivered result end the loop.
           if (s == 'error') {
             _listening = false;
           }
+          _sessionStatusCallback?.call(s);
           onStatus?.call(s);
         },
         onError: (e) {
           debugPrint('VOICE: stt error ${e.errorMsg}');
           _listening = false;
+          _sessionStatusCallback?.call('error');
         },
       );
       try {
@@ -289,66 +417,54 @@ class VoiceCommands {
   }
 
   /// Recognizer options tuned for the current context:
-  /// - NORMAL: free-form `confirmation` model (natural sentences), short
-  ///   silence (~0.8 s) so commands are snappy.
+  /// - NORMAL: `dictation` model with generous silence tolerance (~4 s) so
+  ///   natural pauses between words do not cut the user off prematurely.
   /// - RIDING (motorbike): the short-command `search` model (more robust to
-  ///   wind/engine noise on short phrases), LONGER silence tolerance
-  ///   (~3 s) so a wind burst between words never finalizes the command
-  ///   mid-phrase, a longer listen window, and the Bluetooth headset mic is
-  ///   used when paired (Bluetooth stays enabled — the app has
-  ///   BLUETOOTH_CONNECT).
-  ///
-  /// IMPORTANT: `onDevice: false` (network recognition via Google services)
-  /// — the low-end itel's ON-DEVICE Vietnamese model returns
-  /// `error_no_match`/`error_speech_timeout` for clear speech, so the cloud
-  /// recognizer (the device has Google Play Services) is far more accurate.
+  ///   wind/engine noise on short phrases), longer silence tolerance (~7 s),
+  ///   and the Bluetooth headset mic is used when paired.
   stt.SpeechListenOptions _listenOptions() => stt.SpeechListenOptions(
     localeId: _vi ? 'vi_VN' : null,
     onDevice: false,
     listenMode: ridingMode
         ? stt.ListenMode.search
-        : stt.ListenMode.confirmation,
+        : stt.ListenMode.dictation,
     partialResults: true,
-    // Don't cancel on a mid-session error: on the low-end itel the recognizer
-    // fires spurious `error_no_match`/`error_speech_timeout` for clear speech,
-    // and cancelOnError would kill the whole window. Let the loop bridge it.
     cancelOnError: false,
-    // VAD silence detection: after the driver stops speaking, this much
-    // silence finalizes the result. The itel's "AiAi" recognizer tends to
-    // finalize after a very short silence — too fast, cutting the command
-    // off. Generous tolerance in BOTH modes so a pause between words (or a
-    // wind/engine gap while riding) can't end the phrase.
-    // Long listen window in BOTH modes — the itel's recognizer tries to bail
-    // after ~1 s, so we force it to keep the mic open.
     listenFor: const Duration(seconds: 45),
     pauseFor: ridingMode
         ? const Duration(milliseconds: 7000)
-        : const Duration(milliseconds: 5000),
+        : const Duration(milliseconds: 4000),
   );
 
   /// One-shot listen (tap the mic): returns one phrase. [onPartial] fires
   /// with the LIVE (in-progress) transcript so the UI can show a
   /// "listening… (text)" banner while the user speaks; [onResult] fires once
   /// with the final recognized phrase.
-  ///
-  /// The recognition keeps running until the driver taps the mic again to
-  /// stop, OR VAD silence (mode-dependent: ~0.8 s normal / ~3 s riding)
-  /// finalizes the result. The device's recognizer ends empty sessions after
-  /// ~1 s (itel's "AiAi" service), so the session auto-restarts to bridge the
-  /// gap — up to a 60 s safety cap so it can never run forever.
   Future<void> listen(
     void Function(String recognized) onResult, {
     void Function(String partial)? onPartial,
     Duration? budget,
   }) async {
-    if (!_available) return;
+    if (!_available) {
+      final ok = await init();
+      if (!ok) return;
+    }
+    if (_speech.isListening) {
+      try {
+        await _speech.stop();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      } catch (_) {}
+    }
     final deadline = DateTime.now().add(budget ?? const Duration(seconds: 60));
     _listening = true;
     var keepGoing = true;
-    // `_listening` is also cleared by [stop] — the loop breaks when the
-    // driver taps the mic again to cancel.
+    String heard = '';
     while (keepGoing && _listening && DateTime.now().isBefore(deadline)) {
-      final delivered = await _listenSession(onResult, onPartial);
+      final delivered = await _listenSession(
+        onResult,
+        onPartial,
+        onHeard: (text) => heard = text,
+      );
       if (delivered) {
         keepGoing = false;
       } else if (DateTime.now().isBefore(deadline)) {
@@ -357,24 +473,52 @@ class VoiceCommands {
       }
     }
     _listening = false;
+    // Low-end itel recognizers often transcribe the phrase as PARTIALS but
+    // never finalize. If the window closed with text heard but no final
+    // result delivered, use the last partial so the caller doesn't say
+    // "Không nghe rõ" when the text was actually transcribed.
+    if (keepGoing && heard.trim().isNotEmpty) {
+      onResult(heard.trim());
+    }
   }
 
-  /// One recognizer session. Completes true when a usable final result was
-  /// delivered to [onResult]; false when the session ended without one (the
-  /// device's ~1 s no-speech timeout / error / done) so the caller restarts.
+  /// One recognizer session. Awaits the actual session termination (either a
+  /// final result or recognizer finish/error), never completing prematurely.
   Future<bool> _listenSession(
     void Function(String recognized) onResult,
-    void Function(String partial)? onPartial,
-  ) async {
+    void Function(String partial)? onPartial, {
+    void Function(String heard)? onHeard,
+  }) async {
     final delivered = Completer<bool>();
+    Timer? timeoutTimer;
+    String lastHeard = '';
+
+    // Deliver the best transcript we got (a final result if one arrived, else
+    // the last partial) exactly once, no matter how the session ends.
+    void finish() {
+      if (delivered.isCompleted) return;
+      if (lastHeard.trim().isNotEmpty) {
+        onResult(lastHeard.trim());
+        delivered.complete(true);
+      } else {
+        delivered.complete(false);
+      }
+    }
+
+    _sessionStatusCallback = (s) {
+      if (s == 'notListening' || s == 'done' || s == 'error') finish();
+    };
+
     try {
       debugPrint(
-        'VOICE: listen start mode=${ridingMode ? "search" : "confirmation"} '
+        'VOICE: listen start mode=${ridingMode ? "search" : "dictation"} '
         'onDevice=false vi=$_vi',
       );
-      await _speech.listen(
+      final started = await _speech.listen(
         onResult: (r) {
           if (r.recognizedWords.isNotEmpty) {
+            lastHeard = r.recognizedWords;
+            onHeard?.call(r.recognizedWords);
             if (!r.finalResult) {
               onPartial?.call(r.recognizedWords);
             } else {
@@ -385,12 +529,16 @@ class VoiceCommands {
         },
         listenOptions: _listenOptions(),
       );
-      if (!delivered.isCompleted) delivered.complete(false);
+      if (!started) finish();
+      timeoutTimer = Timer(const Duration(seconds: 30), finish);
     } catch (e) {
       debugPrint('VOICE: listen failed: $e');
-      if (!delivered.isCompleted) delivered.complete(false);
+      finish();
     }
-    return delivered.future;
+    final res = await delivered.future;
+    timeoutTimer?.cancel();
+    _sessionStatusCallback = null;
+    return res;
   }
 
   /// Start ALWAYS-ON wake-word listening. Keeps the recognizer running in a
@@ -404,7 +552,7 @@ class VoiceCommands {
     void Function(String partial)? onPartial,
   }) async {
     if (!_available) return;
-    debugPrint('VOICE: always-on enabled (wake word = nav)');
+    debugPrint('VOICE: always-on enabled (wake word = $wakeWord)');
     _alwaysOn = true;
     _primed = false;
     _onCommand = onCommand;
@@ -416,14 +564,25 @@ class VoiceCommands {
   Future<void> _startAlwaysOnSession() async {
     if (!_alwaysOn || _listening) return;
     _listening = true;
+
+    _sessionStatusCallback = (s) {
+      if (s == 'notListening' || s == 'done' || s == 'error') {
+        _listening = false;
+        if (_alwaysOn) {
+          _restartTimer?.cancel();
+          _restartTimer = Timer(const Duration(milliseconds: 300), () {
+            if (_alwaysOn) _startAlwaysOnSession();
+          });
+        }
+      }
+    };
+
     try {
-      await _speech.listen(
+      final started = await _speech.listen(
         onResult: (r) {
           if (r.recognizedWords.isEmpty) return;
           if (!r.finalResult) {
             _onPartial?.call(r.recognizedWords);
-            // Wake word may appear in partials on this device — prime/ack as
-            // soon as it's heard instead of waiting (often never) for a final.
             _tryAlwaysOn(r.recognizedWords, isPartial: true);
             return;
           }
@@ -431,21 +590,20 @@ class VoiceCommands {
         },
         listenOptions: _listenOptions(),
       );
-      // The recognizer session ended — either a final result, a silence
-      // timeout, or a silent error (no_match on this device). ALWAYS restart
-      // so the wake word keeps listening; otherwise the loop dies after one
-      // session and "nav" is never heard.
-      _restartTimer?.cancel();
-      _restartTimer = Timer(const Duration(milliseconds: 350), () {
+      if (!started) {
         _listening = false;
-        _startAlwaysOnSession();
-      });
+        if (_alwaysOn) {
+          _restartTimer?.cancel();
+          _restartTimer = Timer(const Duration(seconds: 1), _startAlwaysOnSession);
+        }
+      }
     } catch (e) {
       debugPrint('VOICE: always-on session failed: $e');
       _listening = false;
-      // Resilient: retry in a moment rather than dying.
-      _restartTimer?.cancel();
-      _restartTimer = Timer(const Duration(seconds: 1), _startAlwaysOnSession);
+      if (_alwaysOn) {
+        _restartTimer?.cancel();
+        _restartTimer = Timer(const Duration(seconds: 1), _startAlwaysOnSession);
+      }
     }
   }
 
@@ -486,6 +644,7 @@ class VoiceCommands {
     _alwaysOn = false;
     _primed = false;
     _restartTimer?.cancel();
+    _sessionStatusCallback = null;
     _listening = false;
     try {
       await _speech.stop();

@@ -40,6 +40,7 @@ class CarFilter {
   LatLng? _pos;
   LatLng? _prevFix;
   DateTime _lastAt = DateTime.fromMillisecondsSinceEpoch(0);
+  double _predictedDt = 0;
 
   /// Smoothed speed, m/s.
   double get speedMps => _speedMps;
@@ -87,13 +88,18 @@ class CarFilter {
       _bearingDeg = _slerpBearing(_bearingDeg, newBearing, _bearingAlpha);
     } else {
       _bearingDeg = newBearing;
-      _hasBearing = true;
     }
+    _hasBearing = true;
 
     // Complementary fusion: glide from where we were, then pull toward the
     // fresh fix (which is on the route, so it dominates).
+    // If [predict] has already glided [_pos] during frame rendering, only
+    // advance any remaining time to avoid double-advancing into the future.
+    final remainingDt = math.max(0.0, d - _predictedDt);
     if (_pos != null && d > 0 && d < 1.0 && _speedMps > 0.3) {
-      final glided = _advance(_pos!, _bearingDeg, _speedMps * d);
+      final glided = remainingDt > 0.001
+          ? _advance(_pos!, _bearingDeg, _speedMps * remainingDt)
+          : _pos!;
       _pos = LatLng(
         _posAlpha * fix.latitude + (1 - _posAlpha) * glided.latitude,
         _posAlpha * fix.longitude + (1 - _posAlpha) * glided.longitude,
@@ -101,6 +107,7 @@ class CarFilter {
     } else {
       _pos = fix;
     }
+    _predictedDt = 0;
     _prevFix = fix;
   }
 
@@ -111,6 +118,7 @@ class CarFilter {
     if (p == null || dt <= 0 || _speedMps <= 0.3) {
       return p ?? const LatLng(0, 0);
     }
+    _predictedDt += dt;
     final next = _advance(p, _bearingDeg, _speedMps * dt);
     _pos = next;
     return next;

@@ -1,62 +1,22 @@
-/// Tests for the E-ink clock navigation frame protocol (`nav_protocol.dart`).
+/// Tests for navigation protocol & maneuvers (`nav_protocol.dart`).
 library;
-
-import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:navbridge/core/nav_protocol.dart';
 
 void main() {
-  group('buildNavFrame', () {
-    test('layout matches firmware/PROTOCOL.md §7', () {
-      final f = buildNavFrame(
-        meter: 141,
-        iconCode: iconTurnLeft,
-        hour: 7,
-        minute: 17,
-        text: 'Vườn Lài',
-      );
-      expect(f[0], 0x20); // magic
-      expect(f[1], 0x07); // magic
-      expect(f[2], 0x0A); // navigation message
-      expect(f[3], 141 & 0xFF); // meterL
-      expect(f[4], (141 >> 8) & 0xFF); // meterH
-      expect(f[5], iconTurnLeft);
-      expect(f[6], 7); // hour
-      expect(f[7], 17); // minute
-      expect(f[8], utf8.encode('Vườn Lài').length); // lenTxt
-      expect(f.last, 0xAF); // end frame
-    });
-
-    test('encodes the UTF-8 payload bytes after the header', () {
-      const text = 'Đi thẳng vào đường Nguyễn Huệ';
-      final tb = utf8.encode(text);
-      final f = buildNavFrame(
-        meter: 10,
-        iconCode: iconStraight,
-        hour: 0,
-        minute: 0,
-        text: text,
-      );
-      expect(f[8], tb.length);
-      expect(f.length, 9 + tb.length + 1);
-      for (var i = 0; i < tb.length; i++) {
-        expect(f[9 + i], tb[i]);
-      }
-    });
-
-    test('clamps the meter to 16 bits', () {
-      final f = buildNavFrame(
-        meter: 0x1FFFF,
-        iconCode: iconStraight,
-        hour: 0,
-        minute: 0,
-        text: '',
-      );
-      expect(f[3], 0xFF);
-      expect(f[4], 0xFF);
-      expect(f[8], 0);
-      expect(f.length, 10); // 9 header + 0 text + 1 end
+  group('iconSymbol', () {
+    test('arrow symbols point in driving direction', () {
+      expect(iconSymbol(iconTurnLeft), '←');
+      expect(iconSymbol(iconTurnRight), '→');
+      expect(iconSymbol(iconSlightLeft), '↖');
+      expect(iconSymbol(iconSlightRight), '↗');
+      expect(iconSymbol(iconStraight), '↑');
+      expect(iconSymbol(iconUturnLeft), '↩');
+      expect(iconSymbol(iconUturnRight), '↩');
+      expect(iconSymbol(iconRoundabout), '↻');
+      expect(iconSymbol(iconArrive), '⛳');
+      expect(iconSymbol(iconUnknown), '↑');
     });
   });
 
@@ -124,9 +84,17 @@ void main() {
     });
   });
 
-  test('etaFromRemaining stays within a day', () {
+  test('etaFromRemaining stays within a day and handles edge cases', () {
     final (h, m) = etaFromRemaining(15 * 60);
     expect(h, inInclusiveRange(0, 23));
     expect(m, inInclusiveRange(0, 59));
+
+    final (hZero, mZero) = etaFromRemaining(0);
+    expect(hZero, inInclusiveRange(0, 23));
+    expect(mZero, inInclusiveRange(0, 59));
+
+    final (hNeg, mNeg) = etaFromRemaining(-100);
+    expect(hNeg, inInclusiveRange(0, 23));
+    expect(mNeg, inInclusiveRange(0, 59));
   });
 }

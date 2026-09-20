@@ -9,15 +9,13 @@ extension _NavBars on _NavigationPageState {
       ? 'Điểm ${(nav!.stopIndex + 1)}/${nav.totalStops}'
       : '';
 
-  /// Combined BLE displays status (E-ink clock + ESP32 2.8" nav display):
-  /// green when either is connected.
+  /// BLE display status (ESP32 2.8" nav display NAV-OSM):
+  /// green when connected.
   String get _displaysStatus {
-    if (_clockStatus == 'connected' || _mapStatus == 'connected') {
+    if (_mapStatus == 'connected') {
       return 'connected';
     }
-    if (_clockStatus == 'connecting' ||
-        _mapStatus == 'connecting' ||
-        _autoConnect.isConnecting) {
+    if (_mapStatus == 'connecting' || _autoConnect.isConnecting) {
       return 'connecting';
     }
     return 'off';
@@ -82,7 +80,7 @@ extension _NavBars on _NavigationPageState {
       destination: _destinationName,
       progress: nav,
       recording: _trip != null,
-      clockConnected: _clock.isConnected,
+      clockConnected: _mapClock.isConnected,
       stopLabel: _stopLabel(nav),
       steps: _route?.steps ?? const [],
       expanded: _showSteps,

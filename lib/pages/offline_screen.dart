@@ -6,6 +6,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -13,12 +14,12 @@ import 'package:latlong2/latlong.dart';
 
 import 'package:navbridge/services/offline_router.dart';
 import 'package:navbridge/services/offline_tiles.dart';
+import 'package:navbridge/services/offline_data_updater.dart';
 import 'package:navbridge/services/nav_map_store.dart';
 import 'package:navbridge/core/settings.dart';
 import 'package:navbridge/services/terrain.dart';
 import 'package:navbridge/ui/widgets.dart';
-import 'package:navbridge/services/vietmap_config.dart'
-    show graphDownloadBaseUrl;
+import 'package:navbridge/services/vietmap_config.dart' show appendCartoApiKey;
 
 String formatBytes(int b) {
   if (b >= 1 << 30) return '${(b / (1 << 30)).toStringAsFixed(2)} GB';
@@ -73,6 +74,32 @@ class _OfflineScreenState extends State<OfflineScreen> {
   int _cacheBytes = 0;
   StreamSubscription<bool>? _connSub;
 
+  // --- auto-update of camera / road-sign data ---
+  bool _dataUpdating = false;
+  String _dataUpdateResult = '';
+  bool _dataUpdateEnabled = false;
+
+  Future<void> _refreshDataUpdateState() async {
+    setState(() {
+      _dataUpdateEnabled = OfflineDataUpdater.instance.enabled;
+      _dataUpdateResult = OfflineDataUpdater.instance.lastResult;
+    });
+  }
+
+  Future<void> _checkDataUpdate() async {
+    setState(() {
+      _dataUpdating = true;
+      _dataUpdateResult = 'Đang kiểm tra…';
+    });
+    await OfflineDataUpdater.instance.autoUpdate();
+    if (mounted) {
+      setState(() {
+        _dataUpdating = false;
+        _dataUpdateResult = OfflineDataUpdater.instance.lastResult;
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -81,6 +108,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
     _refreshNavMap();
     _refreshTerrain();
     _forceOffline = forceOffline;
+    _refreshDataUpdateState();
     _connSub = onlineStream().listen((o) {
       if (mounted) setState(() => _online = o);
     });
@@ -180,6 +208,97 @@ class _OfflineScreenState extends State<OfflineScreen> {
     } finally {
       if (mounted) setState(() => _graphDownloading = false);
       await _refreshGraph();
+    }
+  }
+
+  /// Pick an OSM PBF or GraphHopper .ghz archive from the phone, convert on-device,
+  /// and automatically delete the source download file to save storage.
+  Future<void> _pickGraphFile() async {
+    try {
+      final res = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pbf', 'ghz', 'zip', 'osm'],
+      );
+      if (res == null || res.files.isEmpty || res.files.single.path == null) {
+        return;
+      }
+      final filePath = res.files.single.path!;
+      final src = File(filePath);
+      if (!src.existsSync()) return;
+
+      setState(() => _graphLoading = true);
+      final dir = await routingGraphDir();
+      final ext = filePath.endsWith('.osm.pbf')
+          ? '.osm.pbf'
+          : filePath.substring(filePath.lastIndexOf('.'));
+      final target = '$dir$ext';
+
+      // Copy to private app storage for fast MMAP access
+      if (src.path != target) {
+        await src.copy(target);
+
+        // Auto-delete the original download from /sdcard/Download or storage to save space!
+        try {
+          await src.delete();
+        } catch (_) {}
+      }
+
+      final ok = await OfflineRouter.instance.load(target);
+      if (mounted) {
+        setState(() {
+          _graphLoading = false;
+          _graphLoaded = ok;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              ok
+                  ? 'Đã chuyển đổi và nạp thành công (đã xoá tệp tải về để tiết kiệm dung lượng).'
+                  : 'Không nạp được bộ dữ liệu.',
+            ),
+          ),
+        );
+      }
+      await _refreshGraph();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _graphLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi nạp tệp: $e')),
+        );
+      }
+    }
+  }
+
+  /// Delete the on-device routing graph to reclaim phone storage.
+  Future<void> _deleteGraph() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Xoá bộ dữ liệu chỉ đường?'),
+        content: const Text(
+          'Toàn bộ dữ liệu GraphHopper ngoại tuyến sẽ bị xoá khỏi máy để giải phóng dung lượng.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Huỷ'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Xoá'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await deleteRoutingGraph();
+    await _refreshGraph();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đã xoá bộ dữ liệu chỉ đường.')),
+      );
     }
   }
 
@@ -365,7 +484,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
     final b = await Navigator.of(context).push<LatLngBounds>(
       MaterialPageRoute(builder: (_) => const _RegionPicker()),
     );
-    if (b != null) {
+    if (b != null && mounted) {
       _preset(b);
     }
   }
@@ -500,6 +619,79 @@ class _OfflineScreenState extends State<OfflineScreen> {
                     ? 'Đang bật — chỉ dùng dữ liệu đã tải, không gọi internet.'
                     : 'Chỉ dùng bản đồ và chỉ đường đã tải, không dùng internet.',
                 style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Dữ liệu giao thông (tự cập nhật)',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Material(
+            color: const Color(0xFFF1F3F4),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.sync, size: 18, color: kAppBlue),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _dataUpdateEnabled
+                              ? 'Camera & biển báo giao thông tải tự động khi có '
+                                    'bản mới (không cần cài APK).'
+                              : 'Chưa cấu hình máy chủ cập nhật dữ liệu giao thông '
+                                    '(DATA_URL). Mở ⚙ → Nguồn dữ liệu để đặt URL.',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  if (_dataUpdateResult.isNotEmpty)
+                    Text(
+                      _dataUpdateResult,
+                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                    ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: kAppBlue,
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size.fromHeight(44),
+                      ),
+                      onPressed: _online && !_dataUpdating && _dataUpdateEnabled
+                          ? _checkDataUpdate
+                          : null,
+                      icon: _dataUpdating
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.download),
+                      label: Text(
+                        _dataUpdating
+                            ? 'Đang cập nhật…'
+                            : 'Kiểm tra cập nhật ngay',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -954,18 +1146,10 @@ class _OfflineScreenState extends State<OfflineScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Tải bộ dữ liệu GraphHopper (khoảng 300–500 MB cho Việt Nam) '
-                    'một lần để định tuyến hoàn toàn ngoại tuyến, kể cả khi đi lệch lộ trình.',
+                    'Chuyển đổi dữ liệu trực tiếp trên máy và tự động xoá tệp nén/PBF tải về '
+                    'sau khi hoàn tất để tiết kiệm dung lượng điện thoại.',
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
-                  if (graphDownloadBaseUrl.isEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      'Chưa cấu hình URL tải (dùng --dart-define=GRAPH_URL). '
-                      'Có thể nạp bộ dữ liệu đã có trên máy bằng nút "Nạp bộ dữ liệu".',
-                      style: TextStyle(fontSize: 11, color: Colors.orange[800]),
-                    ),
-                  ],
                   const SizedBox(height: 8),
                   if (_graphDownloading) ...[
                     LinearProgressIndicator(
@@ -980,46 +1164,88 @@ class _OfflineScreenState extends State<OfflineScreen> {
                   ] else ...[
                     Row(
                       children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: _graphHas && !_graphLoading
-                                ? _loadGraph
-                                : null,
-                            icon: _graphLoading
-                                ? const SizedBox(
-                                    width: 14,
-                                    height: 14,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.upload_file, size: 18),
-                            label: const Text(
-                              'Nạp bộ dữ liệu',
-                              style: TextStyle(fontSize: 13),
+                        if (_graphHas) ...[
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: !_graphLoading ? _loadGraph : null,
+                              icon: _graphLoading
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.refresh, size: 18),
+                              label: const Text(
+                                'Nạp lại',
+                                style: TextStyle(fontSize: 13),
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            // Disabled unless a GRAPH_URL was configured and
-                            // no graph is present yet (and we're online).
-                            onPressed:
-                                _online &&
-                                    !_graphHas &&
-                                    graphDownloadBaseUrl.isNotEmpty
-                                ? _downloadGraph
-                                : null,
-                            icon: const Icon(Icons.download, size: 18),
-                            label: Text(
-                              _graphHas ? 'Đã có' : 'Tải xuống',
-                              style: const TextStyle(fontSize: 13),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: !_graphLoading ? _deleteGraph : null,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.red[700],
+                              ),
+                              icon: const Icon(Icons.delete_outline, size: 18),
+                              label: const Text(
+                                'Xoá',
+                                style: TextStyle(fontSize: 13),
+                              ),
                             ),
                           ),
-                        ),
+                        ] else ...[
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _online && !_graphLoading
+                                  ? _downloadGraph
+                                  : null,
+                              icon: const Icon(Icons.download, size: 18),
+                              label: const Text(
+                                'Tải xuống',
+                                style: TextStyle(fontSize: 13),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: !_graphLoading ? _pickGraphFile : null,
+                              icon: _graphLoading
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.folder_open, size: 18),
+                              label: const Text(
+                                'Chọn tệp',
+                                style: TextStyle(fontSize: 13),
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
+                    if (_graphHas) ...[
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: !_graphLoading ? _pickGraphFile : null,
+                          icon: const Icon(Icons.folder_open, size: 18),
+                          label: const Text(
+                            'Chọn tệp khác từ máy (.pbf / .ghz)',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ],
               ),
@@ -1102,7 +1328,7 @@ class _RegionPickerState extends State<_RegionPicker> {
             ),
             children: [
               TileLayer(
-                urlTemplate: tileDownloadBaseUrl,
+                urlTemplate: appendCartoApiKey(tileDownloadBaseUrl),
                 userAgentPackageName: 'com.navbridge.app',
               ),
             ],

@@ -15,8 +15,21 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-import 'package:navbridge/services/ble_clock.dart'
-    show ClockLink, ScannedClockDevice;
+/// Link state exposed to the UI (decoupled from flutter_blue_plus types).
+enum ClockLink { off, connecting, connected }
+
+/// One BLE device seen during the picker scan.
+class ScannedClockDevice {
+  final String id; // remoteId (MAC on Android)
+  final String name;
+  final int rssi;
+
+  const ScannedClockDevice({
+    required this.id,
+    required this.name,
+    required this.rssi,
+  });
+}
 
 /// GATT profile of the ESP32 nav display (`ble_nav.cpp`).
 abstract final class MapDisplayGatt {
@@ -46,6 +59,7 @@ class BleMapClock {
   final Map<String, ScannedClockDevice> _devices = {};
   ClockLink _link = ClockLink.off;
   StreamSubscription<List<ScanResult>>? _scanSub;
+  StreamSubscription<BluetoothConnectionState>? _connSub;
   bool _scanActive = false;
 
   /// "NAV-OSM ready" banner read from the char on connect ('' if unavailable).
@@ -153,6 +167,13 @@ class BleMapClock {
             .timeout(const Duration(seconds: 25));
       }
       _device = device;
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        try {
+          await _device!.requestMtu(512);
+        } catch (e) {
+          debugPrint('[MAP] requestMtu failed: $e');
+        }
+      }
 
       await _device!.discoverServices();
       await _findCharacteristic();
@@ -163,10 +184,26 @@ class BleMapClock {
       }
       await _readHello();
       _setLink(ClockLink.connected);
+      _watchConnection(_device);
     } catch (e) {
       _setLink(ClockLink.off);
       rethrow;
     }
+  }
+
+  /// Watch [BluetoothDevice.connectionState] so an unexpected hardware drop
+  /// (power-off / out-of-range / drained battery) sets link off, which lets
+  /// [BleAutoConnectService] schedule a reconnect. Manual disconnects are
+  /// handled by [disconnect].
+  void _watchConnection(BluetoothDevice? device) {
+    _connSub?.cancel();
+    if (device == null) return;
+    _connSub = device.connectionState.listen((state) {
+      if (state == BluetoothConnectionState.disconnected) {
+        debugPrint('[MAP] link dropped by hardware (${device.remoteId.str})');
+        _setLink(ClockLink.off);
+      }
+    });
   }
 
   /// Auto-hunt the map display: it advertises continuously, so a short scan
@@ -355,6 +392,8 @@ class BleMapClock {
   }
 
   Future<void> disconnect() async {
+    _connSub?.cancel();
+    _connSub = null;
     _scanSub?.cancel();
     _scanSub = null;
     _notifySub?.cancel();

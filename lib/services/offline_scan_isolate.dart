@@ -14,6 +14,7 @@ library;
 
 import 'dart:async';
 import 'dart:isolate';
+import 'dart:math' as math;
 
 import 'package:latlong2/latlong.dart';
 
@@ -23,6 +24,102 @@ import 'offline_scan.dart';
 
 /// Which offline DB a query targets.
 enum _Kind { cameras, signs }
+
+/// Collapse the SAME physical sign recorded by overlapping sources (Waze /
+/// VietMap / DATMAP) at a few-metre offset, so the nav map and the sign
+/// announcement don't show a stack of identical icons for one real sign.
+///
+/// Keyed by KIND ONLY within a ~100 m radius (per user: "open to 100m, same
+/// kind is ok too") — the driver wants ONE icon per sign post, so an 80 and a
+/// 90 recorded at the same post by different sources collapse to a single sign
+/// rather than stacking. The road-info/statutory layer still carries the
+/// per-segment limit. A STOP and a speed sign at one post are different kinds
+/// → both kept. Keeps the FIRST (nearest, since the stage input is
+/// route-ordered).
+List<SignAhead> dedupSignAhead(List<SignAhead> ahead) {
+  if (ahead.isEmpty) return ahead;
+  final kept = <(RoadSign, double)>[];
+  for (final a in ahead) {
+    if (!_signKept(kept, a.sign)) kept.add((a.sign, a.routeMeters));
+  }
+  return [for (final (s, m) in kept) SignAhead(sign: s, routeMeters: m)];
+}
+
+/// Same as [dedupSignAhead] but for a bare [RoadSign] list (the route map
+/// layer, which isn't route-ordered) — collapse same-kind signs within a
+/// ~100 m radius so one physical sign (recorded by several sources) renders
+/// as a single icon.
+List<RoadSign> dedupRoadSigns(List<RoadSign> signs) {
+  if (signs.isEmpty) return signs;
+  final kept = <(RoadSign, double)>[];
+  for (final s in signs) {
+    if (!_signKept(kept, s)) kept.add((s, 0));
+  }
+  return [for (final (s, _) in kept) s];
+}
+
+/// Collapse the SAME physical camera recorded by overlapping sources (Waze /
+/// VietMap EDOG / police / OSM) at a few-metre offset, so the nav map and
+/// camera alert don't show a stack of identical icons for one camera.
+///
+/// Keyed by FOCUS ONLY within a ~100 m radius (same rule as the signs: "same
+/// kind is ok too"). A red-light cam and a speed cam at the same spot are
+/// different focus → both kept. Keeps the FIRST (nearest, since the route-ahead
+/// input is along-route ordered).
+List<CameraAhead> dedupCameraAhead(List<CameraAhead> ahead) {
+  if (ahead.isEmpty) return ahead;
+  final kept = <(OfflineCamera, double)>[];
+  for (final a in ahead) {
+    if (!_camKept(kept, a.camera)) kept.add((a.camera, a.routeMeters));
+  }
+  return [for (final (c, m) in kept) CameraAhead(camera: c, routeMeters: m)];
+}
+
+/// Same as [dedupCameraAhead] but for a bare [OfflineCamera] list (the route
+/// map layer / near-point layer) — collapse same-focus cameras within a
+/// ~100 m radius so one physical camera renders as a single icon.
+List<OfflineCamera> dedupCameras(List<OfflineCamera> cams) {
+  if (cams.isEmpty) return cams;
+  final kept = <(OfflineCamera, double)>[];
+  for (final c in cams) {
+    if (!_camKept(kept, c)) kept.add((c, 0));
+  }
+  return [for (final (c, _) in kept) c];
+}
+
+/// True if a same-focus [OfflineCamera] already sits within ~100 m of the
+/// kept list. Distinct focus always pass (speed + red_light at one spot are
+/// both kept).
+bool _camKept(List<(OfflineCamera, double)> kept, OfflineCamera c) {
+  if (kept.isEmpty) return false;
+  for (final (k, _) in kept) {
+    if (k.focus != c.focus) continue;
+    if (_approxDistM(k.lat, k.lng, c.lat, c.lng) < 100) return true;
+  }
+  return false;
+}
+
+/// True if a same-kind [RoadSign] already sits within ~100 m of the kept
+/// list. Distinct kinds always pass (STOP + speed at one post are both kept).
+bool _signKept(List<(RoadSign, double)> kept, RoadSign s) {
+  if (kept.isEmpty) return false;
+  for (final (k, _) in kept) {
+    if (k.kind != s.kind) continue;
+    if (_approxDistM(k.lat, k.lng, s.lat, s.lng) < 100) return true;
+  }
+  return false;
+}
+
+/// Approximate metres between two lat/lng (equirectangular — fine at ≤ a few
+/// hundred metres, which is all this near-dup radius test needs).
+double _approxDistM(double la1, double lo1, double la2, double lo2) {
+  const mPerDegLat = 111320.0;
+  final lat = (la1 - la2) * mPerDegLat;
+  // cos(VN lat ~18°) ≈ 0.95; using 0.95 keeps the radius honest at the
+  // latitudes we care about.
+  final lng = (lo1 - lo2) * mPerDegLat * 0.95;
+  return math.sqrt(lat * lat + lng * lng);
+}
 
 /// Init: main → worker, ships the DBs once.
 class _InitMsg {
@@ -84,8 +181,25 @@ class OfflineScanIsolate {
   final ReceivePort _receive = ReceivePort();
   final Map<int, Completer<Object?>> _pending = {};
   int _seq = 0;
+  // Memoised initialisation so two concurrent queries (cameras + signs fire
+  // together on the first fix) never both reach `_receive.listen()` on the
+  // single-subscription ReceivePort (which would throw "Bad state").
+  Future<void>? _initFuture;
 
   Future<void> _ensure() async {
+    if (_initFuture != null) return _initFuture!;
+    final fresh = _doEnsure();
+    _initFuture = fresh;
+    try {
+      await fresh;
+    } catch (_) {
+      // Don't memoise a failed init: let the next query retry.
+      if (identical(_initFuture, fresh)) _initFuture = null;
+      rethrow;
+    }
+  }
+
+  Future<void> _doEnsure() async {
     if (_send != null) return;
     // Load the DBs once here (rootBundle isn't available in a raw isolate).
     // Both loaders are idempotent/cached, so this is a one-time cost.
@@ -132,10 +246,13 @@ class OfflineScanIsolate {
     );
     final list = (res as List?) ?? const [];
     final cams = await loadOfflineCameras();
-    return [
+    // Kept strictly ordered by along-route distance: every consumer reads this
+    // as "the cameras ahead, nearest first". The ALERT then picks the most
+    // IMPORTANT one with [mostImportantCameraAhead] instead of `.first`.
+    return dedupCameraAhead([
       for (final (i, m) in list.cast<(int, double)>())
         CameraAhead(camera: cams[i], routeMeters: m),
-    ];
+    ]);
   }
 
   /// Signs ahead of [current] along [geometry].
@@ -157,10 +274,11 @@ class OfflineScanIsolate {
     );
     final list = (res as List?) ?? const [];
     final signs = await loadOfflineRoadSigns();
-    return [
+    final ahead = [
       for (final (i, m) in list.cast<(int, double)>())
         SignAhead(sign: signs[i], routeMeters: m),
     ];
+    return dedupSignAhead(ahead);
   }
 
   /// Cameras within [corridorMeters] of the whole route (map layer).
@@ -175,7 +293,7 @@ class OfflineScanIsolate {
     );
     final list = (res as List?) ?? const [];
     final cams = await loadOfflineCameras();
-    return [for (final i in list.cast<int>()) cams[i]];
+    return dedupCameras([for (final i in list.cast<int>()) cams[i]]);
   }
 
   /// Signs within [corridorMeters] of the whole route (map layer).
@@ -190,7 +308,7 @@ class OfflineScanIsolate {
     );
     final list = (res as List?) ?? const [];
     final signs = await loadOfflineRoadSigns();
-    return [for (final i in list.cast<int>()) signs[i]];
+    return dedupRoadSigns([for (final i in list.cast<int>()) signs[i]]);
   }
 
   /// Dispose the isolate (shutdown).
@@ -198,6 +316,9 @@ class OfflineScanIsolate {
     _isolate?.kill();
     _isolate = null;
     _send = null;
+    // Force the next query to re-initialise a fresh isolate + send port
+    // instead of completing against the killed isolate's stale send port.
+    _initFuture = null;
   }
 }
 

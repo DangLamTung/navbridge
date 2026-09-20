@@ -29,7 +29,8 @@ import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/poi_search.dart';
 import 'package:navbridge/ui/sign_icons.dart';
 import 'package:navbridge/services/terrain.dart';
-import 'package:navbridge/services/vietmap_config.dart' show VietmapConfig;
+import 'package:navbridge/services/vietmap_config.dart'
+    show VietmapConfig, appendCartoApiKey;
 import 'package:navbridge/core/car_filter.dart';
 import 'package:navbridge/core/route_snap.dart';
 import 'package:navbridge/core/trip_plan.dart';
@@ -144,6 +145,7 @@ class VectorNavMap extends StatefulWidget {
     this.initialCenter,
     this.onPoiTap,
     this.onCameraTap,
+    this.onSignTap,
     this.signs = const [],
   });
 
@@ -287,6 +289,10 @@ class VectorNavMap extends StatefulWidget {
   /// map — lets the page show what the camera is + its data source.
   final void Function(OfflineCamera cam)? onCameraTap;
 
+  /// Called when the driver taps one of the road signs shown on the nav
+  /// map — lets the page show what the sign is + its data source.
+  final void Function(RoadSign sign)? onSignTap;
+
   /// Road signs near the route (stop / give-way / traffic lights) drawn as
   /// small colored dots on the nav map.
   final List<RoadSign> signs;
@@ -323,7 +329,13 @@ class _VectorNavMapState extends State<VectorNavMap>
   final List<Circle> _trafficLights = [];
   String? _lastPoiSig;
   String? _lastSearchSig;
-  final List<Circle> _cameraCircles = [];
+  /// Cameras on the route, projected to screen space and drawn as Flutter
+  /// overlays (a camera PNG). Native circles are deliberately NOT used — see
+  /// [_projectCameraOverlays] for why.
+  final List<({OfflineCamera cam, Offset pos})> _cameraOverlays = [];
+  /// Cameras currently in scope (route-filtered); reprojected on camera move.
+  List<OfflineCamera> _activeCams = const [];
+  DateTime? _lastCameraProject;
   String? _lastCameraSig;
 
   /// Real sign icons (stop / give-way / speed / prohibitions / traffic
@@ -424,6 +436,7 @@ class _VectorNavMapState extends State<VectorNavMap>
   @override
   void initState() {
     super.initState();
+    _tileServerPort = NavTileServer.instance.port;
     WidgetsBinding.instance.addObserver(this);
     _puckTicker = createTicker(_onPuckTick);
     _camTicker = createTicker(_onCamTick);
@@ -630,15 +643,14 @@ class _VectorNavMapState extends State<VectorNavMap>
       final port = await NavTileServer.instance.ensureStarted(
         templates: _fallbackTiles(),
         sourceName: widget.tileSource,
+        nightMode: widget.nightMode,
       );
       if (_tileServerPort == port) return;
       _tileServerPort = port;
       debugPrint('VECTORMAP: tile server on 127.0.0.1:$port');
       if (!mounted) return;
       // Rebuild the style so the basemap now points at the loopback server.
-      final s = _baseStyle != null
-          ? _buildStyleString()
-          : _rasterFallbackStyle();
+      final s = _buildStyleString();
       _styleString = s;
       final ctrl = _controller;
       if (ctrl != null) {
@@ -657,6 +669,7 @@ class _VectorNavMapState extends State<VectorNavMap>
     NavTileServer.instance.update(
       templates: _fallbackTiles(),
       sourceName: widget.tileSource,
+      nightMode: widget.nightMode,
     );
   }
 
@@ -695,15 +708,10 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// The style JSON string with (or without) 3D terrain, depending on
   /// [widget.terrain3D] and whether offline DEM data exists.
   String _buildStyleString() {
-    // The nav map must NEVER go blank. Use the consistent vector style when
-    // a vector style exists AND we are inside the bundled vector coverage OR
-    // offline (the online raster has no tiles offline, which is what used to
-    // leave a blank gray map outside coverage). Online + outside coverage →
-    // the user's chosen online raster basemap (nice map outside HCMC).
-    final curPos = widget.current;
-    final outside = curPos != null && !_insideNavCoverage(curPos);
-    if (_baseStyle == null ||
-        (!widget.offline && (outside || curPos == null))) {
+    // When the user has chosen a specific basemap type (osm, esri, topo, carto, etc.),
+    // render the raster basemap style so the chosen basemap is 100% visible.
+    // The bundled PMTiles vector style is used only when widget.tileSource == 'vector'.
+    if (_baseStyle == null || widget.tileSource != 'vector') {
       return _rasterFallbackStyle();
     }
     final style = applyTerrainToStyle(
@@ -747,6 +755,13 @@ class _VectorNavMapState extends State<VectorNavMap>
       'source': 'basemap',
       'paint': <String, dynamic>{'raster-opacity': 1.0},
     });
+    // Lane markings on multi-lane roads: a thin dashed white line down the
+    // centre of classified roads, so a wide motorway/highway reads as a real
+    // multi-lane road (not one solid grey band). Drawn on top of the road
+    // fill, below the road-name/sign symbols. Uses the OpenMapTiles `lanes`
+    // attribute when present to render a dash per divider; otherwise a single
+    // centred dashed line.
+    _injectLaneMarkings(style);
     // Rain-radar overlay (RainViewer): wire the selected frame's tile URL and
     // toggle the layer visibility. Empty tiles render nothing when off.
     final radarSrc = src['radar'] as Map<String, dynamic>?;
@@ -786,13 +801,75 @@ class _VectorNavMapState extends State<VectorNavMap>
     return jsonEncode(style);
   }
 
+  /// Inject a lane-markings layer into the vector style so multi-lane roads
+  /// read as multi-lane: a thin dashed white line centred on classified roads
+  /// (motorway / trunk / primary / secondary / tertiary). When the tile has a
+  /// `lanes` count (>1) the layer also draws a dash per divider using
+  /// line-offset; otherwise a single centred dashed line.
+  void _injectLaneMarkings(Map<String, dynamic> style) {
+    final layers = style['layers'] as List<dynamic>;
+    // A dashed divider that scales the dash with the road width.
+    final dash = <dynamic>[1.4, 1.1];
+    final widthStops = <dynamic>[
+      <dynamic>[12, 0.8],
+      <dynamic>[14, 1.8],
+      <dynamic>[16, 3.2],
+      <dynamic>[18, 5.5],
+      <dynamic>[20, 8.0],
+    ];
+    // Bright white so the dashes clearly read as lane paint on the road.
+    const dashColor = 'rgba(255,255,255,0.95)';
+    final laneLayer = <String, dynamic>{
+      'id': 'road_lane_marker',
+      'type': 'line',
+      'source': 'openmaptiles',
+      'source-layer': 'transportation',
+      'minzoom': 12,
+      'filter': <dynamic>[
+        'all',
+        <dynamic>['in', 'class', 'motorway', 'trunk', 'primary', 'secondary', 'tertiary'],
+        <dynamic>['==', '\$type', 'LineString'],
+      ],
+      'layout': <String, dynamic>{
+        'line-cap': 'butt',
+        'line-join': 'round',
+        'visibility': 'visible',
+      },
+      'paint': <String, dynamic>{
+        'line-color': dashColor,
+        'line-width': <String, dynamic>{
+          'base': 1.2,
+          'stops': widthStops,
+        },
+        'line-dasharray': dash,
+      },
+    };
+    // Where to insert: just before the first road-name/symbol layer so the
+    // dashes sit on top of the road fill but under labels & signs. We look
+    // for the first layer whose id starts with "road_" and is a symbol layer
+    // (name/ref text) — fall back to inserting before the first symbol layer.
+    int insertAt = layers.length;
+    for (var i = 0; i < layers.length; i++) {
+      final l = layers[i];
+      if (l is! Map) continue;
+      final type = l['type'];
+      if (type == 'symbol') {
+        insertAt = i;
+        break;
+      }
+    }
+    // Avoid duplicates if the style is rebuilt.
+    layers.removeWhere((l) => l is Map && l['id'] == 'road_lane_marker');
+    layers.insert(insertAt, laneLayer);
+  }
+
   /// Minimal raster-only MapLibre style for areas OUTSIDE the bundled vector
   /// tiles: an opaque background + the user's chosen online basemap raster
   /// (Carto voyager by default, dark in night mode; Vietmap when the Vietmap
   /// data source is active online). Keeps the same look as the browse map.
   String _rasterFallbackStyle() {
     final dark = widget.nightMode;
-    final tiles = _fallbackTiles();
+    final tiles = _basemapTiles();
     final sources = <String, dynamic>{
       'basemap': <String, dynamic>{
         'type': 'raster',
@@ -867,7 +944,7 @@ class _VectorNavMapState extends State<VectorNavMap>
   List<String> _basemapTiles() {
     final port = _tileServerPort;
     if (port != null) {
-      return ['http://127.0.0.1:$port/tiles/{z}/{x}/{y}.png'];
+      return ['http://127.0.0.1:$port/tiles/${widget.tileSource}/{z}/{x}/{y}.png'];
     }
     final root = _offlineTilesRoot;
     if (widget.offline && root != null) {
@@ -895,11 +972,15 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// shorthand that flutter_map/Leaflet uses. A raw `{s}` template resolves to
   /// a literal `{s}.basemaps.cartocdn.com` host and every tile fails DNS,
   /// leaving a blank map. So CARTO subdomains are expanded to all four hosts.
-  List<String> _fallbackTiles() {
-    if (widget.vietmapBase && VietmapConfig.hasKeys) {
+  List<String> _fallbackTiles([String? sourceOverride]) {
+    final src = sourceOverride ?? widget.tileSource;
+    if (src == 'vietmap' && VietmapConfig.hasKeys) {
       return [VietmapConfig.mapTiles];
     }
-    switch (widget.tileSource) {
+    if (src == 'vietmapsat' && VietmapConfig.hasKeys) {
+      return [VietmapConfig.satelliteTiles];
+    }
+    switch (src) {
       case 'osm':
         return _osm();
       case 'topo':
@@ -919,6 +1000,7 @@ class _VectorNavMapState extends State<VectorNavMap>
       case 'carto-dark':
         return _carto('dark_all');
       case 'carto':
+      case 'vector':
       default:
         return widget.nightMode
             ? _carto('dark_all')
@@ -936,10 +1018,18 @@ class _VectorNavMapState extends State<VectorNavMap>
 
   /// All four CARTO subdomains, with `{s}` expanded to real hosts for MapLibre.
   List<String> _carto(String style) => [
-    'https://a.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
-    'https://b.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
-    'https://c.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
-    'https://d.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+    appendCartoApiKey(
+      'https://a.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+    ),
+    appendCartoApiKey(
+      'https://b.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+    ),
+    appendCartoApiKey(
+      'https://c.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+    ),
+    appendCartoApiKey(
+      'https://d.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+    ),
   ];
 
   /// Real dark-map theme for the vector style (used when [widget.nightMode]).
@@ -1361,121 +1451,110 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// Camera markers (colored dot per focus) on the nav map. Mirrors
   /// [_updatePois]: clear-then-rebuild when the signature changes.
   ///
+  /// ONLY cameras on/near the active route are drawn, and only ONE circle each
+  /// — see the notes in the body for why (the old 5-circles-per-camera,
+  /// everything-within-300-m version ANR'd the app during navigation).
+  ///
   /// No text label: the offline font stack is Roboto (no emoji glyphs) and
   /// a label on every camera would clutter dense cities (HCMC has ~700). The
-  /// circle color carries the type — red speed / amber red-light / blue
+  /// circle colour carries the type — red speed / amber red-light / blue
   /// general — matching the browse-map markers.
+  ///
+  /// Max perpendicular distance (m) a camera may sit from the active route and
+  /// still be drawn. Beyond this it is off-route: not a hazard the driver can
+  /// act on, and every extra marker costs a native round-trip.
+  static const double _cameraRouteMaxM = 120;
+
   Future<void> _updateCameras() async {
     final ctrl = _controller;
     if (ctrl == null) return;
-    // Perf: 4 native circles per camera — cap to the ~60 nearest to the car
-    // (HCMC has ~700; far ones aren't useful while driving). Traffic signs
-    // (focus 'sign') are EXEMPT from the cap: show ALL within 300 m.
+    // Only cameras ON or beside the ACTIVE ROUTE. Off-route cameras are
+    // useless while driving, and keeping them was the main cause of the
+    // navigation ANR: the old code kept every `focus == 'sign'` entry within
+    // 300 m PLUS the 60 nearest others, and drew EACH one as five native
+    // circles. Every `addCircle` round-trips to MapLibre, which re-serialises
+    // the whole annotation set to GeoJSON and parses it with Gson on the
+    // PLATFORM thread — ~1,500 circles blocked the main thread for seconds
+    // (ANR, app pinned at 317% CPU).
+    //
+    // Signs are deliberately NOT drawn here: they have their own real
+    // Vietnamese sign icons in the Flutter overlay layer
+    // ([_projectSignOverlays]), so green dots for them were duplicate clutter
+    // AND the biggest contributor to the annotation churn.
     final cur = widget.current;
     final all = widget.cameras;
-    final nearSigns = <OfflineCamera>[];
-    final others = <OfflineCamera>[];
+    final route = _drawnRoute();
+    final onRoute = <OfflineCamera>[];
     for (final c in all) {
-      if (c.focus == 'sign' &&
-          cur != null &&
-          _distMeters(cur, ll.LatLng(c.lat, c.lng)) <= 300) {
-        nearSigns.add(c);
-      } else {
-        others.add(c);
+      if (c.focus == 'sign') continue; // rendered as an icon, not a dot
+      if (route.length >= 2) {
+        final p = ll.LatLng(c.lat, c.lng);
+        final snapped = snapToRoutePolyline(p, route);
+        if (_distMeters(p, snapped) > _cameraRouteMaxM) continue;
       }
+      onRoute.add(c);
     }
+    // Still bound the count — a long route can carry a lot of cameras.
     final cams = <OfflineCamera>[
-      ...nearSigns,
-      ..._nearestCameras(others, 60, cur),
+      ..._nearestCameras(onRoute, 60, cur),
     ];
+    _activeCams = cams; // reprojected on every camera move, not just on change
     final sig = _cameraSignature(cams, cur);
     if (sig == _lastCameraSig) return;
     _lastCameraSig = sig;
-    debugPrint('VECTORMAP: camera layer n=${cams.length}');
-    for (final c in _cameraCircles) {
-      try {
-        ctrl.removeCircle(c);
-      } catch (_) {}
+    debugPrint('VECTORMAP: camera layer n=${cams.length} (route only)');
+    await _projectCameraOverlays();
+  }
+
+  /// Project the route cameras to their on-screen spots and draw them as
+  /// Flutter overlays — a camera PNG, exactly like the sign icons.
+  ///
+  /// NOTHING is pushed to MapLibre here, so this costs zero platform-thread
+  /// work. Native annotations were what ANR'd the app: every `addCircle`
+  /// round-trips to MapLibre, which re-serialises the WHOLE feature set to
+  /// GeoJSON and Gson-parses it on the UI thread (stack: `LinkedTreeMap
+  /// $EntrySet$1.next` → `GeoJsonSource.nativeSetFeatureCollection`), blocking
+  /// the main thread for seconds at 317% CPU.
+  Future<void> _projectCameraOverlays() async {
+    final ctrl = _controller;
+    if (!mounted || ctrl == null) return;
+    final cams = _activeCams;
+    if (cams.isEmpty) {
+      if (_cameraOverlays.isNotEmpty) setState(() => _cameraOverlays.clear());
+      return;
     }
-    _cameraCircles.clear();
-    for (final c in cams) {
-      final col = switch (c.focus) {
-        'speed' => '#D93025', // red — speed camera
-        'red_light' => '#F9AB00', // amber — red-light camera
-        'sign' => '#0F9D58', // green — traffic sign
-        _ => '#4285F4', // blue — general enforcement
-      };
-      // Camera source shown as a thin ring around the body so the driver can
-      // trust the origin: waze=purple · police=teal · osm=green · ?=grey.
-      final srcCol = switch (c.source) {
-        'waze' => '#7B1FA2', // Waze community speed-camera tiles
-        'police' => '#00897B', // police phạt nguội fine lists
-        'osm' => '#34A853', // OSM Overpass
-        _ => '#5F6368',
-      };
-      try {
-        // Camera-lens look (cheap native circles that read as a camera at a
-        // glance): soft coloured glow → coloured body with a white ring →
-        // white "lens" with a coloured pupil. The white ring + lens make the
-        // marker pop on the dark nav map (the old single dot was easy to
-        // miss while driving).
-        final glow = await ctrl.addCircle(
-          CircleOptions(
-            geometry: LatLng(c.lat, c.lng),
-            circleColor: col,
-            circleRadius: 11.0,
-            circleStrokeColor: '#202124',
-            circleStrokeWidth: 3.0,
-            circleOpacity: 0.30,
-          ),
-        );
-        // Source ring (transparent fill, coloured stroke) between glow+body.
-        final srcRing = await ctrl.addCircle(
-          CircleOptions(
-            geometry: LatLng(c.lat, c.lng),
-            circleColor: '#00000000',
-            circleRadius: 9.6,
-            circleStrokeColor: srcCol,
-            circleStrokeWidth: 1.8,
-            circleOpacity: 0.95,
-          ),
-        );
-        final body = await ctrl.addCircle(
-          CircleOptions(
-            geometry: LatLng(c.lat, c.lng),
-            circleColor: col,
-            circleRadius: 7.5,
-            circleStrokeColor: '#FFFFFF',
-            circleStrokeWidth: 2.5,
-            circleOpacity: 1.0,
-          ),
-        );
-        final lens = await ctrl.addCircle(
-          CircleOptions(
-            geometry: LatLng(c.lat, c.lng),
-            circleColor: '#FFFFFF',
-            circleRadius: 3.2,
-            circleStrokeColor: '#202124',
-            circleStrokeWidth: 1.4,
-            circleOpacity: 1.0,
-          ),
-        );
-        final pupil = await ctrl.addCircle(
-          CircleOptions(
-            geometry: LatLng(c.lat, c.lng),
-            circleColor: col,
-            circleRadius: 1.6,
-            circleStrokeWidth: 0,
-            circleOpacity: 1.0,
-          ),
-        );
-        _cameraCircles.add(glow);
-        _cameraCircles.add(srcRing);
-        _cameraCircles.add(body);
-        _cameraCircles.add(lens);
-        _cameraCircles.add(pupil);
-      } catch (_) {}
+    // Same ~4 Hz throttle as the sign layer: the follow camera fires this every
+    // frame, and reprojecting that often is wasted work on a low-end phone.
+    final now = DateTime.now();
+    if (_lastCameraProject != null &&
+        now.difference(_lastCameraProject!) <
+            const Duration(milliseconds: 250)) {
+      return;
     }
+    _lastCameraProject = now;
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    final list = <({OfflineCamera cam, Offset pos})>[];
+    try {
+      final pts = await ctrl.toScreenLocationBatch([
+        for (final c in cams) LatLng(c.lat, c.lng),
+      ]);
+      if (!mounted) return;
+      for (var i = 0; i < cams.length && i < pts.length; i++) {
+        list.add((
+          cam: cams[i],
+          pos: Offset(pts[i].x.toDouble() / dpr, pts[i].y.toDouble() / dpr),
+        ));
+      }
+    } catch (_) {
+      // Keep the previous frame rather than flicker the layer off.
+      return;
+    }
+    if (list.isEmpty) return;
+    setState(() {
+      _cameraOverlays
+        ..clear()
+        ..addAll(list);
+    });
   }
 
   /// Road-sign markers on the nav map. ALL signs — STOP / give-way / speed /
@@ -1502,6 +1581,30 @@ class _VectorNavMapState extends State<VectorNavMap>
       }
       return;
     }
+
+    // Zoom-dependent sign culling:
+    // < 11.0: hidden completely (country / region scale)
+    // < 14.5: show only 20-30 important signs (speed, khu dân cư, cấm vượt, STOP)
+    // >= 14.5: show all route signs at street level
+    final List<RoadSign> activeSigns;
+    if (_zoom < 11.0) {
+      activeSigns = const [];
+    } else if (_zoom < 14.5) {
+      final important = signs.where((s) => s.isImportant).toList();
+      final cap = ((_zoom - 11.0) * 3 + 20).round().clamp(20, 30);
+      activeSigns =
+          important.length > cap ? important.sublist(0, cap) : important;
+    } else {
+      activeSigns = signs;
+    }
+
+    if (activeSigns.isEmpty) {
+      if (_signOverlays.isNotEmpty && mounted) {
+        setState(() => _signOverlays.clear());
+      }
+      return;
+    }
+
     // Throttle: the car-follow camera fires this every frame; reprojecting the
     // real-image sign layer at most ~4 Hz keeps the low-end phone smooth.
     final now = DateTime.now();
@@ -1511,18 +1614,47 @@ class _VectorNavMapState extends State<VectorNavMap>
     }
     _lastSignProject = now;
     final dpr = MediaQuery.of(context).devicePixelRatio;
+    // Project to screen. `toScreenLocationBatch` can throw as a WHOLE (e.g.
+    // while the style is still loading, or if a single point is invalid), and
+    // the old `catch (_) {}` then silently dropped EVERY sign — so a transient
+    // failure looked to the driver like "the signs are missing from the map".
+    // Now a batch failure falls back to per-point projection, so one bad point
+    // can only ever cost its own sign.
+    final list = <({RoadSign sign, Offset pos})>[];
+    var batchOk = false;
     try {
       final pts = await ctrl.toScreenLocationBatch([
-        for (final s in signs) LatLng(s.lat, s.lng),
+        for (final s in activeSigns) LatLng(s.lat, s.lng),
       ]);
       if (!mounted) return;
-      final list = <({RoadSign sign, Offset pos})>[];
-      for (var i = 0; i < signs.length; i++) {
+      for (var i = 0; i < activeSigns.length && i < pts.length; i++) {
         list.add((
-          sign: signs[i],
+          sign: activeSigns[i],
           pos: Offset(pts[i].x.toDouble() / dpr, pts[i].y.toDouble() / dpr),
         ));
       }
+      batchOk = list.length == activeSigns.length;
+    } catch (e) {
+      debugPrint('VECTORMAP: sign batch projection failed ($e) — per-point fallback');
+    }
+    if (!mounted) return;
+    // Per-point recovery for anything the batch did not deliver.
+    if (!batchOk) {
+      for (var i = list.length; i < activeSigns.length; i++) {
+        final s = activeSigns[i];
+        try {
+          final p = await ctrl.toScreenLocation(LatLng(s.lat, s.lng));
+          list.add((
+            sign: s,
+            pos: Offset(p.x.toDouble() / dpr, p.y.toDouble() / dpr),
+          ));
+        } catch (_) {
+          // Skip just this sign; keep the rest of the layer alive.
+        }
+      }
+    }
+    if (list.isEmpty) return;
+    try {
       // Diff to avoid rebuild spam (positions are recreated each call).
       var changed = list.length != _signOverlays.length;
       if (!changed) {
@@ -1823,6 +1955,7 @@ class _VectorNavMapState extends State<VectorNavMap>
     unawaited(_projectSignOverlays()); // keep real sign icons glued to map
     unawaited(_projectPoiOverlays()); // POI emoji markers glued to map
     unawaited(_projectSearchOverlays()); // search-result markers glued to map
+    unawaited(_projectCameraOverlays()); // camera PNGs glued to map
     try {
       final size = MediaQuery.of(context).size;
       final dpr = MediaQuery.of(context).devicePixelRatio;
@@ -2062,7 +2195,9 @@ class _VectorNavMapState extends State<VectorNavMap>
     _routeLine = null;
     _trafficLines.clear();
     _trafficLights.clear();
-    _cameraCircles.clear();
+    _cameraOverlays.clear();
+    _activeCams = const [];
+    _lastCameraProject = null;
     _poiOverlays.clear();
     _searchOverlays.clear();
   }
@@ -2246,9 +2381,21 @@ class _VectorNavMapState extends State<VectorNavMap>
           Positioned(
             left: o.pos.dx - 20,
             top: o.pos.dy - 20,
-            child: IgnorePointer(
-              child: SignIcon(kind: o.sign.kind, value: o.sign.value, size: 40),
+            child: _tapMarker(
+              widget.onSignTap == null
+                  ? null
+                  : () => widget.onSignTap!(o.sign),
+              SignIcon(kind: o.sign.kind, value: o.sign.value, size: 40),
             ),
+          ),
+        // Cameras on the route — a camera PNG glued to the map (Flutter
+        // overlay, same trick as the sign icons, so there is no native
+        // annotation churn).
+        for (final o in _cameraOverlays)
+          Positioned(
+            left: o.pos.dx - 14,
+            top: o.pos.dy - 14,
+            child: IgnorePointer(child: _cameraMarker()),
           ),
         // POI emoji markers (⛽ 🍜 ☕ …) — big + always visible, projected like
         // the car arrow. The tapped/selected POI renders larger. TAPPABLE:
@@ -2284,6 +2431,19 @@ class _VectorNavMapState extends State<VectorNavMap>
       ],
     );
   }
+
+  /// Camera marker: a real camera PNG (the Waze alerter icon) drawn as a
+  /// Flutter overlay, mirroring [SignIcon]. No MapLibre annotation involved.
+  Widget _cameraMarker() => SizedBox(
+        width: 28,
+        height: 28,
+        child: Image.asset(
+          'assets/waze/icon_alerter_cam_speed.png',
+          width: 28,
+          height: 28,
+          filterQuality: FilterQuality.medium,
+        ),
+      );
 
   /// Small tappable wrapper for map markers: a tap fires [onTap]; no drag
   /// recognizer, so dragging the map over a marker still pans. When [onTap]

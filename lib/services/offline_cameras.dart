@@ -8,6 +8,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
@@ -103,19 +104,75 @@ class CameraAhead {
 final OfflineListLoader<OfflineCamera> _cameras =
     OfflineListLoader<OfflineCamera>(_fetchCameras);
 
+/// Distance bonus (negative) / penalty (positive) in metres by camera TYPE —
+/// how much this camera matters to the driver:
+///   red light + speed   → automated fines (highest priority)
+///   phạt nguội         → fine cameras
+///   phone / seatbelt    → AI enforcement cameras
+///   bus lane / distance / stop → situational
+///   traffic_camera      → plain surveillance (76% of the DB), lowest
+double cameraUrgency(OfflineCamera c) => switch (c.type) {
+  'red_light' || 'red_light_camera' || 'speed_camera' => -150,
+  'penalty_camera' => -100,
+  'phone_camera' || 'seatbelt_camera' => -80,
+  'bus_lane_camera' || 'distance_camera' || 'stop_camera' => -30,
+  'traffic_camera' => 150,
+  // No type tag (police / OSM legacy rows) — fall back to the alert focus.
+  _ => switch (c.focus) {
+    'speed' || 'red_light' => -60,
+    'violations' => 60,
+    _ => 0,
+  },
+};
+
+/// The camera the driver should be WARNED about: the most IMPORTANT one ahead,
+/// not merely the nearest. 76% of the DB is VietMap "Camera giám sát giao
+/// thông" (plain surveillance), so a strictly nearest-first pick let a useless
+/// camera 60 m ahead shadow the red-light camera 200 m ahead that actually
+/// costs money. [ahead] must be along-route ordered (nearest first).
+CameraAhead? mostImportantCameraAhead(List<CameraAhead> ahead) {
+  if (ahead.isEmpty) return null;
+  var best = ahead.first;
+  var bestKey = best.routeMeters + cameraUrgency(best.camera);
+  for (final a in ahead.skip(1)) {
+    final k = a.routeMeters + cameraUrgency(a.camera);
+    // Strictly better, or equal urgency and nearer → keep the nearer one.
+    if (k < bestKey || (k == bestKey && a.routeMeters < best.routeMeters)) {
+      best = a;
+      bestKey = k;
+    }
+  }
+  return best;
+}
+
 /// Load the bundled camera index once (idempotent, cached).
 Future<List<OfflineCamera>> loadOfflineCameras() => _cameras.load();
 
+/// Drop the cached camera list so it re-reads from disk on next load — called
+/// after an auto-update replaces the downloaded `vietnam_cameras.json`.
+void reloadOfflineCameras() => _cameras.reload();
+
 Future<List<OfflineCamera>> _fetchCameras() async {
-  final raw = await rootBundle.loadString(
-    'assets/offline_map/vietnam_cameras.json',
-  );
+  final raw = await _readCameraData();
   final data = jsonDecode(raw) as Map<String, dynamic>;
   return [
     for (final it
         in (data['cameras'] as List? ?? const []).cast<Map<String, dynamic>>())
       OfflineCamera.fromJson(it),
   ];
+}
+
+/// Read the camera JSON, preferring a downloaded copy in app support over the
+/// bundled asset. The updater writes `<support>/offline_data/vietnam_cameras.json`
+/// when the server has a newer version; the loaders read that first.
+Future<String> _readCameraData() async {
+  try {
+    final f = await offlineDataFile('vietnam_cameras.json');
+    if (f != null && await f.exists()) {
+      return f.readAsString();
+    }
+  } catch (_) {}
+  return rootBundle.loadString('assets/offline_map/vietnam_cameras.json');
 }
 
 /// Find cameras AHEAD of [current] along [geometry], ordered by distance along
@@ -170,6 +227,8 @@ Future<List<OfflineCamera>> camerasNearRoute(
 /// (glow/body/lens/pupil) — 400+ platform-channel annotations held even
 /// off-screen crushed the low-end phone at large zoom. Bounded near-car set,
 /// refreshed every few seconds. Cheap bbox pre-filter, main-thread safe.
+/// Cross-source duplicates (Waze/VietMap/police/osm) within ~100 m of the same
+/// focus are collapsed so one physical camera shows as one icon.
 Future<List<OfflineCamera>> camerasNearPoint(
   LatLng pos, {
   double maxDistM = 6000,
@@ -178,17 +237,20 @@ Future<List<OfflineCamera>> camerasNearPoint(
   if (cams.isEmpty) return const [];
   const Distance d = Distance();
   final span = maxDistM / 111320.0;
+  // Longitude degrees shrink with cos(lat); without this, cameras due
+  // east/west in range get pruned by the bbox wall before the distance test.
+  final lngSpan = span / math.cos(pos.latitude * math.pi / 180.0);
   final out = <OfflineCamera>[];
   for (final c in cams) {
     if (c.lat < pos.latitude - span ||
         c.lat > pos.latitude + span ||
-        c.lng < pos.longitude - span ||
-        c.lng > pos.longitude + span) {
+        c.lng < pos.longitude - lngSpan ||
+        c.lng > pos.longitude + lngSpan) {
       continue;
     }
     if (d.as(LengthUnit.Meter, pos, c.pos) <= maxDistM) out.add(c);
   }
-  return out;
+  return dedupCameras(out);
 }
 
 /// Result cache for [isCameraConfirmed] (keyed by source + lat,lng) so the

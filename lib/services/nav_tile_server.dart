@@ -20,14 +20,11 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 
-import 'package:navbridge/services/offline_tiles.dart' show tileFile;
-
-/// User-Agent for the tile requests (OSM tile policy requires a stable,
-/// app-naming UA).
-const String _tileUA =
-    'NavBridge/1.0 (Android; BLE portable navigation; online map display)';
+import 'package:navbridge/services/offline_tiles.dart'
+    show fetchOnlineTileBytes, tileFile, isOnline, forceOffline;
+import 'package:navbridge/services/vietmap_config.dart'
+    show VietmapConfig, appendCartoApiKey;
 
 class NavTileServer {
   NavTileServer._();
@@ -45,18 +42,99 @@ class NavTileServer {
   /// Offline cache source folder ('' for the OSM root, else the source name).
   String? _sourceName;
 
-  Uint8List? _transparent;
-
   int? get port => _port;
   bool get isRunning => _server != null;
+
+  /// Map a known tile source to its online raster templates.
+  static List<String> templatesForSource(String source, {bool nightMode = false}) {
+    switch (source) {
+      case 'osm':
+        return const [
+          'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        ];
+      case 'topo':
+        return const ['https://tile.opentopomap.org/{z}/{x}/{y}.png'];
+      case 'esri':
+        return const [
+          'https://server.arcgisonline.com/ArcGIS/rest/services/'
+              'World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        ];
+      case 'esri-street':
+        return const [
+          'https://server.arcgisonline.com/ArcGIS/rest/services/'
+              'World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+        ];
+      case 'carto-light':
+        return [
+          appendCartoApiKey(
+            'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+          ),
+          appendCartoApiKey(
+            'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+          ),
+          appendCartoApiKey(
+            'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+          ),
+          appendCartoApiKey(
+            'https://d.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+          ),
+        ];
+      case 'carto-dark':
+        return [
+          appendCartoApiKey(
+            'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+          ),
+          appendCartoApiKey(
+            'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+          ),
+          appendCartoApiKey(
+            'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+          ),
+          appendCartoApiKey(
+            'https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+          ),
+        ];
+      case 'vietmap':
+        if (VietmapConfig.hasKeys) return [VietmapConfig.mapTiles];
+        return templatesForSource('osm', nightMode: nightMode);
+      case 'vietmapsat':
+        if (VietmapConfig.hasKeys) return [VietmapConfig.satelliteTiles];
+        return templatesForSource('esri', nightMode: nightMode);
+      case 'vector':
+      case 'carto':
+      default:
+        final style = nightMode ? 'dark_all' : 'rastertiles/voyager';
+        return [
+          appendCartoApiKey(
+            'https://a.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+          ),
+          appendCartoApiKey(
+            'https://b.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+          ),
+          appendCartoApiKey(
+            'https://c.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+          ),
+          appendCartoApiKey(
+            'https://d.basemaps.cartocdn.com/$style/{z}/{x}/{y}.png',
+          ),
+        ];
+    }
+  }
 
   /// Start (idempotent) and return the loopback port. Keeps the server alive
   /// for the app lifetime.
   Future<int> ensureStarted({
     required List<String> templates,
     String? sourceName,
+    bool? nightMode,
   }) async {
-    update(templates: templates, sourceName: sourceName);
+    update(
+      templates: templates,
+      sourceName: sourceName,
+      nightMode: nightMode,
+    );
     if (_server != null) return _port!;
     if (_starting) return _startFuture!;
     _starting = true;
@@ -82,10 +160,17 @@ class NavTileServer {
     return _port!;
   }
 
+  bool _nightMode = false;
+
   /// Update the active source templates / cache folder without restarting.
-  void update({required List<String> templates, String? sourceName}) {
+  void update({
+    required List<String> templates,
+    String? sourceName,
+    bool? nightMode,
+  }) {
     _templates = List<String>.unmodifiable(templates);
     _sourceName = sourceName;
+    if (nightMode != null) _nightMode = nightMode;
   }
 
   /// Shut the server down (only used in tests / teardown).
@@ -107,17 +192,29 @@ class NavTileServer {
         _write(req, 405, const [], contentType: 'text/plain');
         return;
       }
-      // Path like /tiles/15/26218/15090.png
+      // Path like /tiles/15/26218/15090.png (4 parts) OR /tiles/esri/15/26218/15090.png (5 parts)
       final parts = req.uri.path.split('/').where((s) => s.isNotEmpty).toList();
       if (parts.length < 4 || parts[0] != 'tiles') {
         _write(req, 404, const [], contentType: 'text/plain');
         return;
       }
-      final z = int.tryParse(parts[1]);
-      final x = int.tryParse(parts[2]);
-      var ys = parts[3];
-      if (ys.endsWith('.png')) ys = ys.substring(0, ys.length - 4);
-      final y = int.tryParse(ys);
+      final String? reqSource;
+      final int? z, x, y;
+      if (parts.length >= 5) {
+        reqSource = parts[1];
+        z = int.tryParse(parts[2]);
+        x = int.tryParse(parts[3]);
+        var ys = parts[4];
+        if (ys.endsWith('.png')) ys = ys.substring(0, ys.length - 4);
+        y = int.tryParse(ys);
+      } else {
+        reqSource = _sourceName;
+        z = int.tryParse(parts[1]);
+        x = int.tryParse(parts[2]);
+        var ys = parts[3];
+        if (ys.endsWith('.png')) ys = ys.substring(0, ys.length - 4);
+        y = int.tryParse(ys);
+      }
       if (z == null ||
           x == null ||
           y == null ||
@@ -133,7 +230,7 @@ class NavTileServer {
         _write(req, 400, const [], contentType: 'text/plain');
         return;
       }
-      final bytes = await _resolve(z, x, y);
+      final bytes = await _resolve(z, x, y, source: reqSource);
       _write(req, 200, bytes, contentType: 'image/png');
     } catch (e) {
       debugPrint('TILESRV: handle error: $e');
@@ -156,57 +253,81 @@ class NavTileServer {
   }
 
   // ---- tile resolution ------------------------------------------------
-  Future<Uint8List> _resolve(int z, int x, int y) async {
-    // 1. Local cache (bundled overview tiles + region downloads + auto-cached
-    //    tiles, matching the offline basemap path) — served raw.
-    File? cacheFile;
+  Future<Uint8List> _resolve(int z, int x, int y, {String? source}) async {
+    final activeSource = source ?? _sourceName;
+    // 1. Local disk cache hit (bundled overview tiles + region downloads + auto-cached tiles).
     try {
-      cacheFile = await tileFile(z, x, y, source: _sourceName);
+      final cacheFile = await tileFile(z, x, y, source: activeSource);
       if (await cacheFile.exists()) {
         final b = await cacheFile.readAsBytes();
-        if (_isPng(b) || await _decodeable(b)) return b;
+        if (_isPng(b)) return b;
+        final png = await _normalizePng(b);
+        if (png != null) return png;
+      }
+      if (activeSource != 'overview') {
+        final of = await tileFile(z, x, y, source: 'overview');
+        if (await of.exists()) {
+          final b = await of.readAsBytes();
+          if (_isPng(b)) return b;
+          final png = await _normalizePng(b);
+          if (png != null) return png;
+        }
       }
     } catch (e) {
       debugPrint('TILESRV: cache read error $z/$x/$y: $e');
     }
 
-    // 2. Online fetch via the app's HTTP client, normalised to PNG + cached.
-    for (final tpl in _templates) {
-      if (tpl.isEmpty) continue;
-      final url = _fill(tpl, z, x, y);
-      try {
-        final resp = await http
-            .get(Uri.parse(url), headers: {'User-Agent': _tileUA})
-            .timeout(const Duration(seconds: 8));
-        final body = resp.bodyBytes;
-        if (resp.statusCode == 200 && body.isNotEmpty) {
-          final png = await _normalizePng(body);
-          if (png != null) {
-            try {
-              cacheFile ??= await tileFile(z, x, y, source: _sourceName);
-              await cacheFile.parent.create(recursive: true);
-              await cacheFile.writeAsBytes(png, flush: true);
-            } catch (e) {
-              debugPrint('TILESRV: cache write error $z/$x/$y: $e');
-            }
-            return png;
-          }
-        }
-      } catch (e) {
-        debugPrint('TILESRV: fetch error $url: $e');
-      }
+    // 2. Online fetch when connected.
+    final online = !forceOffline && await isOnline();
+    if (online) {
+      final fetched = await _fetchOnline(z, x, y, source: activeSource);
+      if (fetched != null) return fetched;
     }
 
     // 3. Transparent fallback (keeps MapLibre from erroring out).
     return await _transparentPng();
   }
 
-  /// Fill {z}/{x}/{y} in a template, preserving the template's own order
-  /// (ESRI uses {z}/{y}/{x}, OSM uses {z}/{x}/{y}).
-  String _fill(String tpl, int z, int x, int y) => tpl
-      .replaceAll('{z}', '$z')
-      .replaceAll('{x}', '$x')
-      .replaceAll('{y}', '$y');
+  /// Try every online template; returns a decodable PNG (and caches it) or
+  /// null when every source failed.
+  Future<Uint8List?> _fetchOnline(int z, int x, int y, {String? source}) async {
+    final tpls = (source != null && source.isNotEmpty)
+        ? templatesForSource(source, nightMode: _nightMode)
+        : _templates;
+    final srcName = source ?? _sourceName;
+    for (final tpl in tpls) {
+      if (tpl.isEmpty) continue;
+      // Route through the OSM-policy-aware fetcher (offline_tiles.dart) so the
+      // nav basemap respects OSM's <=2-concurrent / ~1-tile/s limit, fails
+      // over across servers and rejects the "access blocked" placeholder.
+      // A naive raw http.get here fired an unthrottled burst at OSM during
+      // pan/zoom → 403/429 → blank map.
+      try {
+        final body = await fetchOnlineTileBytes(
+          z,
+          x,
+          y,
+          template: tpl,
+          source: srcName ?? 'osm',
+        );
+        if (body == null) continue;
+        final png = await _normalizePng(body);
+        if (png != null) {
+          try {
+            final cacheFile = await tileFile(z, x, y, source: srcName);
+            await cacheFile.parent.create(recursive: true);
+            await cacheFile.writeAsBytes(png, flush: true);
+          } catch (e) {
+            debugPrint('TILESRV: cache write error $z/$x/$y: $e');
+          }
+          return png;
+        }
+      } catch (e) {
+        debugPrint('TILESRV: fetch error $tpl $z/$x/$y: $e');
+      }
+    }
+    return null;
+  }
 
   /// True if [bytes] begin with the PNG magic.
   bool _isPng(Uint8List b) =>
@@ -227,16 +348,6 @@ class NavTileServer {
     }
   }
 
-  Future<bool> _decodeable(Uint8List bytes) async {
-    if (_isPng(bytes)) return true;
-    try {
-      await _toPng(bytes);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
   /// Decode any raster image and re-encode as PNG.
   Future<Uint8List> _toPng(Uint8List bytes) async {
     final codec = await ui.instantiateImageCodec(bytes);
@@ -250,20 +361,18 @@ class NavTileServer {
     }
   }
 
-  Future<Uint8List> _transparentPng() async {
-    final cached = _transparent;
-    if (cached != null) return cached;
-    final recorder = ui.PictureRecorder();
-    final canvas = ui.Canvas(recorder);
-    final paint = ui.Paint()..color = const ui.Color(0x00000000);
-    canvas.drawRect(const ui.Rect.fromLTWH(0, 0, 256, 256), paint);
-    final img = await recorder.endRecording().toImage(256, 256);
-    try {
-      final bd = await img.toByteData(format: ui.ImageByteFormat.png);
-      _transparent = bd!.buffer.asUint8List();
-      return _transparent!;
-    } finally {
-      img.dispose();
-    }
-  }
+  static final Uint8List _transparentPngBytes = Uint8List.fromList(const [
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, // 8-bit RGBA
+    0x89,                                           // IHDR crc
+    0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, // IDAT
+    0x78, 0x9C, 0x63, 0x60, 0x00, 0x02, 0x00, 0x00, // payload
+    0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F,       // IDAT crc
+    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, // IEND
+    0xAE, 0x42, 0x60, 0x82,                         // IEND crc
+  ]);
+
+  Future<Uint8List> _transparentPng() async => _transparentPngBytes;
 }
