@@ -36,8 +36,7 @@ void noteGoogleQuota({required int statusCode, String? status, String? body}) {
       statusCode == 429 ||
       s == 'OVER_QUERY_LIMIT' ||
       s == 'RESOURCE_EXHAUSTED' ||
-      (s == 'REQUEST_DENIED' &&
-          (b.contains('quota') || b.contains('limit'))) ||
+      (s == 'REQUEST_DENIED' && (b.contains('quota') || b.contains('limit'))) ||
       (statusCode == 403 &&
           (b.contains('quota') ||
               b.contains('limit') ||
@@ -64,5 +63,37 @@ void noteVietmapQuota({required int statusCode, String? body}) {
   if (!exhausted) return;
   announceApiNotice(
     'Vietmap: lỗi xác thực hoặc hết hạn mức API. Đang tự động chuyển key khác.',
+  );
+}
+
+/// Per-provider timestamp of the last route-fallback notice, so a source that
+/// is down cannot pop a SnackBar on every off-route reroute.
+final Map<String, DateTime> _lastFallback = {};
+
+/// Announce that routing fell through from [provider] to [next] (null = no
+/// provider left, so this attempt failed outright).
+///
+/// Route fall-throughs used to be `debugPrint`-only, which meant a driver whose
+/// Google key expired — or whose phone lost data mid-drive — silently got OSRM
+/// geometry, or no route at all, with nothing on screen explaining why.
+///
+/// Throttled to one notice per provider per minute (on top of
+/// [announceApiNotice]'s 10 s dedupe): reroutes can fire repeatedly while a
+/// provider is down, and the driver only needs to be told once.
+void noteRouteFallback({
+  required String provider,
+  String? next,
+  Object? error,
+}) {
+  final now = DateTime.now();
+  final last = _lastFallback[provider];
+  if (last != null && now.difference(last) < const Duration(seconds: 60)) {
+    return;
+  }
+  _lastFallback[provider] = now;
+  announceApiNotice(
+    next == null
+        ? '$provider: không lấy được tuyến đường.'
+        : '$provider: lỗi chỉ đường — đang thử $next.',
   );
 }

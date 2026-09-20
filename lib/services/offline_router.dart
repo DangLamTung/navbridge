@@ -15,12 +15,14 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'offline_tiles.dart' show forceOffline, routingEngine;
+import 'offline_tiles.dart' show forceOffline;
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/core/route_profile.dart';
-import 'vietmap_config.dart' show dataSource, graphDownloadBaseUrl;
+import 'vietmap_config.dart' show graphDownloadBaseUrl;
 import 'package:navbridge/services/vietmap_router.dart';
 import 'package:navbridge/services/google_router.dart';
+import 'package:navbridge/services/api_notice.dart' show noteRouteFallback;
+import 'package:navbridge/services/route_providers.dart';
 
 const MethodChannel _channel = MethodChannel('navbridge/routing');
 
@@ -367,20 +369,16 @@ Future<bool> downloadGraph([
   final urlStr = (customUrl != null && customUrl.isNotEmpty)
       ? customUrl
       : (graphDownloadBaseUrl.isNotEmpty
-          ? (graphDownloadBaseUrl.endsWith('.ghz') ||
-                  graphDownloadBaseUrl.endsWith('.pbf')
-              ? graphDownloadBaseUrl
-              : '$graphDownloadBaseUrl/graph.ghz')
-          : 'https://download.geofabrik.de/asia/vietnam-latest.osm.pbf');
+            ? (graphDownloadBaseUrl.endsWith('.ghz') ||
+                      graphDownloadBaseUrl.endsWith('.pbf')
+                  ? graphDownloadBaseUrl
+                  : '$graphDownloadBaseUrl/graph.ghz')
+            : 'https://download.geofabrik.de/asia/vietnam-latest.osm.pbf');
 
   final dir = await routingGraphDir();
   final isPbf = urlStr.contains('.pbf');
   final target = isPbf ? '$dir.osm.pbf' : '$dir.ghz';
-  final ok = await downloadToFile(
-    urlStr,
-    target,
-    onProgress ?? (_, _) {},
-  );
+  final ok = await downloadToFile(urlStr, target, onProgress ?? (_, _) {});
   if (!ok) {
     throw StateError('Không tải được bộ dữ liệu GraphHopper ($urlStr).');
   }
@@ -511,12 +509,21 @@ Future<OsrmRoute> fetchAnyRoute(
 }
 
 /// Like [fetchAnyRoute] but returns up to [maxAlternatives] route options
-/// (best first) when the active source can produce alternatives (OSRM
-/// `alternatives=` or Vietmap `alternative=true`). The on-device car graph
-/// returns a single route.
-/// [avoidHighway] / [avoidFerry] re-route without motorways / ferries
-/// (OSRM `exclude=motorway,ferry`); the on-device car graph and Vietmap
-/// don't support exclusions, so they're ignored there.
+/// (best first) when the active source can produce alternatives (Google /
+/// Vietmap / OSRM `alternatives=`); the on-device car graph returns one.
+///
+/// Walks [resolveRouteChain] — the single source of the provider ORDER — and
+/// falls through to the next entry whenever a provider fails or returns
+/// nothing. Every fall-through is announced to the driver
+/// ([noteRouteFallback]) instead of only hitting the log, and the flags a
+/// provider CANNOT honour are documented in `route_providers.dart` rather than
+/// being silently dropped here.
+///
+/// [avoidHighway] / [avoidFerry] are forwarded to every provider that supports
+/// them: Google (legacy `avoid=` / v2 `routeModifiers`), the on-device graph
+/// (`avoidMotorway`) and OSRM (`exclude=motorway,ferry`, except on the
+/// `motorcycle` profile which already bans motorways). Vietmap route v4 has no
+/// exclusion parameter, so they are dropped there.
 ///
 /// [onlineTimeout] caps how long an ONLINE attempt (Google / Vietmap) may
 /// take before falling through to the on-device graph / OSRM. Live off-route
@@ -534,80 +541,115 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
   Duration? onlineTimeout,
   double? startHeading,
 }) async {
-  // Xe mô tô is PROHIBITED on VN motorways — the OSRM `motorcycle` profile and
-  // Vietmap's `vehicle=motorcycle` account for that natively; the car
-  // `driving` profile still honours the user's "avoid highway" toggle via
-  // `exclude=motorway`.
-  if (dataSource == 'google' && !forceOffline) {
+  final chain = resolveRouteChain(profile);
+  Object? lastError;
+
+  for (var i = 0; i < chain.length; i++) {
+    final provider = chain[i];
+    final next = i + 1 < chain.length ? chain[i + 1] : null;
     try {
-      final fut = profile == RouteProfile.motorbike
+      final routes = await _routeVia(
+        provider,
+        points,
+        profile: profile,
+        maxAlternatives: maxAlternatives,
+        avoidHighway: avoidHighway,
+        avoidFerry: avoidFerry,
+        onlineTimeout: onlineTimeout,
+        startHeading: startHeading,
+      );
+      if (routes.isNotEmpty) return rankByPreference(routes, preference);
+      // Nothing to offer (e.g. the on-device graph has no path) — that is a
+      // fall-through, not an error, so don't tell the driver it "failed".
+      debugPrint('ROUTER: ${provider.label} returned no route — next');
+    } catch (e) {
+      lastError = e;
+      debugPrint('ROUTER: ${provider.label} failed: $e — next');
+      noteRouteFallback(provider: provider.label, next: next?.label, error: e);
+    }
+  }
+
+  // Nothing left. Prefer the REAL error from the last attempt that threw — a
+  // dead network must not be reported as "no offline data" — otherwise explain
+  // that no source can serve this profile at all.
+  if (lastError != null) throw lastError;
+  throw StateError(
+    profile == RouteProfile.car
+        ? 'Ngoại tuyến: chưa tải bộ dữ liệu chỉ đường'
+        : 'Ngoại tuyến: bộ dữ liệu chỉ hỗ trợ ô tô',
+  );
+}
+
+/// Attempt ONE provider from the chain. Throws on failure; returns [] when the
+/// provider answered but has no route. Keeping each provider's request in one
+/// place makes the promise in `route_providers.dart` auditable — if this drops
+/// [avoidHighway], [RouteProviderX.canAvoidHighway] must say so.
+Future<List<OsrmRoute>> _routeVia(
+  RouteProvider provider,
+  List<LatLng> points, {
+  required RouteProfile profile,
+  required int maxAlternatives,
+  required bool avoidHighway,
+  required bool avoidFerry,
+  Duration? onlineTimeout,
+  double? startHeading,
+}) async {
+  switch (provider) {
+    case RouteProvider.google:
+      // Motorbike must use Routes API v2 `TWO_WHEELER` (Legacy has no such
+      // mode); it honours routeModifiers.avoidHighways/avoidFerries.
+      final google = profile == RouteProfile.motorbike
           ? fetchGoogleTwoWheelerRoutes(
               points,
               maxAlternatives: maxAlternatives,
+              avoidHighway: avoidHighway,
+              avoidFerry: avoidFerry,
             )
-          : fetchGoogleRoutes(points, maxAlternatives: maxAlternatives);
-      final routes = onlineTimeout == null
-          ? await fut
-          : await fut.timeout(onlineTimeout);
-      return rankByPreference(routes, preference);
-    } catch (e) {
-      debugPrint('GOOGLE: route failed: $e — falling back to OSRM');
-    }
-  }
-  if (dataSource == 'vietmap' &&
-      !forceOffline &&
-      (profile == RouteProfile.car || profile == RouteProfile.motorbike)) {
-    try {
-      final fut = fetchVietmapRoutes(
+          : fetchGoogleRoutes(
+              points,
+              maxAlternatives: maxAlternatives,
+              profile: profile,
+              avoidHighway: avoidHighway,
+              avoidFerry: avoidFerry,
+            );
+      return onlineTimeout == null
+          ? await google
+          : await google.timeout(onlineTimeout);
+    case RouteProvider.vietmap:
+      // No exclusion parameter in route v4 — avoidHighway/avoidFerry stop here.
+      final vietmap = fetchVietmapRoutes(
         points,
         vehicle: profile == RouteProfile.motorbike ? 'motorcycle' : 'car',
         maxAlternatives: maxAlternatives,
       );
-      final routes = onlineTimeout == null
-          ? await fut
-          : await fut.timeout(onlineTimeout);
-      return rankByPreference(routes, preference);
-    } catch (e) {
-      debugPrint('VIETMAP: route failed: $e — falling back to OSRM');
-    }
-  }
-  if (profile == RouteProfile.car && routingEngine != 'osrm') {
-    // Wait for the on-device graph if it's still loading at startup (it can
-    // take ~60 s on low-end phones), so offline routing doesn't fail early.
-    await OfflineRouter.instance.ready;
-    if (OfflineRouter.instance.isLoaded) {
-      final local = await OfflineRouter.instance.route(
+      return onlineTimeout == null
+          ? await vietmap
+          : await vietmap.timeout(onlineTimeout);
+    case RouteProvider.graphhopper:
+      // Wait for the on-device graph if it's still loading at startup (it can
+      // take ~60 s on low-end phones), so offline routing doesn't fail early.
+      await OfflineRouter.instance.ready;
+      if (!OfflineRouter.instance.isLoaded) return const [];
+      return OfflineRouter.instance.route(
         points,
         maxAlternatives: maxAlternatives,
         avoidMotorway: avoidHighway,
         avoidFerry: avoidFerry,
         startHeading: startHeading,
       );
-      if (local.isNotEmpty) return rankByPreference(local, preference);
-    }
+    case RouteProvider.osrm:
+      return fetchOsrmRoutes(
+        points,
+        profile: profile.osrm,
+        exclude: osrmExclude(
+          // The OSRM `motorcycle` profile already keeps two-wheelers off
+          // motorways; `exclude=motorway` is unsupported on that profile.
+          avoidHighway: avoidHighway && profile != RouteProfile.motorbike,
+          avoidFerry: avoidFerry,
+        ),
+        maxAlternatives: maxAlternatives,
+        timeout: onlineTimeout,
+        startBearing: startHeading != null ? (startHeading, 45.0) : null,
+      );
   }
-  if (forceOffline || routingEngine == 'graphhopper') {
-    throw StateError(
-      profile == RouteProfile.car
-          ? 'Ngoại tuyến: chưa tải bộ dữ liệu chỉ đường'
-          : 'Ngoại tuyến: bộ dữ liệu chỉ hỗ trợ ô tô',
-    );
-  }
-  // Online OSRM returns up to [maxAlternatives] tap-to-choose routes.
-  return rankByPreference(
-    await fetchOsrmRoutes(
-      points,
-      profile: profile.osrm,
-      exclude: osrmExclude(
-        // The OSRM `motorcycle` profile already keeps two-wheelers off
-        // motorways; `exclude=motorway` is unsupported on that profile.
-        avoidHighway: avoidHighway && profile != RouteProfile.motorbike,
-        avoidFerry: avoidFerry,
-      ),
-      maxAlternatives: maxAlternatives,
-      timeout: onlineTimeout,
-      startBearing: startHeading != null ? (startHeading, 45.0) : null,
-    ),
-    preference,
-  );
 }

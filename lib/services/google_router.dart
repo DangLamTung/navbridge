@@ -1,52 +1,114 @@
-/// Google Maps Directions API client — driving route(s) with Google's
-/// traffic-aware ETA. Used when the user picks "Google" as the data source
-/// (search already uses Google Places; this makes ROUTING use Google too).
+/// Google routing client — the "Google" data source.
 ///
-/// Requires the Directions API enabled on the key (GOOGLE_PLACES_KEY) +
-/// billing. Returns routes in the same [OsrmRoute] shape the nav engine uses,
-/// so Google fits right into `fetchAnyRoutes` (falls back to OSRM on failure).
+/// Two endpoints, because Google splits them:
+///   • [fetchGoogleRoutes] — **Directions API (Legacy)** for car / bicycle /
+///     walking (`mode=driving|bicycling|walking`). Honours
+///     `avoid=highways|ferries`.
+///   • [fetchGoogleTwoWheelerRoutes] — **Routes API v2** `computeRoutes` for
+///     motorbikes (`travelMode: TWO_WHEELER`), the only Google mode that models
+///     two-wheelers — which VN law bans from expressways. Honours
+///     `routeModifiers.avoidHighways/avoidFerries`, which Google scopes to
+///     DRIVE **and TWO_WHEELER**.
+///
+/// Both need billing + the relevant API enabled on the single
+/// `VietmapConfig.googlePlacesKey`, and both return the [OsrmRoute] shape the
+/// nav engine consumes, so they drop straight into `fetchAnyRoutes`. Which
+/// provider runs when (and what it can honour) lives in `route_providers.dart`.
+///
+/// [googleDirectionsUrl] / [googleComputeRoutesBody] are PURE builders so the
+/// request contract is unit-testable without the network — the reason the
+/// avoid-flags and travel mode can be asserted at all.
 library;
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+
+import 'package:navbridge/core/route_profile.dart';
 
 import 'osrm.dart';
 import 'vietmap_config.dart';
 
-/// Fetch up to [maxAlternatives] Google driving routes through [points]
-/// (2+ waypoints, origin → … → destination). Converts each Google route to
-/// [OsrmRoute] (geometry decoded from overview polyline, steps from leg
+/// Legacy Directions `mode=` for [profile].
+///
+/// A motorbike must not come through here (use
+/// [fetchGoogleTwoWheelerRoutes]); it maps to `driving` only so a caller that
+/// forgets still sends a valid mode instead of an invalid one.
+String googleTravelMode(RouteProfile profile) => switch (profile) {
+  RouteProfile.bicycle => 'bicycling',
+  RouteProfile.walking => 'walking',
+  RouteProfile.car || RouteProfile.motorbike => 'driving',
+};
+
+/// Legacy Directions request URL (pure → unit-tested).
+///
+/// `avoid=` is a pipe-separated list and, per Google's docs, BIASES the result
+/// toward routes without the feature rather than forbidding it. Walking has no
+/// highways and the Legacy API ignores `avoid` there, so nothing is appended
+/// for walking and the request stays unambiguously valid.
+String googleDirectionsUrl({
+  required List<LatLng> points,
+  required String key,
+  RouteProfile profile = RouteProfile.car,
+  int maxAlternatives = 3,
+  bool avoidHighway = false,
+  bool avoidFerry = false,
+}) {
+  final origin = points.first;
+  final dest = points.last;
+  final via = points.length > 2
+      ? points.sublist(1, points.length - 1)
+      : const <LatLng>[];
+  final walk = profile == RouteProfile.walking;
+  final avoid = [
+    if (avoidHighway && !walk) 'highways',
+    if (avoidFerry && !walk) 'ferries',
+  ];
+  final parts = [
+    'origin=${origin.latitude},${origin.longitude}',
+    'destination=${dest.latitude},${dest.longitude}',
+    'mode=${googleTravelMode(profile)}',
+    'language=vi',
+    'alternatives=${maxAlternatives > 1}',
+    if (avoid.isNotEmpty) 'avoid=${avoid.join('|')}',
+    if (via.isNotEmpty)
+      'waypoints=${via.map((w) => '${w.latitude},${w.longitude}').join('|')}',
+    'key=$key',
+  ];
+  return 'https://maps.googleapis.com/maps/api/directions/json'
+      '?${parts.join('&')}';
+}
+
+/// Fetch up to [maxAlternatives] Google routes through [points] (2+ waypoints,
+/// origin → … → destination) via the Directions API (Legacy), honouring the
+/// profile's travel mode and the avoid toggles. Converts each Google route to
+/// [OsrmRoute] (geometry decoded from the overview polyline, steps from the leg
 /// steps, stopCumulative from leg distances). Throws a descriptive exception
-/// on failure (missing key / HTTP / API status).
+/// on failure (missing key / HTTP / API status) — `fetchAnyRoutes` turns that
+/// into a visible fall-through notice plus the next provider in the chain.
 Future<List<OsrmRoute>> fetchGoogleRoutes(
   List<LatLng> points, {
   int maxAlternatives = 3,
+  RouteProfile profile = RouteProfile.car,
+  bool avoidHighway = false,
+  bool avoidFerry = false,
 }) async {
   final key = VietmapConfig.googlePlacesKey;
   if (key.isEmpty) throw Exception('Chưa có khoá Google Maps');
   if (points.length < 2) {
     throw Exception('Cần ít nhất điểm đi và điểm đến');
   }
-  final origin = points.first;
-  final dest = points.last;
-  final via = points.length > 2
-      ? points.sublist(1, points.length - 1)
-      : <LatLng>[];
 
-  var url =
-      'https://maps.googleapis.com/maps/api/directions/json'
-      '?origin=${origin.latitude},${origin.longitude}'
-      '&destination=${dest.latitude},${dest.longitude}'
-      '&mode=driving'
-      '&language=vi'
-      '&alternatives=${maxAlternatives > 1}'
-      '&key=$key';
-  if (via.isNotEmpty) {
-    url +=
-        '&waypoints=${via.map((w) => '${w.latitude},${w.longitude}').join('|')}';
-  }
+  final url = googleDirectionsUrl(
+    points: points,
+    key: key,
+    profile: profile,
+    maxAlternatives: maxAlternatives,
+    avoidHighway: avoidHighway,
+    avoidFerry: avoidFerry,
+  );
 
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
@@ -64,6 +126,14 @@ Future<List<OsrmRoute>> fetchGoogleRoutes(
 
   final routes = (data['routes'] as List? ?? const [])
       .cast<Map<String, dynamic>>();
+  // Google REQUIRES these to be surfaced to the user (bicycling/walking "no
+  // dedicated path" caveats, road closures, …). Logged for now — a SnackBar on
+  // every route would be noise; raise via `announceApiNotice` if they matter.
+  for (final r in routes.take(1)) {
+    for (final w in (r['warnings'] as List? ?? const [])) {
+      debugPrint('GOOGLE: warning: $w');
+    }
+  }
   final out = <OsrmRoute>[];
   for (final r in routes.take(maxAlternatives)) {
     final legs = (r['legs'] as List? ?? const []).cast<Map<String, dynamic>>();
@@ -127,20 +197,19 @@ Future<List<OsrmRoute>> fetchGoogleRoutes(
   return out;
 }
 
-/// Fetch a motorbike route via the Routes API `computeRoutes` with
-/// `travelMode: TWO_WHEELER` (the Legacy Directions API has no motorbike
-/// mode, so this is the only way to get a real Google two-wheeler route —
-/// two-wheelers are banned from VN expressways, which this mode accounts
-/// for). Returns the same [OsrmRoute] shape the nav engine uses.
-Future<List<OsrmRoute>> fetchGoogleTwoWheelerRoutes(
-  List<LatLng> points, {
+/// Routes API v2 `computeRoutes` request body (pure → unit-tested).
+///
+/// `routeModifiers` is only attached when a toggle is on: Google documents
+/// `avoidHighways` / `avoidFerries` as applying to `DRIVE` and `TWO_WHEELER`,
+/// which is exactly the two profiles that reach this endpoint (a motorbike is
+/// already barred from VN expressways by `TWO_WHEELER` itself).
+Map<String, dynamic> googleComputeRoutesBody({
+  required List<LatLng> points,
   int maxAlternatives = 3,
-}) async {
-  final key = VietmapConfig.googlePlacesKey;
-  if (key.isEmpty) throw Exception('Chưa có khoá Google Maps');
-  if (points.length < 2) throw Exception('Cần ít nhất điểm đi và điểm đến');
-
-  final body = jsonEncode({
+  bool avoidHighway = false,
+  bool avoidFerry = false,
+}) {
+  return {
     'origin': _googleWaypoint(points.first),
     'destination': _googleWaypoint(points.last),
     if (points.length > 2)
@@ -150,9 +219,39 @@ Future<List<OsrmRoute>> fetchGoogleTwoWheelerRoutes(
       ],
     'travelMode': 'TWO_WHEELER',
     'computeAlternativeRoutes': maxAlternatives > 1,
+    if (avoidHighway || avoidFerry)
+      'routeModifiers': {
+        if (avoidHighway) 'avoidHighways': true,
+        if (avoidFerry) 'avoidFerries': true,
+      },
     'languageCode': 'vi',
     'units': 'METRIC',
-  });
+  };
+}
+
+/// Fetch a motorbike route via the Routes API `computeRoutes` with
+/// `travelMode: TWO_WHEELER` (the Legacy Directions API has no motorbike
+/// mode, so this is the only way to get a real Google two-wheeler route —
+/// two-wheelers are banned from VN expressways, which this mode accounts
+/// for). Returns the same [OsrmRoute] shape the nav engine uses.
+Future<List<OsrmRoute>> fetchGoogleTwoWheelerRoutes(
+  List<LatLng> points, {
+  int maxAlternatives = 3,
+  bool avoidHighway = false,
+  bool avoidFerry = false,
+}) async {
+  final key = VietmapConfig.googlePlacesKey;
+  if (key.isEmpty) throw Exception('Chưa có khoá Google Maps');
+  if (points.length < 2) throw Exception('Cần ít nhất điểm đi và điểm đến');
+
+  final body = jsonEncode(
+    googleComputeRoutesBody(
+      points: points,
+      maxAlternatives: maxAlternatives,
+      avoidHighway: avoidHighway,
+      avoidFerry: avoidFerry,
+    ),
+  );
 
   final res = await http
       .post(
@@ -170,28 +269,28 @@ Future<List<OsrmRoute>> fetchGoogleTwoWheelerRoutes(
     throw Exception('Google Routes HTTP ${res.statusCode}');
   }
   final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-  final routes =
-      (data['routes'] as List? ?? const []).cast<Map<String, dynamic>>();
+  final routes = (data['routes'] as List? ?? const [])
+      .cast<Map<String, dynamic>>();
 
   final out = <OsrmRoute>[];
   for (final r in routes.take(maxAlternatives)) {
     final polyline =
         ((r['polyline'] as Map?)?['encodedPolyline'] as String?) ?? '';
-    final geometry =
-        polyline.isEmpty ? const <LatLng>[] : decodePolyline(polyline);
+    final geometry = polyline.isEmpty
+        ? const <LatLng>[]
+        : decodePolyline(polyline);
     final durationS = _secondsFromDuration((r['duration'] as String?) ?? '');
     final distanceM = ((r['distanceMeters'] as num?) ?? 0).toDouble();
 
     final steps = <OsrmStep>[];
     final stopCum = <double>[];
     var cum = 0.0;
-    final legs =
-        (r['legs'] as List? ?? const []).cast<Map<String, dynamic>>();
+    final legs = (r['legs'] as List? ?? const []).cast<Map<String, dynamic>>();
     for (final leg in legs) {
       cum += ((leg['distanceMeters'] as num?) ?? 0).toDouble();
       stopCum.add(cum);
-      final legSteps =
-          (leg['steps'] as List? ?? const []).cast<Map<String, dynamic>>();
+      final legSteps = (leg['steps'] as List? ?? const [])
+          .cast<Map<String, dynamic>>();
       for (final s in legSteps) {
         final nav = (s['navigationInstruction'] as Map?) ?? const {};
         final sPoly =
@@ -264,8 +363,7 @@ int _secondsFromDuration(String s) {
   'MERGE' => ('merge', null),
   'ROUNDABOUT_LEFT' ||
   'ROUNDABOUT_RIGHT' ||
-  'ROUNDABOUT_STRAIGHT' =>
-    ('roundabout', null),
+  'ROUNDABOUT_STRAIGHT' => ('roundabout', null),
   'FORK_LEFT' => ('fork', 'left'),
   'FORK_RIGHT' => ('fork', 'right'),
   'RAMP_LEFT' || 'ON_RAMP_LEFT' => ('on ramp', 'left'),
