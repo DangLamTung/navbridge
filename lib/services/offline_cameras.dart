@@ -169,7 +169,10 @@ Future<String> _readCameraData() async {
   try {
     final f = await offlineDataFile('vietnam_cameras.json');
     if (f != null && await f.exists()) {
-      return f.readAsString();
+      // `await` matters: without it a failed READ escapes this try (the try only
+      // guards the awaits) and the bundled asset below is never used — the
+      // documented fallback silently didn't work.
+      return await f.readAsString();
     }
   } catch (_) {}
   return rootBundle.loadString('assets/offline_map/vietnam_cameras.json');

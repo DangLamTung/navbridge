@@ -216,7 +216,9 @@ Future<String> _readSignData() async {
   try {
     final f = await offlineDataFile('vietnam_signs.json');
     if (f != null && await f.exists()) {
-      return f.readAsString();
+      // `await` so a failed read falls back to the bundled asset below instead
+      // of escaping the try (see [_readCameraData]).
+      return await f.readAsString();
     }
   } catch (_) {}
   return rootBundle.loadString('assets/offline_map/vietnam_signs.json');
