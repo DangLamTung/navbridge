@@ -9,18 +9,6 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
-analyzer:
-  errors:
-    # The large data packs are built/downloaded locally and deliberately NOT
-    # committed: assets/offline_map/waze_segments.bin (the Waze posted-limit
-    # layer, ~27 MB — see docs/waze-data-pipeline.md) and the audio voice packs
-    # under assets/audio/. Flutter's pubspec asset validation therefore reports
-    # every one of them on a clean checkout (CI) even though the app loads them
-    # fine on a machine where they exist. Silenced so CI reports REAL problems:
-    # a typo'd asset path in a widget still fails the build.
-    asset_does_not_exist: ignore
-    asset_directory_does_not_exist: ignore
-
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

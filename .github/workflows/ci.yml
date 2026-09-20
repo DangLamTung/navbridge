@@ -22,6 +22,12 @@ jobs:
           channel: stable
           cache: true
 
+      # The two local-only data packs (offline_map/waze_segments.bin and
+      # assets/audio/**) are deliberately not in git; without them the asset
+      # bundle fails to build. CI only needs the paths to exist.
+      - name: Stub local-only data packs
+        run: ./tool/stub_assets.sh
+
       - name: Install dependencies
         run: flutter pub get
 
