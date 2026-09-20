@@ -11,7 +11,6 @@ library;
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
 import 'offline_loader.dart';
@@ -201,27 +200,14 @@ Future<List<RoadSign>> loadOfflineRoadSigns() => _signs.load();
 void reloadOfflineRoadSigns() => _signs.reload();
 
 Future<List<RoadSign>> _fetchSigns() async {
-  final raw = await _readSignData();
+  // Prefers an auto-updated copy over the bundled asset — see readOfflineText.
+  final raw = await readOfflineText('vietnam_signs.json');
   final data = jsonDecode(raw) as Map<String, dynamic>;
   return [
     for (final it
         in (data['signs'] as List? ?? const []).cast<Map<String, dynamic>>())
       if (!droppedSignKinds.contains(it['kind'])) RoadSign.fromJson(it),
   ];
-}
-
-/// Read the sign JSON, preferring a downloaded copy in app support over the
-/// bundled asset (see [_readCameraData] in offline_cameras.dart).
-Future<String> _readSignData() async {
-  try {
-    final f = await offlineDataFile('vietnam_signs.json');
-    if (f != null && await f.exists()) {
-      // `await` so a failed read falls back to the bundled asset below instead
-      // of escaping the try (see [_readCameraData]).
-      return await f.readAsString();
-    }
-  } catch (_) {}
-  return rootBundle.loadString('assets/offline_map/vietnam_signs.json');
 }
 
 /// Find the first sign AHEAD of [current] along [geometry], ordered by

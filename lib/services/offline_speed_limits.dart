@@ -16,8 +16,9 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show compute;
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
+
+import 'offline_loader.dart';
 
 /// Grid cell size in degrees (~2.2 km at the equator). Query touches 3×3 cells.
 const double _cellDeg = 0.02;
@@ -70,12 +71,13 @@ Future<void> loadOfflineSpeedLimits() {
 
 Future<void> _doLoad() async {
   // 1) Waze WME per-SEGMENT limits — the dense layer (95% of HCMC segments).
+  //
+  // Both the text and the binary layers go through the offline_loader readers,
+  // so a copy downloaded by the updater wins over the bundled asset — before
+  // this, the posted-limit layer read ONLY the bundle while the server
+  // published updated copies of these files that nothing ever consumed.
   try {
-    final bytes = await rootBundle.load('assets/offline_map/waze_segments.bin');
-    final raw = bytes.buffer.asUint8List(
-      bytes.offsetInBytes,
-      bytes.lengthInBytes,
-    );
+    final raw = await readOfflineBytes('waze_segments.bin');
     _segs = await compute(_buildSegIndex, raw);
   } catch (_) {
     _segs = null;
@@ -83,8 +85,8 @@ Future<void> _doLoad() async {
   // 2) Waze / VietMap posted-limit POINTS (sparse, but a real sign location).
   try {
     final raws = await Future.wait(<Future<String>>[
-      rootBundle.loadString('assets/offline_map/waze_speed_limits.json'),
-      rootBundle.loadString('assets/offline_map/vietmap_speed_limits.json'),
+      readOfflineText('waze_speed_limits.json'),
+      readOfflineText('vietmap_speed_limits.json'),
     ]);
     _waze = await compute(_buildWazeIndex, raws[0]);
     _vietmap = await compute(_buildWazeIndex, raws[1]);
@@ -97,6 +99,18 @@ Future<void> _doLoad() async {
   // Never surface an error here: [speedLimitAt] (and the fire-and-forget
   // nav correction) must degrade to the statutory default on a bad load,
   // not throw an unhandled async exception.
+}
+
+/// Drop the parsed layers so the next [loadOfflineSpeedLimits] re-reads them
+/// from disk — called when an auto-update replaces a downloaded posted-limit
+/// file, so the next lookup uses the fresh data instead of the APK's.
+void reloadOfflineSpeedLimits() {
+  _segs = null;
+  _waze = null;
+  _vietmap = null;
+  _loaded = false;
+  _loading = null;
+  _lastLayer = null;
 }
 
 /// Waze speed-limit POINTS: packed Float32List [lat, lng, kmh, …] + a grid

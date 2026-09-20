@@ -24,6 +24,7 @@ import 'package:http/http.dart' as http;
 import 'offline_cameras.dart' show reloadOfflineCameras;
 import 'offline_loader.dart' show offlineDataDir;
 import 'offline_road_signs.dart' show reloadOfflineRoadSigns;
+import 'offline_speed_limits.dart' show reloadOfflineSpeedLimits;
 import 'vietmap_config.dart' show dataUpdateBaseUrl;
 
 /// Last-known remote versions per file, persisted in
@@ -101,6 +102,17 @@ class OfflineDataUpdater {
       if (signV != null && signV != local['signs']) {
         changed = await _downloadOne('vietnam_signs.json', signV) || changed;
       }
+      // 3. Posted speed-limit points. The server has always versioned this
+      // (`speed_limits` in version.json) and published the file, but nothing
+      // consumed it: the offline layer read only the bundled asset, so a data
+      // update to posted limits could not reach users without a new APK.
+      // `waze_segments.bin` (28 MB) is deliberately NOT auto-downloaded — too
+      // large for a background sync; the loader will prefer it if present.
+      final speedV = remote['speed_limits'];
+      if (speedV != null && speedV != local['speed_limits']) {
+        changed =
+            await _downloadOne('waze_speed_limits.json', speedV) || changed;
+      }
       if (changed) {
         // In-memory loaders were reset inside _downloadOne; also record the
         // synced versions so the next launch doesn't re-download identical data.
@@ -160,6 +172,8 @@ class OfflineDataUpdater {
         reloadOfflineCameras();
       } else if (name == 'vietnam_signs.json') {
         reloadOfflineRoadSigns();
+      } else if (name == 'waze_speed_limits.json') {
+        reloadOfflineSpeedLimits();
       }
       debugPrint('OFFLINE-DATA: $name updated to v$version');
       return true;

@@ -6,7 +6,9 @@
 library;
 
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
 /// App-support folder for auto-updated offline point data (cameras / signs).
@@ -25,6 +27,51 @@ Future<File?> offlineDataFile(String name) async {
   final dir = await offlineDataDir();
   final f = File('${dir.path}/$name');
   return f.existsSync() ? f : null;
+}
+
+/// Read an offline data file, preferring an auto-updated copy from the server
+/// over the one bundled in the APK.
+///
+/// This is the ONE place that decision is made. It used to be copy-pasted per
+/// loader (cameras, signs) and the speed-limit layer had no copy at all, so a
+/// posted-limit file downloaded from the update server could never take effect.
+/// A missing/unreadable download falls back to the bundled copy instead of
+/// failing the load: the app keeps working with the data it shipped with.
+Future<String> readOfflineText(String name) async {
+  final f = await _downloadedFile(name);
+  if (f != null) {
+    try {
+      return await f.readAsString();
+    } catch (_) {
+      // Corrupt or half-written download — use the bundled copy.
+    }
+  }
+  return rootBundle.loadString('assets/offline_map/$name');
+}
+
+/// Same as [readOfflineText] for binary packs (`waze_segments.bin`).
+Future<Uint8List> readOfflineBytes(String name) async {
+  final f = await _downloadedFile(name);
+  if (f != null) {
+    try {
+      return await f.readAsBytes();
+    } catch (_) {
+      // Fall through to the bundled pack.
+    }
+  }
+  final data = await rootBundle.load('assets/offline_map/$name');
+  return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+}
+
+/// The downloaded copy of [name], or null when there is none — including when
+/// there is no app-support directory at all (unit tests, where path_provider
+/// has no plugin).
+Future<File?> _downloadedFile(String name) async {
+  try {
+    return await offlineDataFile(name);
+  } catch (_) {
+    return null;
+  }
 }
 
 /// Lazily loads a list once and caches it. On failure it caches an empty list

@@ -10,7 +10,6 @@ library;
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
 import 'offline_loader.dart';
@@ -153,29 +152,14 @@ Future<List<OfflineCamera>> loadOfflineCameras() => _cameras.load();
 void reloadOfflineCameras() => _cameras.reload();
 
 Future<List<OfflineCamera>> _fetchCameras() async {
-  final raw = await _readCameraData();
+  // Prefers an auto-updated copy over the bundled asset — see readOfflineText.
+  final raw = await readOfflineText('vietnam_cameras.json');
   final data = jsonDecode(raw) as Map<String, dynamic>;
   return [
     for (final it
         in (data['cameras'] as List? ?? const []).cast<Map<String, dynamic>>())
       OfflineCamera.fromJson(it),
   ];
-}
-
-/// Read the camera JSON, preferring a downloaded copy in app support over the
-/// bundled asset. The updater writes `<support>/offline_data/vietnam_cameras.json`
-/// when the server has a newer version; the loaders read that first.
-Future<String> _readCameraData() async {
-  try {
-    final f = await offlineDataFile('vietnam_cameras.json');
-    if (f != null && await f.exists()) {
-      // `await` matters: without it a failed READ escapes this try (the try only
-      // guards the awaits) and the bundled asset below is never used — the
-      // documented fallback silently didn't work.
-      return await f.readAsString();
-    }
-  } catch (_) {}
-  return rootBundle.loadString('assets/offline_map/vietnam_cameras.json');
 }
 
 /// Find cameras AHEAD of [current] along [geometry], ordered by distance along
