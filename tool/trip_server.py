@@ -42,8 +42,16 @@ REPO = trip_view.REPO
 # build (no `run-as`, no root), which is why pulling is a plain `adb pull`.
 PHONE_TRIPS = "/sdcard/Android/data/com.navbridge.app/files/trips"
 
+# The app's PRIMARY posted-limit source: 1.03M Waze WME segments, each with a
+# per-direction limit (assets/offline_map/waze_segments.bin, format 'WZSG').
+# Serving them to the map is how you SEE the coverage the app has to work with —
+# and which stretches have no posted data at all and fall back to a road-form
+# guess. Decoded by tool/waze_segments.py (the same reader trip_truth.py uses).
+SEGMENTS_BIN = os.path.join(REPO, "assets", "offline_map", "waze_segments.bin")
+
 _lock = threading.Lock()
 _index: dict[str, dict] = {}  # name -> {size, mtime, stats...}
+_segs = None  # decoded WZSG layer, loaded on first /api/segments request
 
 
 def adb_path() -> str | None:
@@ -154,6 +162,100 @@ def pull_from_phone(directory: str, device: str | None) -> dict:
     }
 
 
+def coverage_for_trip(directory: str, name: str) -> dict:
+    """Fix-level coverage of the segment layer along one trip.
+
+    Two different questions, and the app's log can only answer the second:
+      * did the layer HAVE data under the car (a segment within 25 m)?
+      * did the limit on screen come from it, from the motorbike statutory cap,
+        or from the road-form guess?
+    `_logFix` runs one line after the async layer lookup is kicked off, so the
+    logged `limitLayer` lags a fix — compare the logged EFFECTIVE limit instead.
+    """
+    import waze_segments
+
+    segs = segments_layer()
+    path = os.path.join(directory, name)
+    data = trip_view.load(path)
+    fixes = _raw_fixes(path)
+    out = {
+        "fixes": 0, "layer_hit": 0, "layer_miss": 0,
+        "app_exact": 0, "app_capped": 0, "app_guess": 0, "app_other": 0,
+        "posted_extra": 0,
+    }
+    for f in fixes:
+        lat = (f.get("latitudeE7") or 0) / 1e7
+        lng = (f.get("longitudeE7") or 0) / 1e7
+        if not lat:
+            continue
+        out["fixes"] += 1
+        kmh, _st, _c, _dv, _d, _sid = segs.query(
+            lat, lng, heading_deg=f.get("heading"), max_dist_m=25.0
+        )
+        if not kmh:
+            out["layer_miss"] += 1
+            continue
+        out["layer_hit"] += 1
+        app = f.get("limitEffective")
+        if app is None:
+            out["app_other"] += 1
+            continue
+        if kmh in (f.get("fwd"),):  # placeholder (property absent in fix logs)
+            pass
+        stat = _statutory_motorbike(f)
+        if app == kmh:
+            out["app_exact"] += 1
+        elif app == min(stat, kmh) or app == stat:
+            out["app_capped"] += 1
+            if app < kmh:
+                out["posted_extra"] += 1
+        else:
+            out["app_other"] += 1
+    n = max(1, out["fixes"])
+    hits = max(1, out["layer_hit"])
+    out["pct_layer"] = round(100.0 * out["layer_hit"] / n)
+    out["pct_exact"] = round(100.0 * out["app_exact"] / hits)
+    out["pct_guess"] = round(100.0 * out["layer_miss"] / n)
+    return out
+
+
+def _raw_fixes(path: str) -> list[dict]:
+    with open(path, encoding="utf-8") as f:
+        return sorted(
+            json.load(f).get("locations") or [],
+            key=lambda x: int(x.get("timestampMs") or 0),
+        )
+
+
+# The app's motorbike class table (lib/services/overpass.dart), so "the app
+# showed a lower number than the layer" can be told apart from "the app missed
+# the layer": a posted value only TIGHTENS the vehicle's statutory limit.
+_MB = {
+    "motorway": 80, "motorway_link": 60, "trunk": 60, "trunk_link": 50,
+    "primary": 60, "primary_link": 50, "secondary": 60, "secondary_link": 50,
+    "tertiary": 60, "tertiary_link": 50, "unclassified": 50,
+    "residential": 50, "living_street": 20, "service": 30,
+    "pedestrian": 10, "footway": 10, "cycleway": 20,
+}
+
+
+def _statutory_motorbike(fix: dict) -> int:
+    hw = fix.get("highway") or ""
+    base = _MB.get(hw, 50)
+    oneway = fix.get("oneway")
+    lanes = fix.get("lanes")
+    divided = bool(fix.get("divided"))
+    urban = bool(fix.get("urban"))
+    non_motor = (
+        "motorway", "motorway_link", "living_street", "service",
+        "pedestrian", "footway", "cycleway",
+    )
+    if (urban and hw not in non_motor) or hw in ("residential", "unclassified"):
+        is_div = divided or (oneway is True and (lanes if lanes else 2) >= 2)
+        return 60 if is_div else 50
+    return base
+
+
 def run_audit(directory: str) -> dict:
     script = os.path.join(REPO, "tool", "check_voice_calls.py")
     if not os.path.exists(script):
@@ -170,6 +272,83 @@ def run_audit(directory: str) -> dict:
     return {"ok": True, "text": (res.stdout + res.stderr).rstrip()}
 
 
+def segments_layer():
+    """Decode the WZSG layer once (1.03M segments, a few seconds)."""
+    global _segs
+    with _lock:
+        if _segs is None:
+            import waze_segments  # tool/waze_segments.py
+
+            _segs = waze_segments.Segments(SEGMENTS_BIN)
+        return _segs
+
+
+def segments_geojson(bbox: tuple, cap: int = 2500) -> dict:
+    """Segments overlapping [bbox] as GeoJSON, coloured by posted limit.
+
+    A segment with fwd=rev=0 has NO posted data — the app falls back to the
+    statutory road-form guess there, which is exactly what the map needs to show.
+    """
+    import waze_segments
+
+    segs = segments_layer()
+    min_lat, min_lng, max_lat, max_lng = bbox
+    cell = waze_segments.CELL_DEG
+    ids = set()
+    for gy in range(int(min_lat // cell), int(max_lat // cell) + 1):
+        for gx in range(int(min_lng // cell), int(max_lng // cell) + 1):
+            ids.update(segs.grid.get((gy, gx), ()))
+
+    features = []
+    with_limit = named = 0
+    for s in sorted(ids):
+        pts = segs.pts[s]
+        if not pts:
+            continue
+        if not (min_lat <= pts[0][0] <= max_lat and min_lng <= pts[0][1] <= max_lng):
+            continue
+        fwd, rev = segs.fwd[s], segs.rev[s]
+        limit = max(fwd, rev) if (fwd or rev) else 0
+        if limit:
+            with_limit += 1
+        name = segs.street(s)
+        if name:
+            named += 1
+        # Decimate: the stored polylines are a few metres apart.
+        step = max(1, len(pts) // 8)
+        coords = [[round(p[1], 6), round(p[0], 6)] for p in pts[::step]]
+        if len(coords) < 2:
+            continue
+        cls = segs.classes[s] if s < len(segs.classes) else 0
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": coords},
+                "properties": {
+                    "limit": limit,
+                    "fwd": fwd,
+                    "rev": rev,
+                    "name": name,
+                    "class": cls & 0x3F,
+                    "split": bool(cls & 0x80),
+                },
+            }
+        )
+        if len(features) >= cap:
+            break
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "stats": {
+            "in_bbox": len(ids),
+            "shown": len(features),
+            "with_limit": with_limit,
+            "named": named,
+            "cap": cap,
+        },
+    }
+
+
 # The picker bar: a dropdown of trips + a pull button, injected into the
 # viewer page so no page has to be generated ahead of time.
 BAR = """
@@ -183,14 +362,31 @@ BAR = """
   cursor:pointer;font:12px system-ui,sans-serif}
 #nb-bar button:disabled{opacity:.55;cursor:default}
 #nb-bar a{color:#9cf;text-decoration:none}
+#nb-bar label{display:flex;gap:4px;align-items:center;cursor:pointer}
 #nb-msg{max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#nb-legend{position:fixed;left:8px;bottom:24px;z-index:9999;background:#111d;color:#eee;
+  padding:6px 8px;border-radius:8px;font:11px/1.5 system-ui,sans-serif;display:none}
+#nb-legend i{display:inline-block;width:14px;height:3px;margin-right:5px;
+  vertical-align:middle}
 </style>
 <div id="nb-bar">
   <select id="nb-trips" title="recorded trips"></select>
   <button id="nb-pull" title="copy the trips off the phone with adb">Pull from phone</button>
+  <label title="the Waze per-segment posted-limit layer the app looks up first">
+    <input type="checkbox" id="nb-segs"> Waze segments
+  </label>
   <a id="nb-json" href="#" title="raw trip JSON">json</a>
   <a id="nb-audit" href="/api/audit" target="_blank" title="run check_voice_calls.py">audit</a>
   <span id="nb-msg"></span>
+</div>
+<div id="nb-legend">
+  <div><i style="background:#2ecc71"></i>≤ 40</div>
+  <div><i style="background:#f1c40f"></i>50</div>
+  <div><i style="background:#e67e22"></i>60</div>
+  <div><i style="background:#e74c3c"></i>≥ 70</div>
+  <div><i style="background:#aaa"></i>no posted data (app guesses)</div>
+  <div id="nb-legend-count" style="margin-top:4px;opacity:.8"></div>
+  <div id="nb-legend-cov" style="opacity:.8"></div>
 </div>
 <script>
 const nbMsg = (t) => { document.getElementById('nb-msg').textContent = t || ''; };
@@ -219,6 +415,66 @@ document.getElementById('nb-pull').onclick = async (e) => {
     if (r.ok) await nbList();
   } catch (err) { nbMsg('pull failed: ' + err); }
   e.target.disabled = false;
+};
+
+// ---- Waze segment layer overlay -----------------------------------------
+// The app's primary posted-limit source, drawn under the trip path: the grey
+// stretches are where it has NOTHING and falls back to the statutory guess.
+map.createPane('nbSegs');
+map.getPane('nbSegs').style.zIndex = 350;   // under the trip path (overlayPane)
+map.getPane('nbSegs').style.opacity = 0.75;
+let nbSegLayer = null;
+const nbSegColor = (k) => k <= 0 ? '#aaaaaa' : k <= 40 ? '#2ecc71'
+  : k <= 50 ? '#f1c40f' : k <= 60 ? '#e67e22' : '#e74c3c';
+function nbBBox(pts, pad) {
+  let a = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const p of pts) {
+    a[0] = Math.min(a[0], p.lat); a[1] = Math.min(a[1], p.lng);
+    a[2] = Math.max(a[2], p.lat); a[3] = Math.max(a[3], p.lng);
+  }
+  return [a[0] - pad, a[1] - pad, a[2] + pad, a[3] + pad].map(v => v.toFixed(5));
+}
+document.getElementById('nb-segs').onchange = async (e) => {
+  if (!e.target.checked) {
+    if (nbSegLayer) { map.removeLayer(nbSegLayer); nbSegLayer = null; }
+    document.getElementById('nb-legend').style.display = 'none';
+    return;
+  }
+  nbMsg('loading segment layer…');
+  try {
+    const bbox = nbBBox(DATA.path, 0.004).join(',');
+    const geo = await (await fetch('/api/segments?bbox=' + bbox)).json();
+    nbSegLayer = L.layerGroup();
+    for (const f of geo.features) {
+      const k = f.properties.limit;
+      const line = L.polyline(f.geometry.coordinates.map(c => [c[1], c[0]]), {
+        pane: 'nbSegs', color: nbSegColor(k),
+        weight: k ? 3 : 2, opacity: k ? 0.9 : 0.6,
+        dashArray: k ? null : '3,4',
+      });
+      line.bindPopup((f.properties.name || '(no name)') +
+        (k ? ` · ${k} km/h` : ' · no posted limit') +
+        (f.properties.fwd && f.properties.rev && f.properties.fwd !== f.properties.rev
+          ? ` (${f.properties.fwd}/${f.properties.rev} per direction)` : '') +
+        (f.properties.split ? ' · split carriageway' : ''));
+      nbSegLayer.addLayer(line);
+    }
+    nbSegLayer.addTo(map);
+    const st = geo.stats;
+    document.getElementById('nb-legend').style.display = 'block';
+    document.getElementById('nb-legend-count').textContent =
+      `${st.with_limit} of ${st.shown} segments drawn here carry a posted limit`;
+    nbMsg(`${st.shown} segments` + (st.in_bbox > st.shown
+      ? ` (${st.in_bbox} in the box)` : ''));
+    // Fix-level coverage: was there a segment under the car at all?
+    try {
+      const c = await (await fetch('/api/coverage?trip=' +
+        encodeURIComponent(nbCurrent))).json();
+      document.getElementById('nb-legend-cov').textContent =
+        `${c.pct_layer}% of the drive had a segment within 25 m`;
+      nbMsg(`${st.shown} segments · layer under the car ${c.pct_layer}% of fixes`);
+    } catch (err) { /* coverage is a bonus, not required */ }
+  } catch (err) { nbMsg('segment layer failed: ' + err); }
 };
 nbList().catch((e) => nbMsg('trip list failed: ' + e));
 </script>
@@ -296,6 +552,26 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/audit":
             return self._json(run_audit(directory))
+
+        if path == "/api/segments":
+            raw = (query.get("bbox") or [""])[0]
+            try:
+                bbox = tuple(float(v) for v in raw.split(","))
+                if len(bbox) != 4:
+                    raise ValueError
+            except ValueError:
+                return self._json(
+                    {"error": "bbox=minLat,minLng,maxLat,maxLng required"}, 400
+                )
+            return self._json(segments_geojson(bbox))
+
+        if path == "/api/coverage":
+            name = safe_name((query.get("trip") or [""])[0])
+            if not name:
+                return self._json({"error": "trip=<name> required"}, 400)
+            if not os.path.exists(os.path.join(directory, name)):
+                return self._json({"error": f"{name} not found"}, 404)
+            return self._json(coverage_for_trip(directory, name))
 
         if path == "/api/pull":
             return self._json(pull_from_phone(directory, self.device))
