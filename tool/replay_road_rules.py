@@ -36,10 +36,14 @@ import urllib.request
 
 import sys
 sys.path.insert(0, 'tool')
+from app_rules import (NON_DRIVABLE, QUERY_M, RoadNameHysteresis,  # noqa: E402
+                       pick_road_name, road_key, same_road, sim_limit)
 from waze_segments import (CELL_DEG, Segments, segment_line_angle,  # noqa: E402
                            segment_score)
 
 TRIP = 'docs/trips/device/2026-09-21_173329_Chuyến_đi.json'
+if len(sys.argv) > 1 and not sys.argv[1].startswith('-'):
+    TRIP = sys.argv[1]  # usage: python3 tool/replay_road_rules.py [<trip.json>]
 CACHE = '/tmp/osm_bbox_cache.json'
 M = 111320.0
 MAX_D = 25.0
@@ -108,31 +112,11 @@ for e in osm['elements']:
                  t.get('lanes'), t.get('maxspeed')))
 
 
-# The app's motorbike class table + built-up rule (lib/services/overpass.dart),
-# so the replay can say what the corrected road would put on the chip.
-MB = {
-    'motorway': 80, 'motorway_link': 60, 'trunk': 60, 'trunk_link': 50,
-    'primary': 60, 'primary_link': 50, 'secondary': 60, 'secondary_link': 50,
-    'tertiary': 60, 'tertiary_link': 50, 'unclassified': 50, 'residential': 50,
-    'living_street': 20, 'service': 30, 'pedestrian': 10, 'footway': 10,
-    'cycleway': 20,
-}
-NON_MOTOR = ('motorway', 'motorway_link', 'living_street', 'service',
-             'pedestrian', 'footway', 'cycleway')
-
-
-def sim_limit(highway, oneway, lanes, posted):
-    """What the app would show for this road (posted layer always wins)."""
-    base = MB.get(highway or '', 50)
-    if highway in NON_MOTOR:
-        stat = base
-    else:
-        is_div = (str(oneway).lower() in ('yes', 'true', '1', '-1', 'reverse')) \
-            and ((int(lanes) if str(lanes).isdigit() else 2) >= 2)
-        stat = 60 if is_div else 50  # built-up rule (urban assumed, HCMC)
-    if posted:
-        return min(stat, int(posted)) if str(posted).isdigit() else stat
-    return stat
+# The motorbike class table, the built-up rule and the road-name helpers live in
+# tool/app_rules.py — the single Python home for the ported app rules. The
+# authoritative replay is tool/simulate_nav.py (it uses the REAL OSRM route names
+# for the veto instead of reconstructing them from callouts); this one is kept as
+# a route-free cross-check.
 
 
 def way_geom(lat, lng, geom):
@@ -167,45 +151,48 @@ for w in WAYS:
 
 
 def match_road(lat, lng, heading):
-    """The new rule: score by distance + heading + overshoot, at the raw fix."""
+    """The new rule: score by distance + heading + overshoot, at the raw fix.
+
+    Drivable classes win over a footway/path right next to the car, exactly as
+    `_isDrivable` does in lib/services/overpass.dart (the pool falls back to
+    everything only when nothing drivable is within the 30 m query).
+    """
     gy, gx = int(lat // CELL), int(lng // CELL)
-    best, best_score, best_d = None, float('inf'), None
+    cands = []
+    seen = set()
     for dy in range(-1, 2):
         for dx in range(-1, 2):
             for w in grid.get((gy + dy, gx + dx), ()):
-                dd, brg, over = way_geom(lat, lng, w[2])
-                if dd > MAX_D:
+                if w[0] in seen:
                     continue
-                score = dd
-                if heading and segment_line_angle(heading, brg) > MAX_ANGLE:
-                    score += MAX_D + 1
-                if over > MAX_OVER:
-                    score += MAX_D + 1
-                if score < best_score:
-                    best_score, best, best_d = score, w, dd
+                dd, brg, over = way_geom(lat, lng, w[2])
+                if dd <= QUERY_M:
+                    seen.add(w[0])
+                    cands.append((w, dd, brg, over))
+    if not cands:
+        return None, None
+    pool = [c for c in cands if c[0][1] not in NON_DRIVABLE] or cands
+    best, best_score, best_d = None, float('inf'), None
+    for w, dd, brg, over in pool:
+        score = dd
+        if heading and segment_line_angle(heading, brg) > MAX_ANGLE:
+            score += MAX_D + 1
+        if over > MAX_OVER:
+            score += MAX_D + 1
+        if score < best_score:
+            best_score, best, best_d = score, w, dd
     return best, best_d
 
 
 # ---- replay -----------------------------------------------------------------
 seg = Segments('assets/offline_map/waze_segments.bin')
 
-import unicodedata  # noqa: E402
-
-
-def key(s):
-    s = unicodedata.normalize('NFD', (s or '').lower())
-    s = ''.join(c for c in s if unicodedata.category(c) != 'Mn')
-    return re.sub(r'[^a-z0-9]', '', s)
-
-
-def same(a, b):
-    ka, kb = key(a), key(b)
-    return bool(ka and kb) and (ka == kb or ka in kb or kb in ka)
+key, same = road_key, same_road          # the shared, diacritic-insensitive pair
 
 
 stats = {'fixes': 0, 'before_bad': 0, 'after_bad': 0, 'changed': 0}
 changed_examples, still_bad = [], []
-pending, count, moved_acc = None, 0, 0.0
+hyst = RoadNameHysteresis()
 published = None
 prev_pos = None
 
@@ -233,23 +220,13 @@ for f in fixes:
     if w is not None:
         cand_ok = any(same(n, osm_name or '') for n in names)
         cur_ok = any(same(n, published or '') for n in names)
-        if cand_ok or not cur_ok:
-            sim = osm_name
-        else:
-            sim = published
-    # hysteresis on the published name
+        sim = pick_road_name(published or '', osm_name or '', cand_ok, cur_ok)
+    # hysteresis on the published name (shared RoadNameHysteresis)
     if sim and published and not same(sim, published):
-        if pending and same(pending, sim):
-            count += 1
-            moved_acc += moved
-        else:
-            pending, count, moved_acc = sim, 1, moved
-        if count >= 2 or moved_acc >= 30:
-            published, pending, count, moved_acc = sim, None, 0, 0.0
-        else:
+        if not hyst.accept(published, sim, moved):
             sim = published
-    elif sim:
-        pending, count, moved_acc = None, 0, 0.0
+    else:
+        hyst.reset()
     if sim:
         published = sim
 
