@@ -51,9 +51,7 @@ from waze_segments import (Segments, segment_line_angle,  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 M = 111320.0
-MAX_D = 25.0          # the app's speedLimitAt / road lookup radius
-MAX_OVER = 10.0       # on-segment overshoot allowance
-MAX_ANGLE = 45.0      # heading alignment allowance
+MAX_D = 25.0          # the app's speedLimitAt / segment lookup radius
 OSRM = 'https://router.project-osrm.org'
 SEG_BIN = os.path.join(REPO, 'assets/offline_map/waze_segments.bin')
 DEFAULT_TRIP = os.path.join(
@@ -381,7 +379,7 @@ for f in fixes:
 
     # road (Overpass path, raw fix) + layer cap + statutory table
     hit = road_at(lat, lng, heading)
-    w, wd = hit if hit else (None, None)
+    w = hit[0] if hit else None
     seg_kmh = seg.query(lat, lng, heading_deg=heading, max_dist_m=MAX_D)[0]
     new_limit = None
     if w is not None:
