@@ -511,6 +511,69 @@ double _bearingDeg(double lat1, double lng1, double lat2, double lng2) {
   return (best, bearing);
 }
 
+/// Angle (deg, 0..90) between the car's heading and a segment's LINE.
+///
+/// The LINE, not a direction: a street and its opposite carriageway are the same
+/// road (mod 180), so a car travelling 180° against a segment's stored node order
+/// is still on it.
+double segmentLineAngle(double? headingDeg, double bearingDeg) {
+  if (headingDeg == null) return 0;
+  var d = (headingDeg - bearingDeg).abs() % 180.0;
+  if (d > 90) d = 180 - d;
+  return d;
+}
+
+/// Candidate score for the segment lookup: distance, penalised when the segment
+/// runs ACROSS the car's path.
+///
+/// Nearest-wins is not enough at a junction: the crossing street's segment can be
+/// a metre closer than the road under the car, and with 15-20 m GPS accuracy
+/// which one wins flips fix by fix. Measured on the 2026-09-21 drive, the street
+/// name alternated 'Lũy Bán Bích' ↔ 'Đường 30 Tháng 4' at 10.78822,106.63575 for
+/// 17 s while the car drove straight north up Đường 30 Tháng 4 — and because the
+/// name AND the limit come from the same segment record, the driver heard the
+/// crossing street's name paired with the other road's limit (user: "the limit
+/// said Lũy Bán Bích · residential when I had entered Đường 30 Tháng 4").
+///
+/// The penalty exceeds [maxDistM], so any aligned segment in range beats any
+/// misaligned one, while a car stopped mid-turn (nothing aligned) still falls
+/// back to the nearest segment rather than to nothing at all.
+double segmentScore(
+  double distanceM,
+  double bearingDeg,
+  double? headingDeg,
+  double maxDistM,
+) {
+  const maxAlignedDeg = 45.0;
+  if (headingDeg == null) return distanceM;
+  return segmentLineAngle(headingDeg, bearingDeg) > maxAlignedDeg
+      ? distanceM + maxDistM + 1
+      : distanceM;
+}
+
+/// Index of the candidate to trust among (segment, distance m, bearing) triples,
+/// or -1 when nothing is within [maxDistM]. Alignment first, then distance — see
+/// [segmentScore] for why.
+int pickSegmentCandidate(
+  List<(int, double, double)> candidates,
+  double? headingDeg,
+  double maxDistM,
+) {
+  var bestI = -1;
+  var bestScore = double.infinity;
+  for (var i = 0; i < candidates.length; i++) {
+    final (_, d, brg) = candidates[i];
+    final score = segmentScore(d, brg, headingDeg, maxDistM);
+    if (score < bestScore) {
+      bestScore = score;
+      bestI = i;
+    }
+  }
+  if (bestI < 0) return -1;
+  // …and the winner still has to be genuinely close to the car.
+  return candidates[bestI].$2 <= maxDistM ? bestI : -1;
+}
+
 /// Posted limit (km/h) of the nearest Waze segment within [maxDistM] of
 /// (lat, lon), or null. [headingDeg] disambiguates a per-direction limit; when
 /// absent (or when only one direction is posted) the higher value wins, since
@@ -525,10 +588,10 @@ int? _querySegIndex(
 ) {
   final cx = (lon / _segCellDeg).floor();
   final cy = (lat / _segCellDeg).floor();
-  var best = double.infinity;
-  var bestFwd = 0, bestRev = 0;
-  var bestBearing = 0.0;
-  _lastSegS = -1; // which segment won, for [lastWazeStreetName]
+  // Small list per query (~1 Hz), traded for one place that decides which
+  // segment wins: the two-accumulator version this replaced could not express
+  // "prefer the aligned one", which is why a junction could rename the road.
+  final cands = <(int, double, double)>[]; // (segment, distance m, bearing)
   for (var dx = -1; dx <= 1; dx++) {
     for (var dy = -1; dy <= 1; dy++) {
       final key = (((cx + dx) & 0xFFFF) << 16) | ((cy + dy) & 0xFFFF);
@@ -537,25 +600,29 @@ int? _querySegIndex(
       for (var k = 0; k < ids.length; k++) {
         final s = ids[k];
         final (d, brg) = _segDistBearing(idx, s, lat, lon, cosLat);
-        if (d < best) {
-          best = d;
-          bestBearing = brg;
-          bestFwd = idx.fwd[s];
-          bestRev = idx.rev[s];
-          _lastSegS = s;
-        }
+        cands.add((s, d, brg));
       }
     }
   }
-  if (best > maxDistM) return null;
-  final f = bestFwd, r = bestRev;
+  final win = pickSegmentCandidate(cands, headingDeg, maxDistM);
+  // No winner ⇒ nothing usable here: forget the segment, so
+  // [lastWazeStreetName] cannot name the road from a segment that gave us no
+  // limit — the caller adopts that name verbatim, even when the limit is null.
+  if (win < 0) {
+    _lastSegS = -1;
+    return null;
+  }
+  final s = cands[win].$1;
+  final brg = cands[win].$3;
+  _lastSegS = s; // which segment won, for [lastWazeStreetName]
+  final f = idx.fwd[s], r = idx.rev[s];
   if (f == 0 && r == 0) return null;
   if (f == r || f == 0) return r;
   if (r == 0) return f;
   if (headingDeg == null) return f > r ? f : r;
   // Pick the direction the car is actually travelling: within 90 deg of the
   // segment's stored node order means it is riding the `fwd` direction.
-  var delta = (headingDeg - bestBearing).abs() % 360.0;
+  var delta = (headingDeg - brg).abs() % 360.0;
   if (delta > 180) delta = 360 - delta;
   return delta <= 90 ? f : r;
 }
