@@ -364,6 +364,10 @@ class _VectorNavMapState extends State<VectorNavMap>
   DateTime? _lastCameraProject;
   String? _lastCameraSig;
 
+  /// Last sign-layer size logged, so the count is visible without spamming the
+  /// log at the 4 Hz reprojection rate.
+  int _lastSignCount = -1;
+
   /// Real sign icons (stop / give-way / speed / prohibitions / traffic
   /// lights) projected to screen positions — rendered as Flutter overlays,
   /// refreshed with the camera.
@@ -1470,6 +1474,22 @@ class _VectorNavMapState extends State<VectorNavMap>
     return '$bx,$by|$core';
   }
 
+  /// Cap [signs] to the [max] NEAREST to [cur] — the same rule as
+  /// [_nearestCameras], for the same two reasons: cost, and relevance. The list
+  /// arrives in DATABASE order, so "take the first N" is not a selection at all.
+  List<RoadSign> _nearestSigns(List<RoadSign> signs, int max, ll.LatLng? cur) {
+    if (signs.length <= max) return signs;
+    if (cur == null) return signs.take(max).toList();
+    final s = [...signs];
+    s.sort(
+      (a, b) => _distMeters(
+        cur,
+        ll.LatLng(a.lat, a.lng),
+      ).compareTo(_distMeters(cur, ll.LatLng(b.lat, b.lng))),
+    );
+    return s.take(max).toList();
+  }
+
   /// Cap [cams] to the [max] nearest to [cur] (perf: 4 native circles per
   /// camera — hundreds of circle adds freeze the map on dense cities).
   List<OfflineCamera> _nearestCameras(
@@ -1627,19 +1647,32 @@ class _VectorNavMapState extends State<VectorNavMap>
 
     // Zoom-dependent sign culling (density rises with zoom, then hard-caps):
     // < 11.0: hidden completely (country / region scale)
-    // 11..13: only the important kinds (speed, khu dân cư, cấm vượt, STOP),
-    //         few of them — this is the old fixed 20-30 window
-    // >= 13: important signs first, then the rest, capped by zoom
+    // 11..13: only the important kinds (speed, khu dân cư, cấm vượt, STOP)
+    // >= 13: every kind, capped to the signs nearest the car
+    //
+    // The cap picks what is NEAREST THE CAR, never "the first N of the list".
+    // `widget.signs` comes from `signsNearRoute` → `pointsNearRoute`, which
+    // preserves the DATABASE's order (nationwide file order — not route order,
+    // not distance). Taking the first `cap` entries therefore drew an arbitrary
+    // subset scattered along the whole route: at street level the driver saw
+    // almost nothing nearby while the budget went to signs tens of km away.
+    // Cameras have always picked nearest-first (_nearestCameras); signs now do
+    // too, which is also what makes a bigger cap affordable.
     final List<RoadSign> activeSigns;
     if (_zoom < 11.0) {
       activeSigns = const [];
     } else {
-      final cap = signMarkerCap(_zoom);
-      final ranked = [
-        ...signs.where((s) => s.isImportant),
-        if (_zoom >= 13.0) ...signs.where((s) => !s.isImportant),
-      ];
-      activeSigns = ranked.length > cap ? ranked.sublist(0, cap) : ranked;
+      final pool = _zoom < 13.0
+          ? signs.where((s) => s.isImportant).toList()
+          : signs;
+      activeSigns = _nearestSigns(pool, signMarkerCap(_zoom), widget.current);
+    }
+    if (activeSigns.length != _lastSignCount) {
+      _lastSignCount = activeSigns.length;
+      debugPrint(
+        'VECTORMAP: sign layer n=${activeSigns.length} '
+        '(zoom ${_zoom.toStringAsFixed(1)} of ${signs.length} on route)',
+      );
     }
 
     if (activeSigns.isEmpty) {

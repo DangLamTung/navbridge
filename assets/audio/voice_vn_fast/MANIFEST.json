@@ -1,0 +1,145 @@
+{
+ "note": "Fastest Vietnamese clip per phrase, merged from the Waze mod voice packs by tools/build_voice_pack_vn.py",
+ "clips": {
+  "current_speed_10.mp3": {
+   "source": "m10/voice_waze",
+   "seconds": 3.312,
+   "size": 26496
+  },
+  "current_speed_100.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.864,
+   "size": 92781
+  },
+  "current_speed_110.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 4.032,
+   "size": 96813
+  },
+  "current_speed_120.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 4.176,
+   "size": 100269
+  },
+  "current_speed_20.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.84,
+   "size": 92205
+  },
+  "current_speed_30.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.792,
+   "size": 91053
+  },
+  "current_speed_35.mp3": {
+   "source": "m10/voice",
+   "seconds": 3.814,
+   "size": 30791
+  },
+  "current_speed_40.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.864,
+   "size": 92781
+  },
+  "current_speed_50.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.792,
+   "size": 91053
+  },
+  "current_speed_60.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.864,
+   "size": 92781
+  },
+  "current_speed_70.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.84,
+   "size": 92205
+  },
+  "current_speed_80.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.84,
+   "size": 92205
+  },
+  "current_speed_90.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.816,
+   "size": 91629
+  },
+  "next_speed.mp3": {
+   "source": "m10/voice_waze",
+   "seconds": 1.8,
+   "size": 14400
+  },
+  "next_speed_10.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.648,
+   "size": 87597
+  },
+  "next_speed_100.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.792,
+   "size": 91053
+  },
+  "next_speed_110.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.984,
+   "size": 95661
+  },
+  "next_speed_120.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 4.104,
+   "size": 98541
+  },
+  "next_speed_20.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.744,
+   "size": 89901
+  },
+  "next_speed_30.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.744,
+   "size": 89901
+  },
+  "next_speed_35.mp3": {
+   "source": "m10/voice",
+   "seconds": 4.232,
+   "size": 33991
+  },
+  "next_speed_40.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.744,
+   "size": 89901
+  },
+  "next_speed_50.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.72,
+   "size": 89325
+  },
+  "next_speed_60.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.792,
+   "size": 91053
+  },
+  "next_speed_70.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.768,
+   "size": 90477
+  },
+  "next_speed_80.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.72,
+   "size": 89325
+  },
+  "next_speed_90.mp3": {
+   "source": "m10/voice_short",
+   "seconds": 3.768,
+   "size": 90477
+  },
+  "over_speed_limit.mp3": {
+   "source": "m10/voice_waze",
+   "seconds": 1.632,
+   "size": 13056
+  }
+ }
+}

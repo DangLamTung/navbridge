@@ -10,6 +10,9 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+// The shared metre-distance helper (same one the nav engine ranks with).
+import 'osrm.dart' show distanceMeters;
+
 /// A POI category shown as a quick button during navigation.
 enum PoiType {
   fuel('fuel', 'Xăng', Icons.local_gas_station, 'amenity=fuel'),
@@ -448,6 +451,146 @@ RouteProjection projectOnRoute(
     aheadMeters: bestAlong - carCum,
     lateralMeters: bestLat * bestOff,
   );
+}
+
+/// How a POI result relates to the driver — shown as a label so the order is
+/// explainable: "the 3 nearest are these, then the ones on my road".
+enum PoiRelevance {
+  /// Among the [nearestCount] closest to the car (straight-line).
+  nearest('Gần bạn'),
+
+  /// Not in the nearest group, but ON the route ahead (within the corridor).
+  onRoute('Trên đường'),
+
+  /// Anything else: further along the route, off to the side, or behind.
+  other('Khác');
+
+  const PoiRelevance(this.label);
+
+  /// Short Vietnamese label for the result card.
+  final String label;
+}
+
+/// One ranked result: the POI plus WHY it sits where it does.
+class RankedPoi {
+  final PoiResult poi;
+  final PoiRelevance relevance;
+
+  /// Straight-line metres from the car.
+  final double directMeters;
+
+  /// Metres ahead along the route (negative = behind the car); null when it
+  /// does not project onto the route at all.
+  final double? aheadMeters;
+
+  const RankedPoi({
+    required this.poi,
+    required this.relevance,
+    required this.directMeters,
+    this.aheadMeters,
+  });
+
+  /// Whether this result lands on the route ahead within the corridor.
+  bool get isOnRoute =>
+      aheadMeters != null &&
+      aheadMeters! >= 0 &&
+      relevance != PoiRelevance.other;
+
+  /// Same POI, re-tagged with a tier (used while assembling the blend).
+  RankedPoi withRelevance(PoiRelevance r) => RankedPoi(
+    poi: poi,
+    relevance: r,
+    directMeters: directMeters,
+    aheadMeters: aheadMeters,
+  );
+
+  /// Distance to show on the card: the along-route one when the place is on
+  /// the route ahead (what the driver will actually drive), else straight-line.
+  double get displayMeters =>
+      (aheadMeters != null && aheadMeters! >= 0) ? aheadMeters! : directMeters;
+}
+
+/// How many results count as "nearest to me" before the on-route ones start.
+/// The driver asked for roughly three: "maybe 3 nearest search like trạm xăng
+/// then other xăng". Tunable in one place.
+const int kNearestPoiFirst = 3;
+
+/// Rank POI results for a driver as a BLEND of "nearest to me" and "on my
+/// route", instead of either one alone.
+///
+/// Why not pure route ranking: a station 200 m away that sits just off the
+/// polyline (or slightly behind) used to sink below one 8 km ahead, which
+/// reads as "the search is ignoring what's right here". Why not pure nearest:
+/// that is what made "Xăng gần nhất" point back the way the driver came.
+///
+/// So: the [nearestCount] closest results come first (the driver's "right
+/// now" options), then the remaining ones that lie ON the route ahead
+/// ([corridorMeters] either side), ordered by how far ahead they are, then
+/// everything else by straight-line distance.
+///
+/// Every input appears exactly once. Pure function (no globals) so the blend
+/// is unit-tested without a phone.
+List<RankedPoi> rankPoisBlended(
+  List<PoiResult> results, {
+  required LatLng carPos,
+  List<LatLng> route = const [],
+  int nearestCount = 3,
+  double corridorMeters = 150,
+  double maxAheadMeters = 20000,
+}) {
+  if (results.isEmpty) return const [];
+  final projected = <RankedPoi>[];
+  for (final r in results) {
+    final direct = distanceMeters(carPos, r.pos);
+    double? ahead;
+    if (route.length >= 2) {
+      final proj = projectOnRoute(route, r.pos, carPos: carPos);
+      // Only count it as "on the route" when it is actually beside it — a
+      // point 2 km off the polyline still has an `ahead` number, but the
+      // driver cannot reach it without leaving the route.
+      if (proj.lateralMeters.abs() <= corridorMeters) ahead = proj.aheadMeters;
+    }
+    projected.add(
+      RankedPoi(
+        poi: r,
+        relevance: PoiRelevance.other,
+        directMeters: direct,
+        aheadMeters: ahead,
+      ),
+    );
+  }
+
+  // Tier 1 — the closest few, by straight-line distance.
+  final byDistance = [...projected]
+    ..sort((a, b) => a.directMeters.compareTo(b.directMeters));
+  final n = nearestCount.clamp(0, byDistance.length);
+  final nearest = byDistance.take(n).toList();
+  final nearestPo = {for (final x in nearest) x.poi};
+
+  // Tier 2 — what is left that lies on the road ahead, nearest-ahead first.
+  final onRoute =
+      projected
+          .where(
+            (x) =>
+                !nearestPo.contains(x.poi) &&
+                x.aheadMeters != null &&
+                x.aheadMeters! >= 0 &&
+                x.aheadMeters! <= maxAheadMeters,
+          )
+          .toList()
+        ..sort((a, b) => a.aheadMeters!.compareTo(b.aheadMeters!));
+
+  // Tier 3 — the rest, nearest first (behind / off-route / far ahead).
+  final onRoutePo = {for (final x in onRoute) x.poi};
+  final rest = byDistance
+      .where((x) => !nearestPo.contains(x.poi) && !onRoutePo.contains(x.poi))
+      .toList();
+
+  return [
+    for (final x in nearest) x.withRelevance(PoiRelevance.nearest),
+    for (final x in onRoute) x.withRelevance(PoiRelevance.onRoute),
+    for (final x in rest) x,
+  ];
 }
 
 /// Rank POI search results for navigation: prefer places AHEAD along the

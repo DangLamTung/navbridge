@@ -13,6 +13,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
@@ -47,6 +48,14 @@ class OsmSuggestion {
   /// UI can show the wiki-style info card (address/phone/description/…).
   final OfflinePoi? poi;
 
+  /// Normalised country / province keys (lowercase, diacritics stripped) used
+  /// to rank the list "same country, then same province, then nearest" — a
+  /// search for a common place name must not put a namesake in another country
+  /// (or another province) above the local one. Null when the provider did not
+  /// say; a missing value NEVER demotes a suggestion.
+  final String? country;
+  final String? province;
+
   OsmSuggestion({
     required this.refId,
     required this.display,
@@ -54,7 +63,18 @@ class OsmSuggestion {
     required this.lng,
     this.source = 'osm',
     this.poi,
+    this.country,
+    this.province,
   });
+}
+
+/// Normalised admin key for comparisons: lowercase + diacritics stripped, so
+/// "Việt Nam" / "VIET NAM" / a provider's `vn` code all compare consistently.
+/// Returns null for empty input (treated as "unknown", never as a mismatch).
+String? _adminKey(Object? raw) {
+  final s = (raw ?? '').toString().trim();
+  if (s.isEmpty) return null;
+  return _removeDiacritics(s.toLowerCase());
 }
 
 const _ua = 'navbridge/1.0 (BLE portable navigation; OSM search)';
@@ -406,7 +426,9 @@ String? rewriteDateStreet(String s) {
   // If numPart looks like a date (e.g. 30/4, 2/9) and is in the historical
   // date-street whitelist, check whether the query is actually a date-street
   // name rather than a house number on another street.
-  final dateMatch = RegExp(r'^([0-9]{1,2})[/.\-]([0-9]{1,2})$').firstMatch(numPart);
+  final dateMatch = RegExp(
+    r'^([0-9]{1,2})[/.\-]([0-9]{1,2})$',
+  ).firstMatch(numPart);
   if (dateMatch != null) {
     final d = int.parse(dateMatch.group(1)!);
     final mo = int.parse(dateMatch.group(2)!);
@@ -465,9 +487,11 @@ Future<List<OsmSuggestion>> _photonSearch(
 
   final fullResults = await Future.wait([
     for (final v in fullVariants)
-      _photonSearchRaw(v, limit: limit, focus: focus).catchError(
-        (_) => <OsmSuggestion>[],
-      ),
+      _photonSearchRaw(
+        v,
+        limit: limit,
+        focus: focus,
+      ).catchError((_) => <OsmSuggestion>[]),
   ]);
   for (final res in fullResults) {
     out.addAll(res);
@@ -482,9 +506,11 @@ Future<List<OsmSuggestion>> _photonSearch(
 
     final streetResults = await Future.wait([
       for (final v in streetVariants)
-        _photonSearchRaw(v, limit: limit, focus: focus).catchError(
-          (_) => <OsmSuggestion>[],
-        ),
+        _photonSearchRaw(
+          v,
+          limit: limit,
+          focus: focus,
+        ).catchError((_) => <OsmSuggestion>[]),
     ]);
     for (final res in streetResults) {
       out.addAll(res);
@@ -497,7 +523,6 @@ Future<List<OsmSuggestion>> _photonSearch(
       if (seen.add(s.refId)) s,
   ].take(limit).toList();
 }
-
 
 /// One Photon query. NOTE: no `lang=` param — Photon only supports
 /// default/de/en/fr and REJECTS the whole request for any other language
@@ -538,6 +563,7 @@ Future<List<OsmSuggestion>> _photonSearchRaw(
     final district = (props['district'] ?? '') as String;
     final city = (props['city'] ?? '') as String;
     final state = (props['state'] ?? '') as String;
+    final country = (props['countrycode'] ?? props['country'] ?? '') as String;
     final display = <String>[
       name,
       if (addr.isNotEmpty && addr != name) addr,
@@ -553,6 +579,8 @@ Future<List<OsmSuggestion>> _photonSearchRaw(
         display: display,
         lat: coords[1].toDouble(),
         lng: coords[0].toDouble(),
+        country: _adminKey(country),
+        province: _adminKey(state),
       ),
     );
   }
@@ -673,7 +701,7 @@ Future<List<OsmSuggestion>> osmAutocomplete(
     final url =
         '$_nominatimBase/search'
         '?format=jsonv2'
-        '&addressdetails=0'
+        '&addressdetails=1'
         '&limit=$limit'
         '&accept-language=vi'
         '&countrycodes=vn'
@@ -691,12 +719,16 @@ Future<List<OsmSuggestion>> osmAutocomplete(
       final lng = double.tryParse('${e['lon']}');
       final name = (e['display_name'] ?? '') as String;
       if (lat == null || lng == null || name.isEmpty) continue;
+      // `addressdetails=1` gives the country + province for the ranking below.
+      final addr = (e['address'] as Map?) ?? const {};
       out.add(
         OsmSuggestion(
           refId: '${e['osm_type']}/${e['osm_id']}',
           display: name,
           lat: lat,
           lng: lng,
+          country: _adminKey(addr['country_code'] ?? addr['country']),
+          province: _adminKey(addr['state'] ?? addr['province']),
         ),
       );
     }
@@ -731,32 +763,103 @@ Future<List<OsmSuggestion>> osmAutocomplete(
   }
 }
 
-/// Sort [suggestions] balancing search engine relevance and proximity to
-/// [focus] (current location).
+/// The driver's own country + province, resolved from GPS — the reference for
+/// "same country, then same province" search ranking.
+class AdminArea {
+  final String? country;
+  final String? province;
+  const AdminArea({this.country, this.province});
+}
+
+/// Cached home area (see [ensureHomeAdmin]); null until it is resolved once.
+AdminArea? homeAdmin;
+
+LatLng? _homePos;
+DateTime? _homeAt;
+const _homeTtl = Duration(hours: 2);
+
+/// Resolve the driver's country/province ONCE from [pos] (Nominatim reverse
+/// with `addressdetails=1`) and cache it for the search ranking.
 ///
-/// If [query] is provided and the top search result is an exact/prominent
-/// match (e.g. searching "Hà Nội" yields "Thành phố Hà Nội"), it is preserved
-/// at rank 1 rather than being pushed below a local shop 1000 km closer.
+/// Fire-and-forget by design — the ranking must never block a keystroke, so
+/// the first search of a session may run without it and later ones benefit.
+/// Re-resolved after moving >20 km or [_homeTtl], so crossing a province
+/// boundary updates the bias.
+Future<void> ensureHomeAdmin(LatLng pos) async {
+  final at = _homePos;
+  final when = _homeAt;
+  if (at != null && when != null) {
+    final moved = const Distance().as(LengthUnit.Meter, at, pos);
+    if (moved < 20000 && DateTime.now().difference(when) < _homeTtl) return;
+  }
+  _homePos = pos;
+  _homeAt = DateTime.now();
+  try {
+    final url =
+        '$_nominatimBase/reverse?format=jsonv2&zoom=10&addressdetails=1'
+        '&accept-language=vi&lat=${pos.latitude}&lon=${pos.longitude}';
+    final res = await http
+        .get(Uri.parse(url), headers: {'User-Agent': _ua})
+        .timeout(const Duration(seconds: 8));
+    if (res.statusCode != 200) return;
+    final a =
+        ((jsonDecode(utf8.decode(res.bodyBytes)) as Map)['address'] as Map?) ??
+        const {};
+    homeAdmin = AdminArea(
+      country: _adminKey(a['country_code'] ?? a['country']),
+      province: _adminKey(a['state'] ?? a['province'] ?? a['city']),
+    );
+    debugPrint(
+      'SEARCH: home admin country=${homeAdmin?.country} '
+      'province=${homeAdmin?.province}',
+    );
+  } catch (_) {
+    // Keep whatever we had — the ranking just falls back to distance.
+  }
+}
+
+/// Rank search suggestions for the driver: SAME COUNTRY first, then SAME
+/// PROVINCE, then nearest to [focus] blended with the provider's own ordering.
 ///
-/// Suggestions with unresolved coordinates (`lat==0 && lng==0`) retain their
-/// relative order after resolved suggestions.
-List<OsmSuggestion> _sortNearFocus(
-  List<OsmSuggestion> suggestions,
-  LatLng? focus, {
+/// Why: a common Vietnamese place name ("Bến Thành", "Hòa Bình", "Tân An")
+/// exists in many provinces, and a pure distance/provider ranking happily puts
+/// a namesake elsewhere above the one the driver means. Country/province are
+/// only compared when BOTH sides are known, so a provider that omits them can
+/// never have a good local result demoted by accident.
+///
+/// [focus] = current location. [query] enables the exact/prefix boost that
+/// keeps a prominent match (e.g. "Hà Nội" → "Thành phố Hà Nội") at rank 1 —
+/// but only when that top pick is not in another country. Suggestions with
+/// unresolved coordinates (`lat==0 && lng==0`) keep their relative order after
+/// the resolved ones.
+List<OsmSuggestion> rankSuggestions(
+  List<OsmSuggestion> suggestions, {
+  LatLng? focus,
   String? query,
+  AdminArea? home,
 }) {
   if (focus == null || suggestions.length < 2) return suggestions;
   const Distance d = Distance();
   final q = query != null ? _removeDiacritics(query.trim().toLowerCase()) : '';
+  final homeCountry = home?.country;
+  final homeProvince = home?.province;
 
   double score(int originalIndex, OsmSuggestion s) {
+    final otherCountry =
+        homeCountry != null && s.country != null && s.country != homeCountry;
     if (s.lat == 0 && s.lng == 0) {
-      return 1e9 + originalIndex;
+      // Unresolved — Google Places autocomplete predictions carry no
+      // coordinates until the user picks one. Distance cannot rank these, so
+      // keep the provider's order and use the ONE signal that exists: a
+      // prediction in another country must not outrank domestic ones. (No
+      // province tier here — with no coordinates it cannot be weighed.)
+      return 1e9 + originalIndex + (otherCountry ? 1e6 : 0.0);
     }
     final distKm = d.as(LengthUnit.Meter, focus, LatLng(s.lat, s.lng)) / 1000.0;
     final name = _removeDiacritics(s.display.toLowerCase());
 
-    final isExact = q.isNotEmpty &&
+    final isExact =
+        q.isNotEmpty &&
         (name == q ||
             name.startsWith('$q,') ||
             name.startsWith('thanh pho $q') ||
@@ -764,28 +867,50 @@ List<OsmSuggestion> _sortNearFocus(
             name.startsWith('tp $q'));
     final startsWith = q.isNotEmpty && name.startsWith(q);
 
-    // If the top search result is an exact or prominent text match, keep it at the top
-    if (originalIndex == 0 && (isExact || startsWith)) {
+    // A prominent exact match stays at the top — unless it is in another
+    // country, which is exactly the case this ranking exists to fix.
+    if (originalIndex == 0 && (isExact || startsWith) && !otherCountry) {
       return -1000.0;
     }
 
-    // Weight distance and original search engine relevance
+    // Weight distance and the original search-engine relevance.
     double penalty = distKm;
     if (isExact) {
       penalty *= 0.1;
     } else if (startsWith) {
       penalty *= 0.4;
     }
-    // Search engine rank penalty (15 km per rank)
+    // Search engine rank penalty (15 km per rank).
     penalty += originalIndex * 15.0;
+
+    // Country → province priority, in km-equivalent units so it dominates
+    // distance without being absolute: a same-country place 300 km away still
+    // beats a namesake abroad, and a same-province one beats both.
+    if (otherCountry) {
+      penalty += 5000;
+    } else if (homeProvince != null &&
+        s.province != null &&
+        s.province != homeProvince) {
+      penalty += 250;
+    }
 
     return penalty;
   }
 
   final indexed = suggestions.asMap().entries.toList();
-  indexed.sort((a, b) => score(a.key, a.value).compareTo(score(b.key, b.value)));
+  indexed.sort(
+    (a, b) => score(a.key, a.value).compareTo(score(b.key, b.value)),
+  );
   return indexed.map((e) => e.value).toList();
 }
+
+/// [rankSuggestions] with the cached [homeAdmin] applied — the ranking every
+/// search path uses (see [_sortNearFocus] call sites).
+List<OsmSuggestion> _sortNearFocus(
+  List<OsmSuggestion> suggestions,
+  LatLng? focus, {
+  String? query,
+}) => rankSuggestions(suggestions, focus: focus, query: query, home: homeAdmin);
 
 /// Google Maps Geocoding API search (used when [VietmapConfig.googleApiKey]
 /// is configured). Requires the Google Geocoding API enabled + billing.
@@ -810,6 +935,17 @@ Future<List<OsmSuggestion>> googleGeocode(String text, {int limit = 6}) async {
     final geometry = r['geometry'] as Map<String, dynamic>?;
     final loc = geometry?['location'] as Map<String, dynamic>?;
     if (addr.isEmpty || loc == null) continue;
+    // Google returns the admin hierarchy explicitly — country + admin_area_1
+    // (the province/city) — which is exactly what the ranking needs.
+    String? cc, prov;
+    for (final c in (r['address_components'] as List? ?? const [])) {
+      if (c is! Map) continue;
+      final types = (c['types'] as List? ?? const []).cast<Object?>();
+      if (types.contains('country')) cc = c['short_name'] as String?;
+      if (types.contains('administrative_area_level_1')) {
+        prov = c['long_name'] as String?;
+      }
+    }
     out.add(
       OsmSuggestion(
         refId: (r['place_id'] ?? '') as String,
@@ -817,6 +953,8 @@ Future<List<OsmSuggestion>> googleGeocode(String text, {int limit = 6}) async {
         lat: ((loc['lat'] ?? 0) as num).toDouble(),
         lng: ((loc['lng'] ?? 0) as num).toDouble(),
         source: 'google',
+        country: _adminKey(cc),
+        province: _adminKey(prov),
       ),
     );
   }
@@ -868,6 +1006,15 @@ Future<List<OsmSuggestion>> googlePlaceAutocomplete(
       )) {
     final desc = (r['description'] ?? '') as String;
     if (desc.isEmpty) continue;
+    // `terms` ends with the country ("Việt Nam") and, for a full Vietnamese
+    // address, the province/city sits just before it ("… Tỉnh Bình Dương,
+    // Việt Nam"). Best-effort — unknown admin is neutral in the ranking, so a
+    // wrong guess can only fail to promote, never demote.
+    final terms = [
+      for (final t in (r['terms'] as List? ?? const []))
+        if (t is Map && '${t['value'] ?? ''}'.trim().isNotEmpty)
+          '${t['value']}'.trim(),
+    ];
     out.add(
       OsmSuggestion(
         refId: (r['place_id'] ?? '') as String,
@@ -875,6 +1022,8 @@ Future<List<OsmSuggestion>> googlePlaceAutocomplete(
         lat: 0,
         lng: 0,
         source: 'google',
+        country: _adminKey(terms.isNotEmpty ? terms.last : null),
+        province: _adminKey(terms.length >= 2 ? terms[terms.length - 2] : null),
       ),
     );
   }
@@ -991,8 +1140,10 @@ Future<String> reverseGeocode(LatLng pos) async {
           .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
           .timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
-        final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-        final results = (data['results'] as List? ?? []).cast<Map<String, dynamic>>();
+        final data =
+            jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        final results = (data['results'] as List? ?? [])
+            .cast<Map<String, dynamic>>();
         if (results.isNotEmpty) {
           final addr = results[0]['formatted_address'] as String?;
           if (addr != null && addr.isNotEmpty) return addr;
@@ -1013,7 +1164,8 @@ Future<String> reverseGeocode(LatLng pos) async {
           .get(Uri.parse(url), headers: {'User-Agent': _ua})
           .timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
-        final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        final data =
+            jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
         final name = (data['display_name'] ?? '') as String;
         if (name.isNotEmpty) return name;
       }

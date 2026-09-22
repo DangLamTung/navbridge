@@ -191,12 +191,19 @@ class TripAnnouncement {
   kind; // 'maneuver' | 'overspeed' | 'limit' | 'gps' | 'camera' | 'sign' | 'rain'
   final String text;
 
+  /// Attribution for offline audits — e.g. {@code icon} (the maneuver icon code
+  /// the engine chose AFTER the geometry cross-check) and {@code turnDeg} (the
+  /// signed route-geometry angle at that maneuver, + = right). Deliberately a
+  /// small string map: adding a key never breaks older readers of trip files.
+  final Map<String, String> extra;
+
   TripAnnouncement({
     required this.time,
     required this.lat,
     required this.lng,
     required this.kind,
     required this.text,
+    this.extra = const {},
   });
 
   Map<String, dynamic> toJson() => {
@@ -206,6 +213,7 @@ class TripAnnouncement {
     'lng': lng,
     'kind': kind,
     'text': text,
+    if (extra.isNotEmpty) 'extra': extra,
   };
 }
 
@@ -324,7 +332,12 @@ class TripLogger {
   }
 
   /// Record a voice announcement at [pos] (the car's current position).
-  void logAnnouncement(LatLng pos, String text, {String kind = 'voice'}) {
+  void logAnnouncement(
+    LatLng pos,
+    String text, {
+    String kind = 'voice',
+    Map<String, String> extra = const {},
+  }) {
     announcements.add(
       TripAnnouncement(
         time: DateTime.now(),
@@ -332,6 +345,7 @@ class TripLogger {
         lng: pos.longitude,
         kind: kind,
         text: text,
+        extra: extra,
       ),
     );
     _spool.add('a', announcements.last.toJson());

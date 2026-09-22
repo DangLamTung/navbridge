@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 """Regenerate `assets/offline_map/signs/no_u_turn.png` (QCVN 41:2019 P.125).
 
-Why: the shipped PNG was structurally broken (measured by
-`check_sign_structure.py`):
-  * black glyph only 2,360 px vs ~7,600 px for the other P.12x signs
-  * glyph centroid 30% of the disc radius off-centre (arrow pushed right)
-  * the red prohibition SLASH was absent (inner-red x/y correlation +0.06,
-    where the correct signs measure +0.96)
+⚠️ HISTORICAL — its output is NO LONGER BUNDLED (deleted 2026-09-21).
+The map paints the U-turn prohibition with `_ProhibitionPainter(_ProGliph.uTurn)`
+like every other kind, because hand-made art had crept into the sign layer and
+the user asked for it to go: "still have png u created in the asset". The lesson
+recorded here is still worth keeping:
 
-A prohibition sign without its slash reads as permission, so "cấm quay đầu"
-rendered as "quay đầu được phép" — the wrong sign on the map.
+Why the PNG existed at all: the asset that shipped in the no_u_turn slot was a
+CẤM VƯỢT image (two cars) — verified by fetching the Commons file
+`Vietnam road sign P.125 (QCVN 41-2016-BGTVT).svg`, which renders two cars, not a
+U-turn arrow. So the app showed the wrong sign. That file also measured as
+"structurally broken" (no red slash), but that check was asking the wrong
+question: cấm vượt legitimately has no slash, so the audit was measuring a wrong
+asset as malformed instead of recognising it as a DIFFERENT sign.
 
-This draws the sign deterministically so it can be verified by
-`check_sign_art.py` and `check_sign_structure.py`:
-
-    white disc + red ring + black u-turn arrow (loops to the LEFT)
-    + red diagonal slash (top-left -> bottom-right, matching the other signs)
-
-The original file is preserved as `no_u_turn.png.orig` the first time this runs.
+This draws a U-turn prohibition deterministically (white disc + red ring + black
+u-turn arrow + red slash). Kept for reference / regeneration only.
 
 Usage:
     python3 tools/signs/make_uturn_sign.py [--size 330]

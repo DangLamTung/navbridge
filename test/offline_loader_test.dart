@@ -42,7 +42,7 @@ void main() {
     test(
       'reads a bundled binary pack without slicing the buffer by hand',
       () async {
-        final bytes = await readOfflineBytes('signs/no_u_turn.png');
+        final bytes = await readOfflineBytes('signs/no_left_turn.png');
         expect(bytes, isNotEmpty);
       },
     );

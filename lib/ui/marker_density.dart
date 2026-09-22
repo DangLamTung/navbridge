@@ -33,9 +33,15 @@ int markerCapForZoom(
 
 /// Signs per frame on the nav map — few at region scale, all of the route at
 /// street level, never more than [kMaxSignMarkers].
+///
+/// The ceiling was 60, which on a long route read as "the signs are missing":
+/// the layer is capped AFTER the candidates nearest the car have been picked
+/// (see `_projectSignOverlays`), so the cap is a window around the car, not a
+/// budget for the whole route. It only has to stay small enough that ~4 Hz
+/// reprojection of that many widgets stays smooth on the low-end phone.
 int signMarkerCap(double zoom) => markerCapForZoom(
   zoom,
-  atMin: 12,
+  atMin: 20,
   atMax: kMaxSignMarkers,
   minZoom: 13,
   maxZoom: 17,
@@ -43,10 +49,11 @@ int signMarkerCap(double zoom) => markerCapForZoom(
 );
 
 /// Cameras per frame — cameras cluster far less than signs, so a slightly
-/// smaller floor, same ceiling.
+/// smaller floor, same shape. The road ahead is what matters, and one camera is
+/// one overlay (see `_nearestCameras`).
 int cameraMarkerCap(double zoom) => markerCapForZoom(
   zoom,
-  atMin: 10,
+  atMin: 12,
   atMax: kMaxCameraMarkers,
   minZoom: 13,
   maxZoom: 17,
@@ -54,5 +61,5 @@ int cameraMarkerCap(double zoom) => markerCapForZoom(
 );
 
 /// Hard ceilings (a long route can carry a lot of both).
-const int kMaxSignMarkers = 60;
-const int kMaxCameraMarkers = 60;
+const int kMaxSignMarkers = 120;
+const int kMaxCameraMarkers = 80;

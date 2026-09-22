@@ -431,32 +431,60 @@ extension _NavVoice on _NavigationPageState {
       // Fresh turn → announce it immediately with its distance.
       _spokenFar = true;
       final txt = _announce(nav, m);
-      _logAnnouncement(txt, kind: 'maneuver');
+      _logAnnouncement(txt, kind: 'maneuver', extra: _maneuverExtra(nav));
       _voice.speak(txt, priority: VoiceGuide.priorityCritical);
     } else if (!_spokenFar && m <= far && m > near) {
       _spokenFar = true;
       final txt = _announce(nav, m);
-      _logAnnouncement(txt, kind: 'maneuver');
+      _logAnnouncement(txt, kind: 'maneuver', extra: _maneuverExtra(nav));
       _voice.speak(txt, priority: VoiceGuide.priorityCritical);
     } else if (!_spokenNear && m <= near && m > finalM) {
       _spokenNear = true;
       final txt = _announce(nav, m);
-      _logAnnouncement(txt, kind: 'maneuver');
+      _logAnnouncement(txt, kind: 'maneuver', extra: _maneuverExtra(nav));
       _voice.speak(txt, priority: VoiceGuide.priorityCritical);
     } else if (!_spokenFinal && m <= finalM) {
       _spokenFinal = true;
       final txt = _announce(nav, m, now: true);
-      _logAnnouncement(txt, kind: 'maneuver');
+      _logAnnouncement(txt, kind: 'maneuver', extra: _maneuverExtra(nav));
       _voice.speak(txt, priority: VoiceGuide.priorityCritical);
     }
+  }
+
+  /// Attribution stored with a maneuver callout: the icon code the engine used
+  /// (AFTER the route-geometry cross-check) plus the signed geometry angle at
+  /// that maneuver. Lets the next drive be audited with plain JSON — "did the
+  /// direction it said match the turn it told us about" — instead of inferring
+  /// it from the fix trace (see [refineManeuverIcon]).
+  Map<String, String> _maneuverExtra(NavProgress nav) {
+    final mv = nav.maneuver;
+    final deg = mv == null
+        ? null
+        : routeTurnDegrees(_route?.geometry ?? const <LatLng>[], mv);
+    return {
+      'icon': '${nav.iconCode}',
+      if (deg != null) 'turnDeg': deg.round().toString(),
+    };
   }
 
   String _announce(NavProgress nav, int m, {bool now = false}) {
     final verb = maneuverVerb(nav.iconCode);
     // "đi a b c, sau đó next move" — say the road you're ON first, then the
-    // maneuver. `text` is the current road (what the car is travelling);
-    // `nextText` is the road you turn INTO for the upcoming maneuver.
-    final cur = nav.text.isNotEmpty ? nav.text : '';
+    // maneuver. `nextText` is the road you turn INTO for the upcoming maneuver.
+    //
+    // ⭐ The road you are ON comes from the SAME source as the on-screen chip —
+    // the posted-limit segment under the car (`_roadInfo.name`, filled from the
+    // Waze/graph lookup) — NOT from the route engine's step name. Measured over
+    // the recorded drives (check_voice_calls.py), the two disagreed on 172 of
+    // 559 callouts (31 %), because they answer different questions: the engine
+    // names the STEP the route is in (it flips at the maneuver point), the layer
+    // names the SEGMENT under the GPS fix. The driver hears the callout while
+    // looking at the chip, so the callout has to use the chip's source; the
+    // engine name is the fallback, since 62 % of Waze segments carry no name.
+    final liveRoad = _roadInfo?.name ?? '';
+    final cur = liveRoad.isNotEmpty
+        ? liveRoad
+        : (nav.text.isNotEmpty ? nav.text : '');
     final target = nav.nextText.isNotEmpty ? nav.nextText : '';
     final onRoad = cur.isNotEmpty ? ' trên $cur' : '';
     // Emphasize the road you turn INTO — that's the part the driver needs.
@@ -605,11 +633,15 @@ extension _NavVoice on _NavigationPageState {
 
   /// Append a spoken announcement to the active trip log (with the car's
   /// current position) so it can be compared against the fixes + street data.
-  void _logAnnouncement(String text, {String kind = 'voice'}) {
+  void _logAnnouncement(
+    String text, {
+    String kind = 'voice',
+    Map<String, String> extra = const {},
+  }) {
     final t = _trip;
     final p = _current;
     if (t == null || p == null || text.isEmpty) return;
-    t.logAnnouncement(p, text, kind: kind);
+    t.logAnnouncement(p, text, kind: kind, extra: extra);
   }
 
   Future<void> _toggleListening() async {

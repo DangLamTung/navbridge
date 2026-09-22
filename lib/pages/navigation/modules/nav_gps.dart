@@ -479,12 +479,24 @@ extension _NavGps on _NavigationPageState {
       try {
         final r = await _roadInfoFromGraph(pos);
         if (r != null && mounted) {
-          setNavState(() => _roadInfo = r);
+          // Apply the posted-limit layer to the fresh road info BEFORE it is
+          // published. Publishing the bare graph value and letting the NEXT
+          // fix's layer lookup correct it (~1 s later) is exactly what the
+          // driver saw as a lagging limit: every road change flashed the
+          // statutory class default first, then jumped to the real posted
+          // value (user: "the speed limit still slow, can u make it instant
+          // update like waze segment").
+          final merged = await _withPostedLayer(r, pos);
+          if (!mounted) return;
+          setNavState(() => _roadInfo = merged);
           // VN rarely tags maxspeed, so the graph limit is usually only the
           // statutory default. When ONLINE, correct it in the background from
           // OSM's REAL `maxspeed` tag — the graph value shows instantly and
           // the correction overwrites it ~1 s later (never blocks the UI).
-          if (r.maxspeed == null && !_offline && !forceOffline) {
+          // Skipped when the layer already answered: that value is authority
+          // (`applyPostedLayer` sets `maxspeed`), so the Overpass trip would
+          // only be able to tighten it, at the cost of a network round-trip.
+          if (merged.maxspeed == null && !_offline && !forceOffline) {
             unawaited(_correctSpeedFromOsm(pos));
           }
           // The posted-limit lookup itself runs on EVERY fix in the nav tick
@@ -505,13 +517,48 @@ extension _NavGps on _NavigationPageState {
         vehicle: vehicleType,
         heading: _heading,
       );
+      if (!mounted || r == null) return;
+      // Same rule as the graph path: the posted layer is applied BEFORE the
+      // road is published, so the limit never lags a road change.
+      final merged = await _withPostedLayer(r, pos);
       if (!mounted) return;
-      setNavState(() => _roadInfo = r);
+      setNavState(() => _roadInfo = merged);
       _maybeWarnMotorwayProhibited();
     } catch (_) {
       // keep the last known road on failure
     } finally {
       if (mounted) setNavState(() => _roadLoading = false);
+    }
+  }
+
+  /// [road] with the posted-limit segment layer under [pos] applied, using the
+  /// SAME offline lookup [_correctSpeedFromWaze] uses (Waze segment → Waze
+  /// point → VietMap point, O(1) after load).
+  ///
+  /// Called when fresh road info is published so the limit is right from the
+  /// first frame of a new road. It also makes the two writers race-safe: both
+  /// publish road+layer, so whichever lands last cannot leave a bare class
+  /// default on screen.
+  Future<RoadInfo> _withPostedLayer(RoadInfo road, LatLng pos) async {
+    try {
+      final lim = await speedLimitAt(
+        pos,
+        headingDeg: _heading == 0 ? null : _heading,
+      );
+      if (lim == null) return road;
+      // Read the layer kind / street name immediately after the lookup — the
+      // next lookup overwrites both.
+      final layerKind = lastLimitLayer();
+      final layerName = lastWazeStreetName();
+      return applyPostedLayer(
+        road,
+        kmh: lim,
+        vehicle: vehicleType,
+        layerSrc: layerKind ?? srcSegment,
+        name: layerName,
+      );
+    } catch (_) {
+      return road; // no layer data → the class default stands
     }
   }
 
@@ -553,7 +600,12 @@ extension _NavGps on _NavigationPageState {
   /// Vân Côi, Phan Sào Nam, Đồng Đen, Trương Công Định, Cách Mạng Tháng Tám
   /// and Lý Thường Kiệt. [snapped] is used only when [raw] finds nothing.
   Future<void> _correctSpeedFromWaze(LatLng raw, {LatLng? snapped}) async {
-    if (_roadLoading) return; // don't stack/race with the main road fetch
+    // NOTE: deliberately NO `_roadLoading` gate any more. It used to return
+    // early while the graph/Overpass road query was in flight — which is
+    // precisely when the car has just changed road and the new segment's
+    // limit is needed, so the ONE source that can answer instantly was muted
+    // at the only moment it mattered. The layer lookup is offline and O(1);
+    // only the OSM re-fetch has to avoid stacking (see _correctSpeedFromOsm).
     if (_wazeCorrecting) return; // keep limit + street from the same lookup
     _wazeCorrecting = true;
     try {

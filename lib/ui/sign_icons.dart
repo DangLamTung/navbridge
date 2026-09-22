@@ -24,17 +24,51 @@ class SignIcon extends StatelessWidget {
   /// Folder with the real QCVN 41 sign PNGs (bundled assets).
   static const String _assetDir = 'assets/offline_map/signs';
 
-  /// Real sign image for [kind], or null to fall back to [CustomPaint]
-  /// (dynamic signs such as the speed limit, and signs without a clean
-  /// public-domain image).
-  static String? _assetFor(RoadSignKind kind) => switch (kind) {
-    RoadSignKind.stop => '$_assetDir/stop.png',
-    RoadSignKind.giveWay => '$_assetDir/give_way.png',
-    RoadSignKind.noPassing => '$_assetDir/no_passing.png',
+  /// Real sign image for [kind], or null to fall back to the [CustomPaint]
+  /// painters below.
+  ///
+  /// ⭐ ONLY kinds whose bundled artwork has been VISUALLY verified belong in
+  /// this list. Four kinds used to have an image and three of them drew the
+  /// WRONG sign while driving (user: "still using bad sign png in the run").
+  /// Audited by laying every asset out in one labelled sheet
+  /// (`tools/signs/sign_contact_sheet.py`) and reading them:
+  ///   • `stop.png` — a PHOTO of P.102 "CẤM ĐI NGƯỢC CHIỀU" (no entry),
+  ///     watermarked "ThietBiBaoHoLaoDong.Net". The STOP sign is P.101.
+  ///   • `give_way.png` — a red-bordered CIRCLE with two opposing arrows;
+  ///     P.132 nhường đường is an inverted TRIANGLE.
+  ///   • `end_prohibitions.png` — two cars under a strike-through = P.135
+  ///     "hết cấm vượt", NOT P.133 "hết mọi lệnh cấm".
+  ///   • `no_passing.png` — "cấm vượt đối với XE TẢI" (truck + car); the
+  ///     dataset's `no_passing` is the universal sign, so as drawn it tells a
+  ///     rider the ban is about trucks.
+  /// Those now paint instead, which cannot drift from the kind they represent:
+  /// `_StopPainter` (red octagon + STOP), `_YieldPainter` (inverted triangle),
+  /// `_ProhibitionPainter(_ProGlyph.cars)` (cấm vượt) and
+  /// `_EndProhibitionsPainter()`.
+  ///
+  /// # Provenance of the images that ARE used (all real artwork, not ours)
+  ///
+  /// | file | source (Wikimedia Commons) | licence |
+  /// |------|---------------------------|---------|
+  /// | `no_left_turn.png`  | QCVN 41 P.123 cấm rẽ trái | Public domain |
+  /// | `no_right_turn.png` | QCVN 41 P.124 cấm rẽ phải | Public domain |
+  /// | `no_u_turn.png`     | `Vietnam road sign P124a1.svg` —
+  /// Commons description "No U-turn to the left" (VN drives on the right, so
+  /// the standard U-turn is made to the left) | Public domain |
+  ///
+  /// The U-turn slot used to hold a CẤM VƯỢT image, and was briefly filled with
+  /// a sign WE drew (`tools/signs/make_uturn_sign.py`, now historical) — user:
+  /// "no u turn find real sign, dont draw anyshit". Fetched with
+  /// `Special:FilePath/<title>?width=330`; the description was read from the
+  /// file metadata rather than inferred, because a U-turn arrow points down and
+  /// reads as a plain "downward arrow" at thumbnail size.
+  ///
+  /// `test/sign_icons_test.dart` pins this list AND checks every mapped file
+  /// exists — add a kind here only after LOOKING at the image.
+  static String? assetFor(RoadSignKind kind) => switch (kind) {
     RoadSignKind.noLeftTurn => '$_assetDir/no_left_turn.png',
     RoadSignKind.noRightTurn => '$_assetDir/no_right_turn.png',
     RoadSignKind.noUTurn => '$_assetDir/no_u_turn.png',
-    RoadSignKind.endProhibitions => '$_assetDir/end_prohibitions.png',
     _ => null,
   };
 
@@ -48,7 +82,7 @@ class SignIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final asset = _assetFor(kind);
+    final asset = assetFor(kind);
     if (asset != null) {
       return SizedBox(
         width: size,

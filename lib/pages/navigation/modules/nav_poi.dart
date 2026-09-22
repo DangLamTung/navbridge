@@ -68,7 +68,7 @@ extension _NavPoi on _NavigationPageState {
           child: Row(
             children: [
               Text(
-                '${_poiType?.label ?? ''} gần đây',
+                '${_poiType?.label ?? ''} gần bạn & trên đường',
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
@@ -175,6 +175,7 @@ extension _NavPoi on _NavigationPageState {
   Widget _poiCard(PoiResult p) {
     final d = _current == null ? 0.0 : distanceMeters(_current!, p.pos);
     final col = poiColor(p.type);
+    final tier = _poiTier[p];
     return Material(
       color: Colors.white,
       elevation: 4,
@@ -212,6 +213,23 @@ extension _NavPoi on _NavigationPageState {
                 '${formatDistance(d)} • ${p.type.label}',
                 style: TextStyle(fontSize: 11, color: Colors.grey[600]),
               ),
+              // Why this result is where it is, so the blend is explainable:
+              // the first few are "Gần bạn", the next are "Trên đường".
+              if (tier != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  tier.label,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: tier == PoiRelevance.nearest
+                        ? const Color(0xFF1A73E8)
+                        : tier == PoiRelevance.onRoute
+                        ? const Color(0xFF00A651)
+                        : Colors.grey[500],
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -266,47 +284,26 @@ extension _NavPoi on _NavigationPageState {
     return out;
   }
 
-  /// Rank POI results for display: prefer the REAL current route — POIs ON the
-  /// path AHEAD of the car (same travel side), never behind the direction —
-  /// then by nearest. When no route is active, fall back to nearest
-  /// straight-line distance from [c]. This is the single ranking used by the
-  /// "Xăng" search / "gần nhất" gas button / any quick-POI category.
+  /// Rank POI results for display as a BLEND of nearest + on-route.
   ///
-  /// Google Places results ([PoiResult.placeId] set) are preferred over raw
-  /// OSM/Overpass ones as a tie-breaker — they're real, verified places with
-  /// names + ratings (e.g. "Petrolimex"), far better than the sparse OSM
-  /// "fuel" points.
+  /// The blend is [rankPoisBlended]: the [kNearestPoiFirst] closest places
+  /// first ("what's near me right now"), then the ones lying ON the current
+  /// route ahead, then the rest — so searching "trạm xăng" shows the 3 nearest
+  /// and then the ones actually up the road, instead of one or the other.
+  /// The tier is kept in [_poiTier] so each card can say which it is.
+  ///
+  /// Tie-break: a Google Places result ([PoiResult.placeId]) beats a raw
+  /// OSM/Overpass point at the same spot — real name + rating ("Petrolimex").
   List<PoiResult> _rankOnPathOrNearest(List<PoiResult> results, LatLng c) {
     final route = _route?.geometry ?? const <LatLng>[];
-    if (route.length > 2 && results.length > 1) {
-      final startIdx =
-          (_engine?.snappedSegmentIndex ?? 0).clamp(0, max(0, route.length - 1))
-              as int;
-      final ranked = rankPoisForRoute(
-        results,
-        route,
-        startIndex: startIdx,
-        carPos: c,
-      );
-      // Stable order: within the route-ranked list, prefer Google (placeId)
-      // entries when the ranking didn't already separate them.
-      ranked.sort((a, b) {
-        final ga = a.placeId != null ? 0 : 1;
-        final gb = b.placeId != null ? 0 : 1;
-        return ga.compareTo(gb);
-      });
-      return ranked;
-    }
-    final sorted = [...results]
-      ..sort((a, b) {
-        final dc = distanceMeters(c, a.pos).compareTo(distanceMeters(c, b.pos));
-        if (dc != 0) return dc;
-        // At the same distance, a Google-verified place beats an OSM point.
-        final ga = a.placeId != null ? 0 : 1;
-        final gb = b.placeId != null ? 0 : 1;
-        return ga.compareTo(gb);
-      });
-    return sorted;
+    final ranked = rankPoisBlended(
+      results,
+      carPos: c,
+      route: route,
+      nearestCount: kNearestPoiFirst,
+    );
+    _poiTier = {for (final r in ranked) r.poi: r.relevance};
+    return [for (final r in ranked) r.poi];
   }
 
   /// Vietmap (VN-native) POI pass — autocomplete "trạm xăng"/"trạm sạc" then
@@ -395,20 +392,24 @@ extension _NavPoi on _NavigationPageState {
       // street ahead). The corridor centres cover the car + ~10 km ahead.
       final key = _offlineKeyForPoiType(type);
       if (key != null) {
-        final offLimit =
-            (type == PoiType.fuel || type == PoiType.charging) ? 40 : 12;
-        final queryCenters =
-            (type == PoiType.fuel || type == PoiType.charging)
+        final offLimit = (type == PoiType.fuel || type == PoiType.charging)
+            ? 40
+            : 12;
+        final queryCenters = (type == PoiType.fuel || type == PoiType.charging)
             ? centers
             : [c];
         for (final qc in queryCenters) {
-          for (final p in await poisInCategory(key, near: qc, limit: offLimit)) {
-            if (!results.any((x) => _sameStation(x, PoiResult(
-                  name: p.name,
-                  lat: p.lat,
-                  lng: p.lng,
-                  type: type,
-                )))) {
+          for (final p in await poisInCategory(
+            key,
+            near: qc,
+            limit: offLimit,
+          )) {
+            if (!results.any(
+              (x) => _sameStation(
+                x,
+                PoiResult(name: p.name, lat: p.lat, lng: p.lng, type: type),
+              ),
+            )) {
               results.add(
                 PoiResult(name: p.name, lat: p.lat, lng: p.lng, type: type),
               );
@@ -420,10 +421,16 @@ extension _NavPoi on _NavigationPageState {
       // it fails (or the phone is offline). Search along the corridor centres
       // too, so stations AHEAD on the route are found, not just near the car.
       try {
-        for (final qc in (type == PoiType.fuel || type == PoiType.charging)
-            ? centers
-            : [c]) {
-          for (final r in await searchPois(type, qc, radius: 10000, limit: 30)) {
+        for (final qc
+            in (type == PoiType.fuel || type == PoiType.charging)
+                ? centers
+                : [c]) {
+          for (final r in await searchPois(
+            type,
+            qc,
+            radius: 10000,
+            limit: 30,
+          )) {
             if (!results.any((x) => _sameStation(x, r))) results.add(r);
           }
         }
@@ -535,7 +542,12 @@ extension _NavPoi on _NavigationPageState {
             ),
           )) {
             results.add(
-              PoiResult(name: p.name, lat: p.lat, lng: p.lng, type: PoiType.fuel),
+              PoiResult(
+                name: p.name,
+                lat: p.lat,
+                lng: p.lng,
+                type: PoiType.fuel,
+              ),
             );
           }
         }
@@ -562,7 +574,11 @@ extension _NavPoi on _NavigationPageState {
       // Google pass — nearest real gas stations (names/ratings from Google
       // Places) along the route corridor, not just around the car.
       try {
-        for (final r in await googlePoiSearch(PoiType.fuel, centers, radius: 15000)) {
+        for (final r in await googlePoiSearch(
+          PoiType.fuel,
+          centers,
+          radius: 15000,
+        )) {
           if (!results.any((x) => _sameStation(x, r))) results.add(r);
         }
       } catch (_) {}

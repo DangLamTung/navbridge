@@ -5,6 +5,10 @@
 ///   6=uturn-left, 7=uturn-right, 8=roundabout, 9=arrive, 0=unknown
 library;
 
+import 'dart:math' as math;
+
+import 'package:latlong2/latlong.dart';
+
 const int iconUnknown = 0;
 const int iconStraight = 1;
 const int iconTurnLeft = 2;
@@ -108,3 +112,108 @@ String maneuverVerb(int code) => switch (code) {
   iconArrive => 'đến nơi',
   _ => 'đi thẳng',
 };
+
+// ---------------------------------------------------------------------------
+// Turn-direction cross-check against the route GEOMETRY
+// ---------------------------------------------------------------------------
+//
+// The routers hand us a left/right LABEL per step (`modifier`), and the whole
+// guidance chain (voice verb, banner arrow, ESP32 maneuver packet) repeats it
+// verbatim. That label is not always what the road does: at angled Vietnamese
+// junctions, alley mouths and split carriageways a step gets labelled right
+// while its own polyline turns left. Audited over 30 recorded callouts anchored
+// on the street each one named, 4 disagreed with the driven path, all of them
+// "said right / went left" — e.g. "rẽ phải vào Tân Thành" where the route
+// swings −80°.
+//
+// The geometry is the path the driver is about to actually drive, so it is the
+// better authority for the DIRECTION. We only let it overrule the label inside
+// the lateral family (slight/left/right): U-turn and roundabout steps are
+// structural (a deliberate U-turn on a dual carriageway often swings only ~90°,
+// and a roundabout's own geometry is a circle), so those keep the router's word.
+
+/// [geometry] turn angle in degrees at [point]: positive = right (clockwise),
+/// negative = left. Chord bearings are taken [spanM] of polyline either side of
+/// the closest vertex, so a single tiny segment at the vertex can't dominate.
+/// Null when [point] can't be placed, or there isn't enough polyline on BOTH
+/// sides (route start/end).
+double? routeTurnDegrees(
+  List<LatLng> geometry,
+  LatLng point, {
+  double spanM = 45,
+}) {
+  if (geometry.length < 3) return null;
+  var vi = -1;
+  var best = double.infinity;
+  for (var i = 0; i < geometry.length; i++) {
+    final d = _meters(geometry[i], point);
+    if (d < best) {
+      best = d;
+      vi = i;
+    }
+  }
+  if (vi <= 0 || vi >= geometry.length - 1) return null;
+
+  var backM = 0.0;
+  var bi = vi;
+  while (bi > 0 && backM < spanM) {
+    backM += _meters(geometry[bi - 1], geometry[bi]);
+    bi--;
+  }
+  var fwdM = 0.0;
+  var fi = vi;
+  while (fi < geometry.length - 1 && fwdM < spanM) {
+    fwdM += _meters(geometry[fi], geometry[fi + 1]);
+    fi++;
+  }
+  // Need a real chord on both sides, else the angle is noise.
+  if (backM < spanM * 0.5 || fwdM < spanM * 0.5) return null;
+
+  final b1 = _bearing(geometry[bi], geometry[vi]);
+  final b2 = _bearing(geometry[vi], geometry[fi]);
+  return (b2 - b1 + 540) % 360 - 180;
+}
+
+/// The icon code the route geometry supports at [point], given the router's
+/// [fallback] code. Returns [fallback] whenever the geometry can't decide
+/// (no point, too little polyline, a near-straight or U-turn-sized angle) or
+/// the label is not a lateral turn.
+int refineManeuverIcon(List<LatLng> geometry, LatLng? point, int fallback) {
+  const lateral = {
+    iconSlightLeft,
+    iconSlightRight,
+    iconTurnLeft,
+    iconTurnRight,
+  };
+  if (point == null || !lateral.contains(fallback)) return fallback;
+  final deg = routeTurnDegrees(geometry, point);
+  if (deg == null) return fallback;
+  final a = deg.abs();
+  // < 18° the geometry itself is uncertain; >= 135° is U-turn shaped, and a
+  // U-turn is not a left/right we should invent from an angle.
+  if (a < 18 || a >= 135) return fallback;
+  if (deg > 0) return a >= 45 ? iconTurnRight : iconSlightRight;
+  return a >= 45 ? iconTurnLeft : iconSlightLeft;
+}
+
+double _meters(LatLng a, LatLng b) {
+  const r = 6371000.0;
+  final p1 = a.latitude * math.pi / 180;
+  final p2 = b.latitude * math.pi / 180;
+  final dp = (b.latitude - a.latitude) * math.pi / 180;
+  final dl = (b.longitude - a.longitude) * math.pi / 180;
+  final h =
+      math.sin(dp / 2) * math.sin(dp / 2) +
+      math.cos(p1) * math.cos(p2) * math.sin(dl / 2) * math.sin(dl / 2);
+  return 2 * r * math.asin(math.min(1, math.sqrt(h)));
+}
+
+double _bearing(LatLng a, LatLng b) {
+  final p1 = a.latitude * math.pi / 180;
+  final p2 = b.latitude * math.pi / 180;
+  final dl = (b.longitude - a.longitude) * math.pi / 180;
+  final y = math.sin(dl) * math.cos(p2);
+  final x =
+      math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl);
+  return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+}

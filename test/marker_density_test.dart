@@ -8,16 +8,27 @@ import 'package:navbridge/ui/marker_density.dart';
 
 void main() {
   test('signs: none at region scale, more as you zoom in, capped', () {
-    expect(signMarkerCap(9), 12); // floor: 11 is the "show nothing" cut-off
-    expect(signMarkerCap(13), 12);
+    expect(signMarkerCap(9), 20); // floor: 11 is the "show nothing" cut-off
+    expect(signMarkerCap(13), 20);
     expect(signMarkerCap(15), greaterThan(signMarkerCap(13)));
     expect(signMarkerCap(17), kMaxSignMarkers);
     expect(signMarkerCap(19), kMaxSignMarkers); // never above the ceiling
     expect(signMarkerCap(22), kMaxSignMarkers);
   });
 
+  test(
+    'street level keeps a useful budget (the "signs are missing" complaint)',
+    () {
+      // The cap is applied AFTER picking the signs nearest the car, so a big
+      // number here is a window around the driver, not a whole-route budget.
+      // 60 (the old ceiling) read as "too little" on a long route.
+      expect(signMarkerCap(17), greaterThanOrEqualTo(100));
+      expect(cameraMarkerCap(17), greaterThanOrEqualTo(60));
+    },
+  );
+
   test('cameras: same shape, slightly smaller floor', () {
-    expect(cameraMarkerCap(13), 10);
+    expect(cameraMarkerCap(13), 12);
     expect(cameraMarkerCap(15), greaterThan(cameraMarkerCap(13)));
     expect(cameraMarkerCap(17), kMaxCameraMarkers);
     expect(cameraMarkerCap(19), kMaxCameraMarkers);

@@ -35,6 +35,11 @@ extension _NavSearch on _NavigationPageState {
     // Typing in the END field (bottom of the directions bar) makes it the
     // active field for suggestion taps / map-taps.
     _navField = _NavField.end;
+    // Resolve the driver's own country/province once so suggestions can rank
+    // "same country, then same province" (e.g. a namesake province must not
+    // outrank the local place). Cached + fire-and-forget: never blocks typing.
+    final here = _current ?? _origin;
+    if (here != null) unawaited(ensureHomeAdmin(here));
     if (text.trim().length < 2) {
       setNavState(() {
         _suggestions = [];
@@ -187,98 +192,103 @@ extension _NavSearch on _NavigationPageState {
     _resolvingSuggestion = true;
     setNavState(() => _searching = true);
     try {
-    _searchFocus.unfocus();
-    _startFocus.unfocus();
-    debugPrint(
-      'SEARCH: select "${s.display}" source=${s.source} '
-      'lat=${s.lat} lng=${s.lng}',
-    );
-    // Google Places autocomplete predictions carry only a place_id — resolve
-    // coordinates + a proper address on selection.
-    var lat = s.lat;
-    var lng = s.lng;
-    if (s.source == 'google' && s.refId.isNotEmpty) {
-      final p = await googlePlaceDetails(s.refId);
-      if (p == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Không lấy được tọa độ địa điểm.')),
-          );
-        }
-        return;
-      }
-      lat = p.$1;
-      lng = p.$2;
-      s = OsmSuggestion(
-        refId: s.refId,
-        display: p.$3.isNotEmpty ? p.$3 : s.display,
-        lat: lat,
-        lng: lng,
+      _searchFocus.unfocus();
+      _startFocus.unfocus();
+      debugPrint(
+        'SEARCH: select "${s.display}" source=${s.source} '
+        'lat=${s.lat} lng=${s.lng}',
       );
-    }
-    // Vietmap suggestions carry no coordinates — resolve them on selection.
-    if (s.source == 'vietmap' && s.refId.isNotEmpty) {
-      final p = await vietmapPlace(s.refId);
-      if (p == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Không lấy được tọa độ địa điểm.')),
-          );
+      // Google Places autocomplete predictions carry only a place_id — resolve
+      // coordinates + a proper address on selection.
+      var lat = s.lat;
+      var lng = s.lng;
+      if (s.source == 'google' && s.refId.isNotEmpty) {
+        final p = await googlePlaceDetails(s.refId);
+        if (p == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Không lấy được tọa độ địa điểm.')),
+            );
+          }
+          return;
         }
-        return;
-      }
-      lat = p.$1;
-      lng = p.$2;
-      s = OsmSuggestion(refId: s.refId, display: s.display, lat: lat, lng: lng);
-    }
-    // Remember the picked place as a recent search (newest first, de-duped) so
-    // it can be re-selected from the history list with one tap and no network.
-    unawaited(RecentSearches.instance.add(s));
-    // Directions mode: the selected suggestion fills the ACTIVE field
-    // (start = origin override, end = destination) and builds the route.
-    if (_directionsMode) {
-      if (_navField == _NavField.start) {
-        setNavState(() {
-          _originOverride = LatLng(lat, lng);
-          _originName = s.display;
-          _startCtrl.text = s.display;
-          _suggestions = [];
-        });
-        return;
-      }
-      // End field → same as planning to a point.
-      _planToPoint(s.display, lat, lng);
-      return;
-    }
-    // Search (browse) mode: drop a pin + show a place card with a
-    // "Chỉ đường" button (Google-Maps style) instead of building a route.
-    // Bundled offline POI → wiki-style info card first (address / phone /
-    // hours / description / Wikipedia), with a "Đi đến đây" button that
-    // then plans the route to it.
-    final poi = s.poi;
-    if (poi != null && poi.hasInfo) {
-      final cat = await offlinePoiCategory(poi.category);
-      if (mounted && cat != null) {
-        showPoiInfoCard(
-          context,
-          poi: poi,
-          categoryLabel: cat.label,
-          categoryEmoji: cat.emoji,
-          onNavigate: () {
-            Navigator.of(context).maybePop();
-            _planToPoint(poi.name, poi.lat, poi.lng);
-          },
+        lat = p.$1;
+        lng = p.$2;
+        s = OsmSuggestion(
+          refId: s.refId,
+          display: p.$3.isNotEmpty ? p.$3 : s.display,
+          lat: lat,
+          lng: lng,
         );
+      }
+      // Vietmap suggestions carry no coordinates — resolve them on selection.
+      if (s.source == 'vietmap' && s.refId.isNotEmpty) {
+        final p = await vietmapPlace(s.refId);
+        if (p == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Không lấy được tọa độ địa điểm.')),
+            );
+          }
+          return;
+        }
+        lat = p.$1;
+        lng = p.$2;
+        s = OsmSuggestion(
+          refId: s.refId,
+          display: s.display,
+          lat: lat,
+          lng: lng,
+        );
+      }
+      // Remember the picked place as a recent search (newest first, de-duped) so
+      // it can be re-selected from the history list with one tap and no network.
+      unawaited(RecentSearches.instance.add(s));
+      // Directions mode: the selected suggestion fills the ACTIVE field
+      // (start = origin override, end = destination) and builds the route.
+      if (_directionsMode) {
+        if (_navField == _NavField.start) {
+          setNavState(() {
+            _originOverride = LatLng(lat, lng);
+            _originName = s.display;
+            _startCtrl.text = s.display;
+            _suggestions = [];
+          });
+          return;
+        }
+        // End field → same as planning to a point.
+        _planToPoint(s.display, lat, lng);
         return;
       }
-    }
-    setNavState(() {
-      _pickedPlace = s;
-      _suggestions = [];
-    });
-    if (mounted) {
-      _map.move(LatLng(lat, lng), 15);
-    }
+      // Search (browse) mode: drop a pin + show a place card with a
+      // "Chỉ đường" button (Google-Maps style) instead of building a route.
+      // Bundled offline POI → wiki-style info card first (address / phone /
+      // hours / description / Wikipedia), with a "Đi đến đây" button that
+      // then plans the route to it.
+      final poi = s.poi;
+      if (poi != null && poi.hasInfo) {
+        final cat = await offlinePoiCategory(poi.category);
+        if (mounted && cat != null) {
+          showPoiInfoCard(
+            context,
+            poi: poi,
+            categoryLabel: cat.label,
+            categoryEmoji: cat.emoji,
+            onNavigate: () {
+              Navigator.of(context).maybePop();
+              _planToPoint(poi.name, poi.lat, poi.lng);
+            },
+          );
+          return;
+        }
+      }
+      setNavState(() {
+        _pickedPlace = s;
+        _suggestions = [];
+      });
+      if (mounted) {
+        _map.move(LatLng(lat, lng), 15);
+      }
     } finally {
       _resolvingSuggestion = false;
       if (mounted) setNavState(() => _searching = false);

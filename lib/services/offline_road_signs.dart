@@ -11,6 +11,7 @@ library;
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:latlong2/latlong.dart';
 
 import 'offline_loader.dart';
@@ -203,12 +204,40 @@ Future<List<RoadSign>> _fetchSigns() async {
   // Prefers an auto-updated copy over the bundled asset — see readOfflineText.
   final raw = await readOfflineText('vietnam_signs.json');
   final data = jsonDecode(raw) as Map<String, dynamic>;
-  return [
+  final rows = [
     for (final it
         in (data['signs'] as List? ?? const []).cast<Map<String, dynamic>>())
       if (!droppedSignKinds.contains(it['kind'])) RoadSign.fromJson(it),
   ];
+  final kept = [
+    for (final s in rows)
+      if (!isImpossibleSpeedSign(s)) s,
+  ];
+  if (kept.length != rows.length) {
+    debugPrint(
+      'SIGNS: dropped ${rows.length - kept.length} impossible speed value(s) '
+      '(> $kVnMaxPostedKmh km/h)',
+    );
+  }
+  return kept;
 }
+
+/// The highest speed limit that can legally be posted in Việt Nam — 120 km/h,
+/// on an expressway of 4+ lanes (Thông tư 38/2024).
+const int kVnMaxPostedKmh = 120;
+
+/// True when a row is physically impossible and must be DISCARDED at load.
+///
+/// The VietMap E-DOG feed carries 7 "Hạn chế tốc độ" signs of 135–157 km/h
+/// (e.g. 11.132,107.731 → 157). They are not cosmetic: `nav_signs.dart` adopts
+/// the nearest speed sign's value as the LIVE limit, so one of these can post a
+/// 157 km/h limit on the dashboard, and the map draws a red circle reading 157.
+/// Filtered HERE rather than in the asset so a downloaded
+/// `vietnam_signs.json` from a future update cannot reintroduce them.
+bool isImpossibleSpeedSign(RoadSign s) =>
+    s.kind == RoadSignKind.speed &&
+    s.value != null &&
+    (s.value! <= 0 || s.value! > kVnMaxPostedKmh);
 
 /// Find the first sign AHEAD of [current] along [geometry], ordered by
 /// distance along the route, limited to [maxAheadMeters] ahead.

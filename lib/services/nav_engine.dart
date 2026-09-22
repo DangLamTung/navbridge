@@ -429,6 +429,13 @@ class TurnByTurnEngine {
 
     final meter = (_stepCum[_nextStep] - cum).clamp(0, route.distance).round();
     var icon = iconForManeuver(upcoming.type, upcoming.modifier);
+    // ⭐ Verify the router's left/right LABEL against the route's own geometry
+    // before anyone repeats it (banner arrow, voice verb, ESP32 maneuver
+    // packet). Measured on the recorded drives, the label and the driven path
+    // disagreed on "said right / went left" callouts — the geometry is the path
+    // the driver is about to drive, so it wins inside the lateral family
+    // (U-turn/roundabout stay as routed; see refineManeuverIcon).
+    icon = refineManeuverIcon(route.geometry, upcoming.maneuver, icon);
     // Don't announce "you have arrived" from the start of the last long road
     // — keep "go straight" until the destination is actually close.
     if (upcoming.type == 'arrive' && meter > 80) icon = iconStraight;
@@ -482,7 +489,11 @@ class TurnByTurnEngine {
       iconCode: icon,
       nextIconCode: next == null
           ? 0
-          : iconForManeuver(next.type, next.modifier),
+          : refineManeuverIcon(
+              route.geometry,
+              next.maneuver,
+              iconForManeuver(next.type, next.modifier),
+            ),
       // The road you turn INTO for the upcoming maneuver (used by the voice
       // announcement "turn left onto X" and the "then" chip).
       nextText: upcoming.name,

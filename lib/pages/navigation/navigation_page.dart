@@ -506,6 +506,10 @@ class _NavigationPageState extends State<NavigationPage>
 
   // --- quick POI search (gas / food / hotel / … during navigation) ------
   List<PoiResult> _pois = [];
+
+  /// Relevance tier per shown POI ("Gần bạn" / "Trên đường" / "Khác"), set by
+  /// the blended ranker — the result cards label themselves from this.
+  Map<PoiResult, PoiRelevance> _poiTier = {};
   PoiType? _poiType;
   PoiResult? _selectedPoi; // tapped POI — shown on the map until "Đi đến"
   bool _poiBusy = false;

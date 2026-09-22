@@ -30,6 +30,40 @@ void main() {
     }
   });
 
+  test('no impossible speed value survives the load (≤ 120 km/h)', () async {
+    // 7 VietMap E-DOG rows read 135–157 km/h, and nav_signs.dart adopts the
+    // nearest speed sign's value as the LIVE limit — so one of these could post
+    // a 157 km/h limit on the dashboard. See isImpossibleSpeedSign.
+    const legal = RoadSign(
+      name: 'Hạn chế tốc độ 120',
+      lat: 10,
+      lng: 106,
+      kind: RoadSignKind.speed,
+      value: 120,
+    );
+    const impossible = RoadSign(
+      name: 'Hạn chế tốc độ 157 km/h',
+      lat: 11.132,
+      lng: 107.731,
+      kind: RoadSignKind.speed,
+      value: 157,
+    );
+    expect(isImpossibleSpeedSign(legal), isFalse);
+    expect(isImpossibleSpeedSign(impossible), isTrue);
+
+    final signs = await loadOfflineRoadSigns();
+    if (signs.isEmpty) {
+      markTestSkipped(_stubNote);
+      return;
+    }
+    final bad = signs.where(isImpossibleSpeedSign).toList();
+    expect(
+      bad,
+      isEmpty,
+      reason: 'stored values: ${bad.take(5).map((s) => s.value).toList()}',
+    );
+  });
+
   test('index covers all sign kinds', () async {
     final signs = await loadOfflineRoadSigns();
     if (signs.isEmpty) {
