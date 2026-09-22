@@ -16,6 +16,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'offline_tiles.dart' show forceOffline;
+import 'package:navbridge/core/nav_protocol.dart';
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/core/route_profile.dart';
 import 'vietmap_config.dart' show graphDownloadBaseUrl;
@@ -204,7 +205,7 @@ class OfflineRouter {
     final steps = <OsrmStep>[];
     for (final s in rawSteps) {
       final sign = ((s['sign'] ?? 0) as num).toInt();
-      final (type, modifier) = _maneuverForSign(sign);
+      final (type, modifier) = osrmManeuverForInstructionSign(sign);
       steps.add(
         OsrmStep(
           name: (s['name'] ?? '') as String,
@@ -237,21 +238,8 @@ class OfflineRouter {
     );
   }
 
-  // GraphHopper instruction sign → OSRM-style maneuver.
-  (String, String?) _maneuverForSign(int sign) => switch (sign) {
-    -8 || -98 => ('turn', 'uturn'),
-    -3 => ('turn', 'sharp left'),
-    -2 => ('turn', 'left'),
-    -1 => ('turn', 'slight left'),
-    0 => ('continue', 'straight'),
-    1 => ('turn', 'slight right'),
-    2 => ('turn', 'right'),
-    3 => ('turn', 'sharp right'),
-    8 => ('turn', 'uturn'),
-    4 || 5 => ('arrive', null),
-    6 || 7 => ('roundabout', 'left'),
-    _ => ('continue', 'straight'),
-  };
+  // GraphHopper instruction sign → OSRM-style maneuver is shared with the
+  // VietMap router: osrmManeuverForInstructionSign (core/nav_protocol.dart).
 }
 
 // ---- graph storage / download -------------------------------------------

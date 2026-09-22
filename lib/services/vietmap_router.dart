@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import 'package:navbridge/core/nav_protocol.dart';
 import 'package:navbridge/services/api_notice.dart' show noteVietmapQuota;
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/vietmap_config.dart';
@@ -52,7 +53,9 @@ Future<List<OsrmRoute>> fetchVietmapRoutes(
       .get(Uri.parse(url), headers: const {'User-Agent': _ua})
       .timeout(const Duration(seconds: 60));
   if (res.statusCode != 200) {
-    if (res.statusCode == 401 || res.statusCode == 403 || res.statusCode == 429) {
+    if (res.statusCode == 401 ||
+        res.statusCode == 403 ||
+        res.statusCode == 429) {
       VietmapConfig.markKeyFailed(key);
       noteVietmapQuota(statusCode: res.statusCode, body: res.body);
     }
@@ -122,7 +125,7 @@ OsrmRoute _parsePath(Map<String, dynamic> r) {
   var cum = 0.0;
   for (final s in rawSteps) {
     final sign = ((s['sign'] ?? 0) as num).toInt();
-    final (type, modifier) = _maneuverForSign(sign);
+    final (type, modifier) = osrmManeuverForInstructionSign(sign);
     final dist = ((s['distance'] ?? 0) as num).toDouble();
     cum += dist;
     final iv = (s['interval'] as List?)?.cast<num>() ?? const [];
@@ -218,19 +221,8 @@ int? _congestionFor({
   return worst < 0 ? null : worst;
 }
 
-/// Vietmap/GraphHopper instruction sign → OSRM-style maneuver.
-(String, String?) _maneuverForSign(int sign) => switch (sign) {
-  -3 => ('turn', 'sharp left'),
-  -2 => ('turn', 'left'),
-  -1 => ('turn', 'slight left'),
-  0 => ('continue', 'straight'),
-  1 => ('turn', 'slight right'),
-  2 => ('turn', 'right'),
-  3 => ('turn', 'sharp right'),
-  6 => ('roundabout', 'left'),
-  4 || 5 => ('arrive', null),
-  _ => ('continue', 'straight'),
-};
+/// Vietmap/GraphHopper instruction sign → OSRM-style maneuver is shared with the
+/// offline router: osrmManeuverForInstructionSign (core/nav_protocol.dart).
 
 /// Decode a Google-encoded polyline string into a list of [LatLng]
 /// (the format returned by Vietmap/GraphHopper when `points_encoded=true`).

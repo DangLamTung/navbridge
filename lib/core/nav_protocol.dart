@@ -47,6 +47,41 @@ String iconSymbol(int iconCode) => switch (iconCode) {
   _ => '↑', // straight / unknown
 };
 
+/// GraphHopper / VietMap instruction `sign` → OSRM-style (type, modifier).
+///
+/// The sign numbers are GraphHopper's own constants, verified against
+/// `com.graphhopper.util.Instruction`: -98 U_TURN_UNKNOWN, -8 U_TURN_LEFT,
+/// -7 KEEP_LEFT, -6 ROUNDABOUT_EXIT, -3..-1 sharp/left/slight left,
+/// 0 CONTINUE_ON_STREET, 1..3 slight/right/sharp right, 4 FINISH,
+/// 5 REACHED_VIA, 6 ROUNDABOUT_USE, 7 **KEEP_RIGHT**, 8 U_TURN_RIGHT, 9 FERRY.
+/// VietMap's route v4 uses the same family (its response is GraphHopper-shaped).
+///
+/// ⭐ 7 is KEEP_RIGHT, not a roundabout. Both routers had `6 || 7 => roundabout`,
+/// so every keep-right fork on the offline graph announced "đi theo vòng xuyến"
+/// (follow the roundabout) at a place with no roundabout. The two codes that had
+/// no case at all — -7 (keep left) and -6 (leaving the roundabout) — fell through
+/// to "đi thẳng", i.e. the app invited the driver to drive straight past the
+/// roundabout exit they were meant to take.
+(String, String?) osrmManeuverForInstructionSign(int sign) => switch (sign) {
+  // U-turn left / unknown / right — all three are "quay đầu" (the icon has no
+  // side that matters to the driver, and the voice says the same word).
+  -98 || -8 || 8 => ('turn', 'uturn'),
+  -7 => ('fork', 'slight left'),
+  -6 => ('roundabout', 'left'),
+  -3 => ('turn', 'sharp left'),
+  -2 => ('turn', 'left'),
+  -1 => ('turn', 'slight left'),
+  0 => ('continue', 'straight'),
+  1 => ('turn', 'slight right'),
+  2 => ('turn', 'right'),
+  3 => ('turn', 'sharp right'),
+  6 => ('roundabout', 'left'),
+  7 => ('fork', 'slight right'),
+  9 => ('ferry', null),
+  4 || 5 => ('arrive', null),
+  _ => ('continue', 'straight'),
+};
+
 /// Map a Vietmap navigation maneuver (modifierType + modifier) to the clock
 /// icon code. Same vocabulary as OSRM/Mapbox: type=turn, modifier=left, ...
 int iconForManeuver(String? type, String? modifier) {
