@@ -160,10 +160,19 @@ class Segments:
 
     def query(self, lat: float, lng: float, heading_deg: float | None = None,
               max_dist_m: float = 25.0, rings: int = 1):
-        """(kmh, street, road_class, divided, dist_m, seg_id) or (0, …, None)."""
+        """(kmh, street, road_class, divided, dist_m, seg_id) or (0, …, None).
+
+        Picks the segment the car is IN, not merely the nearest one: a candidate
+        whose nearest sub-segment the car has already passed (a positive
+        OVERSHOOT beyond its end) or that runs across the car's heading is
+        penalised out of range. Mirrors pickSegmentCandidate() in
+        lib/services/offline_speed_limits.dart — if the two disagree, every
+        offline audit of "did the app use the layer" is measuring something the
+        app never did.
+        """
         gy = int(math.floor(lat / CELL_DEG))
         gx = int(math.floor(lng / CELL_DEG))
-        best, best_d = None, float('inf')
+        cands = []
         seen = set()
         for dy in range(-rings, rings + 1):
             for dx in range(-rings, rings + 1):
@@ -171,33 +180,80 @@ class Segments:
                     if s in seen:
                         continue
                     seen.add(s)
-                    d = self._dist(lat, lng, self.pts[s])
-                    if d < best_d:
-                        best, best_d = s, d
-        if best is None or best_d > max_dist_m:
-            return 0, None, 0, False, (None if best is None else best_d), None
-        cls = (self.classes[best] & 0x3F) if self.classes else 0
-        sep = bool(self.classes[best] & 0x80) if self.classes else False
-        return (self.value(best, heading_deg), self.street(best), cls, sep,
-                best_d, best)
+                    d, brg, over = self._geom(lat, lng, self.pts[s])
+                    cands.append((s, d, brg, over))
+        if not cands:
+            return 0, None, 0, False, None, None
+        best, best_score = None, float('inf')
+        for s, d, brg, over in cands:
+            score = segment_score(d, brg, heading_deg, max_dist_m, over)
+            if score < best_score:
+                best_score, best = score, (s, d)
+        s, best_d = best
+        if best_d > max_dist_m:
+            return 0, None, 0, False, best_d, None
+        cls = (self.classes[s] & 0x3F) if self.classes else 0
+        sep = bool(self.classes[s] & 0x80) if self.classes else False
+        return (self.value(s, heading_deg), self.street(s), cls, sep,
+                best_d, s)
 
     @staticmethod
-    def _dist(lat: float, lng: float, pts) -> float:
+    def _geom(lat: float, lng: float, pts):
+        """(perp distance m, bearing of nearest sub-segment, overshoot m).
+
+        Overshoot > 0 means the car's projection lands PAST the end of that
+        sub-segment (or before its start) — near the segment, not on it.
+        """
         m_lng = M_PER_DEG_LAT * math.cos(math.radians(lat))
         px, py = lng * m_lng, lat * M_PER_DEG_LAT
         best = float('inf')
-        for i in range(len(pts)):
+        bearing = 0.0
+        over = 0.0
+        for i in range(len(pts) - 1):
             ax, ay = pts[i][1] * m_lng, pts[i][0] * M_PER_DEG_LAT
-            if i + 1 < len(pts):
-                bx, by = pts[i + 1][1] * m_lng, pts[i + 1][0] * M_PER_DEG_LAT
-            else:
-                bx, by = ax, ay
+            bx, by = pts[i + 1][1] * m_lng, pts[i + 1][0] * M_PER_DEG_LAT
             dx, dy = bx - ax, by - ay
             l2 = dx * dx + dy * dy
-            t = 0.0 if l2 == 0 else max(
-                0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / l2))
+            if l2 <= 1e-9:
+                continue
+            t_raw = ((px - ax) * dx + (py - ay) * dy) / l2
+            t = max(0.0, min(1.0, t_raw))
             cx, cy = ax + t * dx, ay + t * dy
             d = math.hypot(px - cx, py - cy)
             if d < best:
                 best = d
-        return best
+                bearing = (math.degrees(math.atan2(
+                    (bx - ax), (by - ay))) + 360.0) % 360.0
+                ln = math.sqrt(l2)
+                over = (-t_raw * ln) if t_raw < 0 else (
+                    (t_raw - 1.0) * ln if t_raw > 1.0 else 0.0)
+        return best, bearing, over
+
+    @staticmethod
+    def _dist(lat: float, lng: float, pts) -> float:
+        return Segments._geom(lat, lng, pts)[0]
+
+
+def segment_line_angle(heading_deg, bearing_deg) -> float:
+    """Angle (0..90) between the car's heading and a segment's LINE."""
+    if heading_deg is None:
+        return 0.0
+    d = abs(heading_deg - bearing_deg) % 180.0
+    return 180.0 - d if d > 90.0 else d
+
+
+def segment_score(distance_m: float, bearing_deg: float,
+                  heading_deg, max_dist_m: float,
+                  overshoot_m: float = 0.0) -> float:
+    """Distance, penalised for a segment the car is not travelling along.
+
+    Same two penalties as the Dart side: >45° off the car's heading (it runs
+    across the path) and >10 m of overshoot (the car is past its end).
+    """
+    score = distance_m
+    if heading_deg is not None and segment_line_angle(
+            heading_deg, bearing_deg) > 45.0:
+        score += max_dist_m + 1
+    if overshoot_m > 10.0:
+        score += max_dist_m + 1
+    return score

@@ -478,8 +478,14 @@ double _bearingDeg(double lat1, double lng1, double lat2, double lng2) {
 }
 
 /// Perpendicular distance (m) from a segment polyline to (lat, lon), plus the
-/// bearing of the nearest sub-segment.
-(double, double) _segDistBearing(
+/// bearing of the nearest sub-segment and how far PAST that sub-segment's end
+/// the car sits.
+///
+/// [overshoot] is 0 while the car's projection lands ON the sub-segment. A
+/// positive value means the car has driven beyond this segment's extent (or has
+/// not reached its start yet) — it is near the segment, but NOT on it, which is
+/// the difference between "the nearest segment" and "the segment I am driving".
+(double, double, double) _segDistBearing(
   _SegIndex idx,
   int s,
   double lat,
@@ -489,6 +495,7 @@ double _bearingDeg(double lat1, double lng1, double lat2, double lng2) {
   final n = _decodeSeg(idx, s);
   var best = double.infinity;
   var bearing = 0.0;
+  var overshoot = 0.0;
   for (var k = 0; k < n - 1; k++) {
     final alat = _segPts[k * 2] / 1e5, alng = _segPts[k * 2 + 1] / 1e5;
     final blat = _segPts[k * 2 + 2] / 1e5;
@@ -506,9 +513,13 @@ double _bearingDeg(double lat1, double lng1, double lat2, double lng2) {
     if (d < best) {
       best = d;
       bearing = _bearingDeg(alat, alng, blat, blng);
+      // Unclamped projection parameter → how far off the ends the car is.
+      final tRaw = l2 > 1e-9 ? (-ax * dx - ay * dy) / l2 : 0.0;
+      final len = math.sqrt(l2);
+      overshoot = tRaw < 0 ? -tRaw * len : (tRaw > 1 ? (tRaw - 1) * len : 0.0);
     }
   }
-  return (best, bearing);
+  return (best, bearing, overshoot);
 }
 
 /// Angle (deg, 0..90) between the car's heading and a segment's LINE.
@@ -542,28 +553,35 @@ double segmentScore(
   double distanceM,
   double bearingDeg,
   double? headingDeg,
-  double maxDistM,
-) {
+  double maxDistM, {
+  double overshootM = 0,
+}) {
   const maxAlignedDeg = 45.0;
-  if (headingDeg == null) return distanceM;
-  return segmentLineAngle(headingDeg, bearingDeg) > maxAlignedDeg
-      ? distanceM + maxDistM + 1
-      : distanceM;
+  const maxOvershootM = 10.0;
+  var score = distanceM;
+  if (headingDeg != null &&
+      segmentLineAngle(headingDeg, bearingDeg) > maxAlignedDeg) {
+    score += maxDistM + 1;
+  }
+  // "The car is IN the segment": a projection that lands past either end is
+  // not on it (the car has driven off the end, or has not reached the start).
+  if (overshootM > maxOvershootM) score += maxDistM + 1;
+  return score;
 }
 
-/// Index of the candidate to trust among (segment, distance m, bearing) triples,
-/// or -1 when nothing is within [maxDistM]. Alignment first, then distance — see
-/// [segmentScore] for why.
+/// Index of the candidate to trust among (segment, distance m, bearing,
+/// overshoot m) tuples, or -1 when nothing is within [maxDistM]. On-segment and
+/// aligned candidates first, then distance — see [segmentScore] for why.
 int pickSegmentCandidate(
-  List<(int, double, double)> candidates,
+  List<(int, double, double, double)> candidates,
   double? headingDeg,
   double maxDistM,
 ) {
   var bestI = -1;
   var bestScore = double.infinity;
   for (var i = 0; i < candidates.length; i++) {
-    final (_, d, brg) = candidates[i];
-    final score = segmentScore(d, brg, headingDeg, maxDistM);
+    final (_, d, brg, over) = candidates[i];
+    final score = segmentScore(d, brg, headingDeg, maxDistM, overshootM: over);
     if (score < bestScore) {
       bestScore = score;
       bestI = i;
@@ -591,7 +609,8 @@ int? _querySegIndex(
   // Small list per query (~1 Hz), traded for one place that decides which
   // segment wins: the two-accumulator version this replaced could not express
   // "prefer the aligned one", which is why a junction could rename the road.
-  final cands = <(int, double, double)>[]; // (segment, distance m, bearing)
+  final cands =
+      <(int, double, double, double)>[]; // (segment, dist, bearing, overshoot)
   for (var dx = -1; dx <= 1; dx++) {
     for (var dy = -1; dy <= 1; dy++) {
       final key = (((cx + dx) & 0xFFFF) << 16) | ((cy + dy) & 0xFFFF);
@@ -599,8 +618,8 @@ int? _querySegIndex(
       if (ids == null) continue;
       for (var k = 0; k < ids.length; k++) {
         final s = ids[k];
-        final (d, brg) = _segDistBearing(idx, s, lat, lon, cosLat);
-        cands.add((s, d, brg));
+        final (d, brg, over) = _segDistBearing(idx, s, lat, lon, cosLat);
+        cands.add((s, d, brg, over));
       }
     }
   }
