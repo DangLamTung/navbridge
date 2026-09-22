@@ -9,6 +9,8 @@ import com.graphhopper.routing.ev.EnumEncodedValue
 import com.graphhopper.routing.ev.IntEncodedValue
 import com.graphhopper.routing.ev.RoadClass
 import com.graphhopper.routing.util.EdgeFilter
+import com.graphhopper.storage.index.Snap
+import com.graphhopper.util.FetchMode
 import com.graphhopper.util.shapes.GHPoint
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
@@ -193,8 +195,18 @@ class GraphHopperRouting {
     /** Road info (name / road class / maxspeed) at [lat],[lng] from the
      *  on-device graph — instant and offline (no Overpass round-trip).
      *  maxspeed is 0/absent when not tagged (Vietnam rarely tags it; the
-     *  Dart side applies statutory defaults per road class). */
-    fun roadInfo(lat: Double, lng: Double, result: MethodChannel.Result) {
+     *  Dart side applies statutory defaults per road class).
+     *
+     *  [headingDeg] (compass, 0 = north) is the car's own direction of travel.
+     *  Without it the lookup answers "which road is nearest", which at a junction
+     *  is often the road CROSSING the car's path — and the name, the class and so
+     *  the built-up 50/60 limit all come from it. See [closestAligned]. */
+    fun roadInfo(
+        lat: Double,
+        lng: Double,
+        headingDeg: Double?,
+        result: MethodChannel.Result,
+    ) {
         executor.execute {
             try {
                 val gh = hopper
@@ -267,6 +279,74 @@ class GraphHopperRouting {
             } catch (e: Throwable) {
                 postError(result, "road_info_error", e.message ?: "road info failed")
             }
+        }
+    }
+
+    /** The nearest edge the car is travelling ALONG, not merely near.
+     *
+     *  With a known [headingDeg], the closest edge whose chord runs more than 45°
+     *  off it (a crossing/parallel street, metres away at a junction) is rejected
+     *  and the search is retried without it, up to [tries] times. Nothing aligned
+     *  left → the plain closest edge is returned, so this can only ever replace
+     *  the answer with a road that fits the car's direction of travel. Every
+     *  rejection is logged so a drive can be audited from logcat. */
+    private fun closestAligned(
+        gh: GraphHopper,
+        lat: Double,
+        lng: Double,
+        headingDeg: Double?,
+        tries: Int = 3,
+    ): Snap? {
+        val rejected = HashSet<Int>()
+        var fallback: Snap? = null
+        for (attempt in 0..tries) {
+            val filter = if (rejected.isEmpty()) {
+                EdgeFilter.ALL_EDGES
+            } else {
+                EdgeFilter { e -> !rejected.contains(e.edge) }
+            }
+            val snap = gh.locationIndex.findClosest(lat, lng, filter)
+            if (snap == null || !snap.isValid) return fallback
+            if (fallback == null) fallback = snap
+            if (headingDeg == null) return snap
+            val off = edgeLineAngle(gh, snap, headingDeg)
+            if (off == null || off <= 45.0) return snap
+            rejected.add(snap.closestEdge.edge)
+            android.util.Log.i(
+                "NavBridgeRouter",
+                "roadInfo: rejected edge ${snap.closestEdge.edge} " +
+                    "(name=${snap.closestEdge.name} ${off.toInt()}° off heading)",
+            )
+        }
+        return fallback
+    }
+
+    /** Angle (deg, 0..90) between [headingDeg] and the direction of the snapped
+     *  edge at the snap point, read from the edge's own way geometry. Null when
+     *  the geometry cannot be read, which callers treat as "no signal". */
+    private fun edgeLineAngle(gh: GraphHopper, snap: Snap, headingDeg: Double): Double? {
+        return try {
+            val e = snap.closestEdge
+            val pts = e.fetchWayGeometry(FetchMode.ALL)
+            if (pts.size() < 2) return null
+            val i = snap.wayIndex.coerceIn(0, pts.size() - 1)
+            val j = if (i > 0) i - 1 else minOf(i + 1, pts.size() - 1)
+            val lat1 = pts.getLat(j)
+            val lng1 = pts.getLon(j)
+            val lat2 = pts.getLat(i)
+            val lng2 = pts.getLon(i)
+            val dy = lat2 - lat1
+            val dx = (lng2 - lng1) * Math.cos(Math.toRadians((lat1 + lat2) / 2.0))
+            if (dy == 0.0 && dx == 0.0) {
+                null
+            } else {
+                val bearing = (Math.toDegrees(Math.atan2(dx, dy)) + 360.0) % 360.0
+                var d = Math.abs(headingDeg - bearing) % 180.0
+                if (d > 90.0) d = 180.0 - d
+                d
+            }
+        } catch (_: Throwable) {
+            null
         }
     }
 

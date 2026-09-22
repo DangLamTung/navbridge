@@ -186,12 +186,16 @@ class Segments:
             return 0, None, 0, False, None, None
         best, best_score = None, float('inf')
         for s, d, brg, over in cands:
+            # Hard range gate before scoring: an out-of-range segment must never
+            # win, however clean it looks (see pickSegmentCandidate in Dart).
+            if d > max_dist_m:
+                continue
             score = segment_score(d, brg, heading_deg, max_dist_m, over)
             if score < best_score:
                 best_score, best = score, (s, d)
+        if best is None:
+            return 0, None, 0, False, None, None
         s, best_d = best
-        if best_d > max_dist_m:
-            return 0, None, 0, False, best_d, None
         cls = (self.classes[s] & 0x3F) if self.classes else 0
         sep = bool(self.classes[s] & 0x80) if self.classes else False
         return (self.value(s, heading_deg), self.street(s), cls, sep,

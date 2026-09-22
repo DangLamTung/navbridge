@@ -32,6 +32,7 @@ import 'package:navbridge/services/elevation.dart';
 import 'package:navbridge/services/nav_engine.dart';
 import 'package:navbridge/services/offline_cameras.dart';
 import 'package:navbridge/core/nav_protocol.dart';
+import 'package:navbridge/core/road_match.dart';
 import 'package:navbridge/core/map_protocol.dart';
 import 'package:navbridge/core/nmea_parser.dart';
 import 'package:navbridge/pages/settings_screen.dart';
@@ -542,6 +543,20 @@ class _NavigationPageState extends State<NavigationPage>
   /// lookup overwrites, so two overlapping corrections would pair one
   /// segment's limit with another segment's street. Re-entry is refused.
   bool _wazeCorrecting = false;
+
+  /// Latest nav progress from the tick. Its `text`/`nextText`/`nextNextText`
+  /// are the ROUTE's own street names for where the car is, used to veto a road
+  /// match that is not on the route at all — see [pickRoadName] and the audit in
+  /// `tool/check_voice_calls.py` (48% of fixes named a road 119 m from the car).
+  NavProgress? _lastNav;
+
+  /// Hysteresis for the published road NAME, so one bad match cannot relabel the
+  /// road and flip back (at one junction the match alternated every second for
+  /// 17 s on the 2026-09-21 drive).
+  final RoadNameHysteresis _roadNameGate = RoadNameHysteresis();
+
+  /// Where the last road was published, for the hysteresis distance.
+  LatLng? _lastRoadPublishPos;
 
   // --- trip logging (Google Takeout) ---
   TripLogger? _trip;

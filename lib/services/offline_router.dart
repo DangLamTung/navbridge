@@ -99,12 +99,19 @@ class OfflineRouter {
 
   /// Road info (name / road class / maxspeed) at [pos] straight from the
   /// on-device graph — instant and offline. Returns null when unavailable.
-  Future<Map<String, dynamic>?> roadInfo(LatLng pos) async {
+  Future<Map<String, dynamic>?> roadInfo(
+    LatLng pos, {
+    double? headingDeg,
+  }) async {
     if (!_loaded) return null;
     try {
       final raw = await _channel.invokeMethod<Object?>('roadInfo', {
         'lat': pos.latitude,
         'lng': pos.longitude,
+        // The car's heading, so the graph can reject an edge that runs ACROSS
+        // the car's path (a crossing street is metres away at a junction) — the
+        // Overpass road lookup already scores by heading, the graph did not.
+        'heading': ?headingDeg,
       });
       if (raw == null) return null;
       return Map<String, dynamic>.from(raw as Map);

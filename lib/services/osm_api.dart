@@ -197,6 +197,11 @@ Future<List<OsmSuggestion>> _offlineSearch(String text, int limit) async {
 
 /// Strips Vietnamese diacritics (tone marks + đ) so search works with or
 /// without accents. Returns the input unchanged for non-Vietnamese text.
+///
+/// Public wrapper so road-name comparison (`core/road_match.dart`) reuses this
+/// ONE table instead of growing a fourth copy of it.
+String removeDiacritics(String s) => _removeDiacritics(s);
+
 String _removeDiacritics(String s) {
   const map = {
     'à': 'a',

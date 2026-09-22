@@ -581,15 +581,20 @@ int pickSegmentCandidate(
   var bestScore = double.infinity;
   for (var i = 0; i < candidates.length; i++) {
     final (_, d, brg, over) = candidates[i];
+    // HARD range gate, before any scoring: a segment out of range must never
+    // win, however clean it looks. Scoring first let a tidy candidate 30 m away
+    // beat the slightly misaligned one 4 m under the car, and the lookup then
+    // answered "no limit" while the car sat plainly on a segment — measured on
+    // the 17:45 junction of the 2026-09-21 drive, where every fix in the window
+    // came back empty.
+    if (d > maxDistM) continue;
     final score = segmentScore(d, brg, headingDeg, maxDistM, overshootM: over);
     if (score < bestScore) {
       bestScore = score;
       bestI = i;
     }
   }
-  if (bestI < 0) return -1;
-  // …and the winner still has to be genuinely close to the car.
-  return candidates[bestI].$2 <= maxDistM ? bestI : -1;
+  return bestI;
 }
 
 /// Posted limit (km/h) of the nearest Waze segment within [maxDistM] of

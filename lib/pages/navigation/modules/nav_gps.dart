@@ -442,6 +442,60 @@ extension _NavGps on _NavigationPageState {
   /// instant and offline, so re-querying on distance is cheap.
   static const double _roadRequeryM = 8;
 
+  /// The route's own names for where the car is: the current step and the two
+  /// ahead. A road match naming something else is off-route (see [pickRoadName]).
+  Set<String> _routeNames() {
+    final nav = _lastNav;
+    if (nav == null) return const {};
+    return {
+      if (nav.text.isNotEmpty) nav.text,
+      if (nav.nextText.isNotEmpty) nav.nextText,
+      if (nav.nextNextText.isNotEmpty) nav.nextNextText,
+    };
+  }
+
+  /// Publish a matched road, through the route veto and the change hysteresis.
+  ///
+  /// The matcher resolves the road from geometry alone and names a road that is
+  /// not the one under the car on ~48% of fixes (median 119 m away, when the
+  /// correct way is 4 m — audited over the 2026-09-21 drive). The name, the class
+  /// and therefore the built-up 50/60 limit all follow that road, so two local
+  /// corrections are applied here:
+  ///   * a name that appears on the ROUTE outranks one that does not;
+  ///   * a name CHANGE must be confirmed (or 30 m driven) before it shows.
+  void _publishRoad(RoadInfo next, {LatLng? at}) {
+    final cur = _roadInfo;
+    if (cur == null) {
+      setNavState(() => _roadInfo = next);
+      _lastRoadPublishPos = at;
+      return;
+    }
+    final names = _routeNames();
+    var name = pickRoadName(
+      current: cur.name,
+      candidate: next.name,
+      candidateOnRoute: names.any((n) => sameRoad(n, next.name)),
+      currentOnRoute: names.any((n) => sameRoad(n, cur.name)),
+    );
+    if (name != cur.name) {
+      final moved = (at == null || _lastRoadPublishPos == null)
+          ? 0.0
+          : distanceMeters(_lastRoadPublishPos!, at);
+      if (!_roadNameGate.accept(
+        current: cur.name,
+        candidate: name,
+        movedM: moved,
+      )) {
+        name = cur.name;
+      }
+    } else {
+      _roadNameGate.reset();
+    }
+    final out = name == next.name ? next : next.copyWith(name: name);
+    setNavState(() => _roadInfo = out);
+    _lastRoadPublishPos = at;
+  }
+
   /// Floor between queries so GPS jitter while stationary can't spin.
   static const Duration _roadRequeryMinGap = Duration(milliseconds: 600);
 
@@ -451,7 +505,14 @@ extension _NavGps on _NavigationPageState {
 
   /// Look up the current road (type + speed limit). Prefers the on-device
   /// GraphHopper graph (instant + offline); falls back to Overpass.
-  Future<void> _refreshRoad(LatLng pos) async {
+  ///
+  /// [pos] is the raw GPS fix — the car's ACTUAL position. [snapped] (the
+  /// route-projected point) is only a fallback: resolving the road at the
+  /// snapped point made the chip keep the road the car had just left for as long
+  /// as the projection lagged (at a junction with 15-20 m of GPS error the
+  /// projection can sit on the previous leg for seconds), and every road
+  /// attribute — name, class, therefore the built-up 50/60 limit — came with it.
+  Future<void> _refreshRoad(LatLng pos, {LatLng? snapped}) async {
     final now = DateTime.now();
     final last = _lastRoadQuery;
     final lastPos = _lastRoadQueryPos;
@@ -477,7 +538,17 @@ extension _NavGps on _NavigationPageState {
     // On-device graph: no network, no server latency.
     if (OfflineRouter.instance.isLoaded) {
       try {
-        final r = await _roadInfoFromGraph(pos);
+        // Resolve at the RAW fix — where the car actually is. The
+        // route-projected point is only a fallback (a gap in the graph under
+        // the car): at a junction the projection can still sit on the leg the
+        // car has just left, and the name, the class and therefore the built-up
+        // 50/60 limit would all come from that other road.
+        var look = pos;
+        var r = await _roadInfoFromGraph(look);
+        if (r == null && snapped != null && snapped != pos) {
+          look = snapped;
+          r = await _roadInfoFromGraph(look);
+        }
         if (r != null && mounted) {
           // Apply the posted-limit layer to the fresh road info BEFORE it is
           // published. Publishing the bare graph value and letting the NEXT
@@ -486,9 +557,9 @@ extension _NavGps on _NavigationPageState {
           // statutory class default first, then jumped to the real posted
           // value (user: "the speed limit still slow, can u make it instant
           // update like waze segment").
-          final merged = await _withPostedLayer(r, pos);
+          final merged = await _withPostedLayer(r, look);
           if (!mounted) return;
-          setNavState(() => _roadInfo = merged);
+          _publishRoad(merged, at: look);
           // VN rarely tags maxspeed, so the graph limit is usually only the
           // statutory default. When ONLINE, correct it in the background from
           // OSM's REAL `maxspeed` tag — the graph value shows instantly and
@@ -522,7 +593,7 @@ extension _NavGps on _NavigationPageState {
       // road is published, so the limit never lags a road change.
       final merged = await _withPostedLayer(r, pos);
       if (!mounted) return;
-      setNavState(() => _roadInfo = merged);
+      _publishRoad(merged, at: pos);
       _maybeWarnMotorwayProhibited();
     } catch (_) {
       // keep the last known road on failure
@@ -575,7 +646,7 @@ extension _NavGps on _NavigationPageState {
         vehicle: vehicleType,
         heading: _heading,
       );
-      if (mounted && r != null) setNavState(() => _roadInfo = r);
+      if (mounted && r != null) _publishRoad(r, at: pos);
     } catch (_) {
       // keep the current (graph/statutory) value
     } finally {
@@ -651,12 +722,12 @@ extension _NavGps on _NavigationPageState {
         : cur.name;
     if (lim == null) {
       // No posted limit on this segment: still adopt a better name when Waze
-      // has one, so the label can catch up independently of the limit.
+      // has one, so the label can catch up independently of the limit — but
+      // only through the route veto + hysteresis (a segment the car is not on
+      // must not rename the road; see lib/core/road_match.dart).
       if (name == cur.name) return;
       debugPrint('ROAD: waze street "$name" (was "${cur.name}")');
-      setNavState(() {
-        _roadInfo = cur.copyWith(name: name);
-      });
+      _publishRoad(cur.copyWith(name: name));
       return;
     }
     // The posted sign is a CAR value; for motorbikes/trucks it only TIGHTENS
@@ -674,11 +745,9 @@ extension _NavGps on _NavigationPageState {
       'ROAD: waze limit=$lim -> ${next.speedLimit} (was ${cur.speedLimit}) '
       'street="${next.name}" ${cur.highway} from=${usedSnapped ? 'snapped' : 'raw'}',
     );
-    setNavState(() {
-      // From here a speed sign may only tighten this value, never raise it
-      // (signLimitInForce), and the widget badge names the layer behind it.
-      _roadInfo = next;
-    });
+    // From here a speed sign may only tighten this value, never raise it
+    // (signLimitInForce), and the widget badge names the layer behind it.
+    _publishRoad(next);
   }
 
   /// Xe mô tô is PROHIBITED on đường cao tốc (VN road law). The route planner
@@ -712,7 +781,12 @@ extension _NavGps on _NavigationPageState {
   /// Road info straight from the on-device graph (nearest edge), with the
   /// same Vietnamese statutory defaults as the Overpass path.
   Future<RoadInfo?> _roadInfoFromGraph(LatLng pos) async {
-    final g = await OfflineRouter.instance.roadInfo(pos);
+    final g = await OfflineRouter.instance.roadInfo(
+      pos,
+      // The car's heading, so the graph can reject an edge running across the
+      // car's path — the same guard the Overpass path has (headingPenalty).
+      headingDeg: _heading == 0 ? null : _heading,
+    );
     if (g == null) return null;
     debugPrint('ROAD: graph highway=${g['highway']} maxspeed=${g['maxspeed']}');
     final highway = (g['highway'] ?? '') as String;

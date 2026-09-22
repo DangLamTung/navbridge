@@ -252,6 +252,7 @@ class MainActivity : FlutterActivity() {
                         routing.roadInfo(
                             call.argument<Double>("lat") ?: 0.0,
                             call.argument<Double>("lng") ?: 0.0,
+                            call.argument<Double>("heading"),
                             result,
                         )
                     }

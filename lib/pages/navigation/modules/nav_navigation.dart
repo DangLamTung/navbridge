@@ -105,7 +105,11 @@ extension _NavNavigation on _NavigationPageState {
       _lastNearbyLayers = nlNow;
       unawaited(_refreshRouteCameras());
     }
-    _refreshRoad(snapped);
+    _refreshRoad(pos, snapped: snapped);
+    // The tick's NavProgress carries the ROUTE's own street names for where the
+    // car is; the road-info publish uses them to veto an off-route match
+    // (see core/road_match.dart).
+    _lastNav = nav;
     // Waze parity: the posted limit AND the street name come from the layer
     // under the car, so refresh them on EVERY fix — at the RAW position, with
     // the route-snapped point only as a fallback (see _correctSpeedFromWaze).
