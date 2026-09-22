@@ -159,7 +159,13 @@ def num_in(text: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def render(data: dict, out: str) -> None:
+def build_html(data: dict) -> str:
+    """The viewer page for one trip as a string — no file written.
+
+    Shared by [render] (saves a standalone, shareable .html) and by
+    `tool/trip_server.py`, which renders per request so nothing has to be
+    written to disk, and no generated page can fall out of sync with the JSON.
+    """
     # Flag lines where the spoken limit disagrees with the road / effective
     # value (the "voice vs screen" cases) — computed here, not in JS, so the
     # list can be filtered/summarised server-side too.
@@ -182,8 +188,12 @@ def render(data: dict, out: str) -> None:
     html = html.replace("__TITLE__", data["name"])
     html = html.replace("__KIND_COLORS__", json.dumps(KIND_COLOR))
     html = html.replace("__BUCKETS__", json.dumps(SPEED_BUCKETS))
+    return html
+
+
+def render(data: dict, out: str) -> None:
     with open(out, "w", encoding="utf-8") as f:
-        f.write(html)
+        f.write(build_html(data))
     print("wrote", out)
 
 
