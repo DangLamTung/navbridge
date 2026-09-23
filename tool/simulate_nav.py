@@ -340,10 +340,12 @@ prev = None
 stats = {'fixes': 0, 'before_bad': 0, 'after_bad': 0, 'name_changed': 0,
          'limit_changed': 0, 'now_matches_layer': 0, 'veto_blocked': 0,
          'hyst_held': 0, 'veto_saved_bad': 0, 'route_n': 0,
-         'app_vs_route': 0, 'sim_vs_route': 0, 'pick_vs_route': 0}
+         'app_vs_route': 0, 'sim_vs_route': 0, 'pick_vs_route': 0,
+         'seg_off_road': 0, 'seg_off_road_limit': 0, 'layer_limit_dropped': 0}
 deltas = {}
 examples = []
 resid = []
+seg_off = []
 odds = []
 s_along = 0.0
 route_names = []
@@ -377,14 +379,12 @@ for f in fixes:
             if any(same_road(a, b) for a in names for b in co_names):
                 agree['ok'] += 1
 
-    # road (Overpass path, raw fix) + layer cap + statutory table
+    # road (Overpass path, raw fix); the layer query is kept for the limit step
+    # below, which needs the settled road name first.
     hit = road_at(lat, lng, heading)
     w = hit[0] if hit else None
-    seg_kmh = seg.query(lat, lng, heading_deg=heading, max_dist_m=MAX_D)[0]
-    new_limit = None
-    if w is not None:
-        new_limit = sim_limit(w['hw'], w['oneway'], w['lanes'],
-                              posted=seg_kmh, divided=divided_here(w, lat, lng))
+    seg_q = seg.query(lat, lng, heading_deg=heading, max_dist_m=MAX_D)
+    seg_kmh, seg_street = seg_q[0], seg_q[1]
 
     # the app's route veto + hysteresis
     sim = None
@@ -406,6 +406,18 @@ for f in fixes:
                 stats['veto_saved_bad'] += 1
         published = sim
 
+    # The layer's value is only usable for the road we are displaying: a named
+    # segment that contradicts the settled name is a different street, and its
+    # limit belongs to that street (postedLimitMatchesName, road_match.dart).
+    new_limit = None
+    posted = seg_kmh
+    if seg_street and sim and not same_road(seg_street, sim):
+        posted = None
+        stats['layer_limit_dropped'] += 1
+    if w is not None:
+        new_limit = sim_limit(w['hw'], w['oneway'], w['lanes'], posted=posted,
+                              divided=divided_here(w, lat, lng))
+
     app_name = f.get('street')
     osm_name = w['name'] if w else None
     if app_name and osm_name and not same_road(app_name, osm_name):
@@ -424,6 +436,18 @@ for f in fixes:
             stats['sim_vs_route'] += 1
         if osm_name and not same_road(route_text, osm_name):
             stats['pick_vs_route'] += 1
+        # A segment the car is not on can still supply the LIMIT: the name veto
+        # rewrites the displayed street, but the value travels with the segment
+        # record. Flag where the settled name and the segment's own street
+        # disagree, which means the chip pairs road A's name with road B's limit.
+        if seg_street and sim and not same_road(seg_street, sim):
+            stats['seg_off_road'] += 1
+            if new_limit and new_limit != f.get('limitEffective'):
+                stats['seg_off_road_limit'] += 1
+                if len(seg_off) < 8:
+                    seg_off.append((hh(ms), sim, seg_street, seg_kmh,
+                                    route_text, new_limit,
+                                    f.get('limitEffective'), lat, lng))
         if sim and not same_road(route_text, sim) and len(resid) < 12:
             resid.append((hh(ms), app_name, sim, route_text,
                           w['name'] if w else None, w['hw'] if w else ''))
@@ -477,6 +501,8 @@ print(f'  of those, name also matched the app\'s (right) one : '
       f'{stats["veto_saved_bad"]}')
 print(f'  hysteresis held a name back                       : '
       f'{stats["hyst_held"]}')
+print(f'  layer limit dropped (segment street != shown road): '
+      f'{stats["layer_limit_dropped"]}')
 if odds:
     print('\nsuspicious limits (needs a look):')
     for t, ola, oln, on, hw, nl, sk in odds:
@@ -486,6 +512,17 @@ if resid:
     for t, app, sim, rt, pick, hw in resid:
         print(f'  {t} sim={sim!r} route={rt!r} app={app!r} '
               f'(overpass pick {pick!r} {hw})')
+
+if stats['seg_off_road']:
+    print('\nWaze segment vs the road the car is on (route name):')
+    print(f'  segment named a DIFFERENT street than displayed : '
+          f'{stats["seg_off_road"]}')
+    print(f'  ...and it changed the limit shown               : '
+          f'{stats["seg_off_road_limit"]}')
+    for t, shown, ss, sk, rt, nl, old, la, ln in seg_off:
+        print(f'    {t} shown {shown!r} but segment {ss!r} ({sk} km/h) '
+              f'[route {rt!r}] -> limit {old} => {nl} '
+              f'@ {la:.5f},{ln:.5f}')
 
 if examples:
     print('\nexamples (app street disagreed with the route):')

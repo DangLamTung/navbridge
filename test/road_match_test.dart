@@ -127,4 +127,27 @@ void main() {
       expect(h.confirmations, 0);
     });
   });
+
+  group('postedLimitMatchesName', () {
+    test('accepts the segment whose street we are displaying', () {
+      expect(postedLimitMatchesName('Lũy Bán Bích', 'Lũy Bán Bích'), isTrue);
+      expect(postedLimitMatchesName('Luy Ban Bich', 'Lũy Bán Bích'), isTrue);
+    });
+
+    test('rejects a crossing street\'s value', () {
+      // 17:40:16 of the 2026-09-21 drive: the display said Lũy Bán Bích while
+      // the winning segment was the crossing Độc Lập (50 km/h).
+      expect(postedLimitMatchesName('Độc Lập', 'Lũy Bán Bích'), isFalse);
+      expect(postedLimitMatchesName('Lũy Bán Bích', 'Thống Nhất'), isFalse);
+    });
+
+    test('an unnamed segment carries no evidence, so it is allowed', () {
+      expect(postedLimitMatchesName(null, 'Lũy Bán Bích'), isTrue);
+      expect(postedLimitMatchesName('', 'Lũy Bán Bích'), isTrue);
+    });
+
+    test('an unnamed displayed road is not overruled', () {
+      expect(postedLimitMatchesName('Độc Lập', ''), isTrue);
+    });
+  });
 }

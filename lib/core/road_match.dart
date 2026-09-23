@@ -48,6 +48,25 @@ String pickRoadName({
   return candidate; // neither is on the route: trust the match
 }
 
+/// Whether a posted limit that came from a road segment may be adopted: the
+/// segment's own street name (when it has one) must agree with the name we are
+/// about to display. Name and limit must describe the SAME road.
+///
+/// Measured on the 2026-09-21 17:33 drive (tool/simulate_nav.py): the segment
+/// layer disagreed with the settled road name on 26 fixes and its value changed
+/// the chip's limit on 16 of them — the display said 'Lũy Bán Bích' while the
+/// 50 km/h came from the crossing 'Độc Lập', and 'Thống Nhất' while the 60 came
+/// from 'Lũy Bán Bích'. Only the NAME used to go through the veto in
+/// [pickRoadName]; the limit travelled with the segment record.
+///
+/// An unnamed segment (62% of the layer) carries no evidence either way, so it
+/// is allowed through.
+bool postedLimitMatchesName(String? segmentName, String settledName) {
+  if (segmentName == null || segmentName.isEmpty) return true;
+  if (settledName.isEmpty) return true;
+  return sameRoad(segmentName, settledName);
+}
+
 /// Hysteresis for a road-name change: the new name must be proposed
 /// [confirmFixes] times, or the car must travel [confirmMeters] while it is
 /// proposed, before it replaces the name on screen.

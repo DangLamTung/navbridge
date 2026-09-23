@@ -638,9 +638,17 @@ int? _querySegIndex(
   }
   final s = cands[win].$1;
   final brg = cands[win].$3;
-  _lastSegS = s; // which segment won, for [lastWazeStreetName]
   final f = idx.fwd[s], r = idx.rev[s];
-  if (f == 0 && r == 0) return null;
+  // Only remember the segment when it actually posts a limit. The caller
+  // (nav_gps `_correctSpeedFromWazeInner`) adopts the name returned by
+  // [lastWazeStreetName] even on a null limit, so a segment that gave us
+  // nothing must not name the road. Zero segments in the current asset carry
+  // 0/0, but an OTA asset may — the guard is what the comment above claims.
+  if (f == 0 && r == 0) {
+    _lastSegS = -1;
+    return null;
+  }
+  _lastSegS = s; // which segment won, for [lastWazeStreetName]
   if (f == r || f == 0) return r;
   if (r == 0) return f;
   if (headingDeg == null) return f > r ? f : r;

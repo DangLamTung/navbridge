@@ -116,6 +116,15 @@ def pick_road_name(current: str, candidate: str, candidate_on_route: bool,
     return candidate
 
 
+def posted_limit_matches_name(segment_name, settled_name) -> bool:
+    """postedLimitMatchesName() (lib/core/road_match.dart): a NAMED segment may
+    only supply the limit of the road it names. An unnamed segment carries no
+    evidence either way."""
+    if not segment_name or not settled_name:
+        return True
+    return same_road(segment_name, settled_name)
+
+
 class RoadNameHysteresis:
     """RoadNameHysteresis: 2 proposals or 30 m before a name change shows."""
 

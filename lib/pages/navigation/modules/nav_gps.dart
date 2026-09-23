@@ -454,6 +454,21 @@ extension _NavGps on _NavigationPageState {
     };
   }
 
+  /// The name the publisher would settle on for [candidate] right now.
+  ///
+  /// Uses the veto only: the hysteresis can DELAY a change, never force one, so
+  /// a caller can ask "would this candidate be overruled?" before publishing.
+  String _settledName(String candidate) {
+    final cur = _roadInfo?.name ?? '';
+    final names = _routeNames();
+    return pickRoadName(
+      current: cur,
+      candidate: candidate,
+      candidateOnRoute: names.any((n) => sameRoad(n, candidate)),
+      currentOnRoute: names.any((n) => sameRoad(n, cur)),
+    );
+  }
+
   /// Publish a matched road, through the route veto and the change hysteresis.
   ///
   /// The matcher resolves the road from geometry alone and names a road that is
@@ -621,6 +636,12 @@ extension _NavGps on _NavigationPageState {
       // next lookup overwrites both.
       final layerKind = lastLimitLayer();
       final layerName = lastWazeStreetName();
+      // A named segment may only supply the limit of the road it names: if the
+      // veto would keep a different road on screen, that segment is a crossing
+      // street and its value belongs to that other road.
+      if (!postedLimitMatchesName(layerName, _settledName(layerName ?? road.name))) {
+        return road;
+      }
       return applyPostedLayer(
         road,
         kmh: lim,
@@ -720,8 +741,19 @@ extension _NavGps on _NavigationPageState {
     final name = (wazeName != null && wazeName.isNotEmpty)
         ? wazeName
         : cur.name;
-    if (lim == null) {
-      // No posted limit on this segment: still adopt a better name when Waze
+    // The segment's street and its posted value must describe the SAME road.
+    // Measured on the 2026-09-21 drive, 26 fixes had a settled name that
+    // disagreed with the winning segment's street and 16 of those changed the
+    // limit shown (display 'Lũy Bán Bích' with a 50 from the crossing
+    // 'Độc Lập'; display 'Thống Nhất' with a 60 from 'Lũy Bán Bích'). Only the
+    // NAME went through the veto — the value travelled with the segment record.
+    final limitUsable = postedLimitMatchesName(wazeName, _settledName(name));
+    if (lim == null || !limitUsable) {
+      if (lim != null) {
+        debugPrint('ROAD: dropped layer limit $lim from "$wazeName" — the road '
+            'on screen is "${_settledName(name)}"');
+      }
+      // No posted limit for THIS road: still adopt a better name when the layer
       // has one, so the label can catch up independently of the limit — but
       // only through the route veto + hysteresis (a segment the car is not on
       // must not rename the road; see lib/core/road_match.dart).

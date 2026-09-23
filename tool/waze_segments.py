@@ -95,6 +95,7 @@ class Segments:
         # few metres apart, so the polyline distance gives a good answer.
         self.pts: list[list[tuple[float, float]]] = []
         self.grid: dict[tuple[int, int], list[int]] = defaultdict(list)
+        self.grid_skipped = 0
         keep = 0
         for s in range(self.n_segs):
             if only_with_limit and not (self.fwd[s] or self.rev[s]):
@@ -117,6 +118,17 @@ class Segments:
                 continue
             lats = [p[0] for p in pts]
             lngs = [p[1] for p in pts]
+            # Same guard as the Dart loader: a segment whose bounding box spans
+            # more than 256 cells (0.005 deg each) is NOT indexed at all, so the
+            # app can never find it near its interior either. Keeping the two
+            # sides identical is what makes an offline audit comparable to the
+            # app; the 140 affected segments are sea/ferry crossings.
+            e5 = 500
+            xs = [int(p * 1e5) // e5 for p in lngs]
+            ys = [int(p * 1e5) // e5 for p in lats]
+            if (max(xs) - min(xs) + 1) * (max(ys) - min(ys) + 1) > 256:
+                self.grid_skipped += 1
+                continue
             for gy in range(int(math.floor(min(lats) / CELL_DEG)),
                             int(math.floor(max(lats) / CELL_DEG)) + 1):
                 for gx in range(int(math.floor(min(lngs) / CELL_DEG)),
@@ -127,12 +139,24 @@ class Segments:
                            if self.fwd[s] or self.rev[s])
             named = sum(1 for n in self.streets if n)
             print(f'segments: {self.n_segs} ({with_lim} with a limit, '
-                  f'{named} named), v{self.version}, cell {cell_e4}e-4')
+                  f'{named} named), v{self.version}, cell {cell_e4}e-4, '
+                  f'{self.grid_skipped} not indexed')
 
     def street(self, s: int):
         return self.streets[s] if s < len(self.streets) else None
 
-    def value(self, s: int, heading_deg: float | None = None):
+    def value(self, s: int, heading_deg: float | None = None,
+              bearing_deg: float | None = None):
+        """Posted value of segment [s], for [heading_deg].
+
+        The direction pick uses the bearing of the NEAREST SUB-SEGMENT in stored
+        node order — exactly what the app does (`_querySegIndex` passes the
+        winning candidate's bearing into the fwd/rev choice). Callers that have
+        a position MUST pass [bearing_deg] (query() does); using the whole
+        segment's end-to-end bearing instead inverts the answer on 95% of the
+        25,127 per-direction segments in the asset (verified by
+        tool/audit_waze_segments.py).
+        """
         f, r = self.fwd[s], self.rev[s]
         if f == 0 and r == 0:
             return 0
@@ -142,18 +166,20 @@ class Segments:
             return f
         if heading_deg is None:
             return max(f, r)
-        brg = self._bearing(s)
+        brg = self._bearing(s) if bearing_deg is None else bearing_deg
         delta = abs(heading_deg - brg) % 360.0
         if delta > 180:
             delta = 360 - delta
         return f if delta <= 90 else r
 
     def _bearing(self, s: int) -> float:
+        """End-to-end bearing of the segment in STORED node order (first ->
+        last). Fallback only — it ignores the segment's shape."""
         pts = self.pts[s]
-        if not pts:
+        if len(pts) < 2:
             return 0.0
-        (lat0, lng0) = pts[-1]
-        (lat1, lng1) = pts[0]
+        (lat0, lng0) = pts[0]
+        (lat1, lng1) = pts[-1]
         dx = (lng1 - lng0) * math.cos(math.radians(lat0))
         dy = lat1 - lat0
         return (math.degrees(math.atan2(dx, dy)) + 360.0) % 360.0
@@ -174,8 +200,11 @@ class Segments:
         gx = int(math.floor(lng / CELL_DEG))
         cands = []
         seen = set()
-        for dy in range(-rings, rings + 1):
-            for dx in range(-rings, rings + 1):
+        # Same iteration order as the Dart loader (x outer, y inner) so that the
+        # tie-break between two equally scored candidates lands on the same
+        # segment on both sides.
+        for dx in range(-rings, rings + 1):
+            for dy in range(-rings, rings + 1):
                 for s in self.grid.get((gy + dy, gx + dx), ()):
                     if s in seen:
                         continue
@@ -198,7 +227,10 @@ class Segments:
         s, best_d = best
         cls = (self.classes[s] & 0x3F) if self.classes else 0
         sep = bool(self.classes[s] & 0x80) if self.classes else False
-        return (self.value(s, heading_deg), self.street(s), cls, sep,
+        # The winning candidate's own bearing decides fwd vs rev — same as the
+        # app, which reads brg from `cands[win].$3`.
+        brg_win = next(c[2] for c in cands if c[0] == s)
+        return (self.value(s, heading_deg, brg_win), self.street(s), cls, sep,
                 best_d, s)
 
     @staticmethod
