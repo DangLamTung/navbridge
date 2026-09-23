@@ -209,17 +209,80 @@ Future<List<RoadSign>> _fetchSigns() async {
         in (data['signs'] as List? ?? const []).cast<Map<String, dynamic>>())
       if (!droppedSignKinds.contains(it['kind'])) RoadSign.fromJson(it),
   ];
-  final kept = [
-    for (final s in rows)
-      if (!isImpossibleSpeedSign(s)) s,
-  ];
-  if (kept.length != rows.length) {
+  var coarse = 0;
+  var impossible = 0;
+  final kept = <RoadSign>[];
+  for (final s in rows) {
+    if (isImpossibleSpeedSign(s)) {
+      impossible++;
+      continue;
+    }
+    if (!signCoordsAreUsable(s)) {
+      coarse++;
+      continue;
+    }
+    kept.add(s);
+  }
+  if (coarse > 0) {
     debugPrint(
-      'SIGNS: dropped ${rows.length - kept.length} impossible speed value(s) '
+      'SIGNS: dropped $coarse sign(s) with coordinates too coarse to place '
+      '(< $kMinSignDecimals decimals ≈ 111 m) — a cấm rẽ / chỉ rẽ sign that far '
+      'off fires its warning on the wrong street',
+    );
+  }
+  if (impossible > 0) {
+    debugPrint(
+      'SIGNS: dropped $impossible impossible speed value(s) '
       '(> $kVnMaxPostedKmh km/h)',
     );
   }
   return kept;
+}
+
+/// Decimal places a coordinate must carry to be worth trusting on the ground.
+///
+/// The feed stores whole KINDS on a coarse grid, measured over the bundled
+/// index (2026-09-01, 45,197 signs, `tool/audit_turn_signs.py`):
+///
+/// ```
+///   only_left          6/6     (100%)   no_right_turn     55/247   (22%)
+///   only_right        11/11    (100%)   no_left_turn     122/353   (35%)
+///   end_prohibitions 270/350   (77%)    no_u_turn         94/228   (41%)
+///   only_straight      9/17    (53%)    speed          4,168/20,753 (20%)
+///   every osm toll_booth / slow_down / tunnel / railway_crossing row  (100%)
+/// ```
+///
+/// 3 decimals is a 0.001° grid ≈ 111 m, so the stored point can be ±55 m from
+/// the sign (2 decimals ⇒ ±550 m). These are not silent: `nav_signs.dart`
+/// SPEAKS them ("Cấm rẽ trái sắp tới", "Chỉ rẽ trái sắp tới"), so a sign half a
+/// block away warns on the wrong street — and of the 8 turn signs within 1.5 km
+/// of the Bàu Cát corridor, 5 had no second street (2 had no street at all)
+/// within 30 m of their stored position. `populated`/`populated_end` were
+/// dropped outright for exactly this kind of error — see [droppedSignKinds].
+///
+/// Kept as a LOAD guard so a downloaded/auto-updated index is filtered too.
+const int kMinSignDecimals = 4;
+
+/// True when a sign's stored coordinate is precise enough to place on the road.
+///
+/// The count is taken from the decoded double, so a genuine 4-decimal value
+/// that happens to end in zeros (e.g. `106.6500`) reads as 3 and is dropped:
+/// a fraction of a percent of the fine rows, traded against warnings that point
+/// at the wrong street.
+bool signCoordsAreUsable(RoadSign s) =>
+    _decimals(s.lat) >= kMinSignDecimals && _decimals(s.lng) >= kMinSignDecimals;
+
+int _decimals(double v) {
+  final text = v.toString();
+  final dot = text.indexOf('.');
+  if (dot < 0) return 0;
+  var n = text.length - dot - 1;
+  // "1e-5" style output for very small values would collapse to 1 digit.
+  if (text.contains('e') || text.contains('E')) return 9;
+  while (n > 0 && text[text.length - 1] == '0') {
+    n--;
+  }
+  return n;
 }
 
 /// The highest speed limit that can legally be posted in Việt Nam — 120 km/h,
