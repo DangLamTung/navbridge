@@ -55,6 +55,29 @@ void main() {
     expect(lastWazeStreetName(), 'Lê Đức Anh');
   });
 
+  test('the pick holds the value on screen between parallel records', () async {
+    await loadOfflineSpeedLimits();
+    if (!speedLimitsPopulated) return;
+    // Cộng Hòa carries TWO parallel records a few metres apart, with different
+    // values and names that fold to the same string ('cong hoa'): id=601376
+    // 60 km/h and id=603315 50 km/h. Whichever is nearest alternated with the
+    // GPS noise and the chip swapped 60/50 every second (2026-09-22 20:48
+    // drive, 27 same-road value changes). This coordinate+heading is one where
+    // the plain pick takes the 50 and would have flipped the display.
+    const congHoa = LatLng(10.800843, 106.660801);
+    expect(await speedLimitAt(congHoa, headingDeg: 277), 50);
+    expect(lastWazeStreetName(), 'Cộng Hòa');
+    // 60 is on screen and a 60 record is right there → stay.
+    expect(await speedLimitAt(congHoa, headingDeg: 277, keepKmh: 60), 60);
+    // A value nothing nearby carries must not be invented.
+    expect(await speedLimitAt(congHoa, headingDeg: 277, keepKmh: 80), 50);
+    // With the band closed the plain pick returns (no unconditional stickiness).
+    expect(
+      await speedLimitAt(congHoa, headingDeg: 277, keepKmh: 60, keepBandM: 0),
+      50,
+    );
+  });
+
   test('a lookup that finds no segment must not name a road', () async {
     await loadOfflineSpeedLimits();
     if (!speedLimitsPopulated) return;

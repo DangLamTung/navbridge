@@ -168,10 +168,23 @@ int _cellKey(double lon, double lat) {
 /// [headingDeg] (compass, 0 = north) picks the right direction when a segment
 /// posts different limits for each carriageway; without it the higher of the
 /// two is used, which is the safe read for a limit *ceiling*.
+///
+/// [keepKmh] is the value currently on screen. Two Waze records can run
+/// parallel on ONE road a couple of metres apart, with different values and
+/// even different spellings — measured on the 2026-09-22 20:48 drive, on
+/// Cộng Hòa: id=601376 'Cộng Hòa' 60 at 3.0 m and id=603315 'Cộng Hoà' 50 at
+/// 5.5 m. After diacritic folding those names are identical, so nothing but
+/// CONTINUITY can tell them apart: whichever is nearest alternates with GPS
+/// noise and the chip swapped 60/50 every second. A candidate carrying the
+/// value already displayed therefore wins while it is within [keepBandM]
+/// metres of the best candidate. Measured offline over that drive: 27
+/// same-road value changes become 3 with a 6 m band, and 1 with 8 m.
 Future<int?> speedLimitAt(
   LatLng p, {
   double maxDistM = 25,
   double? headingDeg,
+  int? keepKmh,
+  double keepBandM = 6,
 }) async {
   await loadOfflineSpeedLimits();
   final segs = _segs;
@@ -184,7 +197,8 @@ Future<int?> speedLimitAt(
 
   // 1) Waze per-SEGMENT limits.
   if (segs != null) {
-    final r = _querySegIndex(segs, lat, lon, cosLat, maxDistM, headingDeg);
+    final r = _querySegIndex(segs, lat, lon, cosLat, maxDistM, headingDeg,
+        keepKmh: keepKmh, keepBandM: keepBandM);
     if (r != null) {
       _lastLayer = 'segment';
       return r;
@@ -597,18 +611,23 @@ int pickSegmentCandidate(
   return bestI;
 }
 
-/// Posted limit (km/h) of the nearest Waze segment within [maxDistM] of
-/// (lat, lon), or null. [headingDeg] disambiguates a per-direction limit; when
-/// absent (or when only one direction is posted) the higher value wins, since
-/// the caller treats the result as a limit ceiling.
+/// Posted limit (km/h) of the segment the car is on within [maxDistM] of
+/// (lat, lon), or null.
+///
+/// [keepKmh] (see [speedLimitAt]) makes the pick CONTINUOUS inside the
+/// ambiguity band: between two parallel records of one road, the one carrying
+/// the value already on screen wins while it is within [keepBandM] metres of
+/// the best candidate. Without it the value alternates with GPS noise.
 int? _querySegIndex(
   _SegIndex idx,
   double lat,
   double lon,
   double cosLat,
   double maxDistM,
-  double? headingDeg,
-) {
+  double? headingDeg, {
+  int? keepKmh,
+  double keepBandM = 6,
+}) {
   final cx = (lon / _segCellDeg).floor();
   final cy = (lat / _segCellDeg).floor();
   // Small list per query (~1 Hz), traded for one place that decides which
@@ -628,7 +647,8 @@ int? _querySegIndex(
       }
     }
   }
-  final win = pickSegmentCandidate(cands, headingDeg, maxDistM);
+  final win = _pickWithContinuity(
+      idx, cands, headingDeg, maxDistM, keepKmh, keepBandM);
   // No winner ⇒ nothing usable here: forget the segment, so
   // [lastWazeStreetName] cannot name the road from a segment that gave us no
   // limit — the caller adopts that name verbatim, even when the limit is null.
@@ -638,17 +658,23 @@ int? _querySegIndex(
   }
   final s = cands[win].$1;
   final brg = cands[win].$3;
-  final f = idx.fwd[s], r = idx.rev[s];
   // Only remember the segment when it actually posts a limit. The caller
   // (nav_gps `_correctSpeedFromWazeInner`) adopts the name returned by
   // [lastWazeStreetName] even on a null limit, so a segment that gave us
   // nothing must not name the road. Zero segments in the current asset carry
   // 0/0, but an OTA asset may — the guard is what the comment above claims.
-  if (f == 0 && r == 0) {
+  if (idx.fwd[s] == 0 && idx.rev[s] == 0) {
     _lastSegS = -1;
     return null;
   }
   _lastSegS = s; // which segment won, for [lastWazeStreetName]
+  return _segmentValue(idx, s, brg, headingDeg);
+}
+
+/// The value a segment would answer for [headingDeg]: its own `fwd`/`rev` pair
+/// resolved against the bearing of the sub-segment nearest the car.
+int _segmentValue(_SegIndex idx, int s, double brg, double? headingDeg) {
+  final f = idx.fwd[s], r = idx.rev[s];
   if (f == r || f == 0) return r;
   if (r == 0) return f;
   if (headingDeg == null) return f > r ? f : r;
@@ -657,6 +683,41 @@ int? _querySegIndex(
   var delta = (headingDeg - brg).abs() % 360.0;
   if (delta > 180) delta = 360 - delta;
   return delta <= 90 ? f : r;
+}
+
+/// Winner among [cands], holding [keepKmh] when it is still plausible.
+///
+/// The ambiguity this resolves is geometric, not semantic: two records of one
+/// road, a few metres apart, with values 60 and 50 — after diacritic folding
+/// their names are the same string, so no name rule can prefer one. Whichever
+/// is nearest flips with the GPS noise and the driver sees 60/50/60/50. Among
+/// candidates that carry the value already displayed, the nearest one therefore
+/// wins as long as it is no more than [keepBandM] metres worse than the overall
+/// best candidate.
+int _pickWithContinuity(
+  _SegIndex idx,
+  List<(int, double, double, double)> cands,
+  double? headingDeg,
+  double maxDistM,
+  int? keepKmh,
+  double keepBandM,
+) {
+  final win = pickSegmentCandidate(cands, headingDeg, maxDistM);
+  if (win < 0 || keepKmh == null || keepKmh <= 0) return win;
+  final bestD = cands[win].$2;
+  var stickyI = -1;
+  var stickyD = double.infinity;
+  for (var i = 0; i < cands.length; i++) {
+    final (s, d, brg, _) = cands[i];
+    if (d > maxDistM) continue;
+    if (d > bestD + keepBandM) continue;
+    if (_segmentValue(idx, s, brg, headingDeg) != keepKmh) continue;
+    if (d < stickyD) {
+      stickyD = d;
+      stickyI = i;
+    }
+  }
+  return stickyI >= 0 ? stickyI : win;
 }
 
 /// Nearest point limit (km/h) in a [`_WazeIndex`] (Waze or VietMap E-DOG)

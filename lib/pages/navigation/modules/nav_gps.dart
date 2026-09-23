@@ -635,6 +635,10 @@ extension _NavGps on _NavigationPageState {
       final lim = await speedLimitAt(
         pos,
         headingDeg: _heading == 0 ? null : _heading,
+        // Keep the value on screen while two parallel records of the SAME road
+        // disagree (see _pickWithContinuity): without it the chip swapped
+        // 60/50 every second on Cộng Hòa, 2026-09-22.
+        keepKmh: _roadInfo?.speedLimit,
       );
       if (lim == null) return road;
       // Read the layer kind / street name immediately after the lookup — the
@@ -726,15 +730,22 @@ extension _NavGps on _NavigationPageState {
   }
 
   Future<void> _correctSpeedFromWazeInner(LatLng pos, {LatLng? snapped}) async {
+    // The value on screen is the continuity hint (see _pickWithContinuity):
+    // two Waze records of one road sit 2-3 m apart with different values and
+    // identical names after folding, and without the hint the chip swaps
+    // between them every fix (Cộng Hòa 60/50, 2026-09-22 drive).
+    final keep = _roadInfo?.speedLimit;
     var lim = await speedLimitAt(
       pos,
       headingDeg: _heading == 0 ? null : _heading,
+      keepKmh: keep,
     );
     var usedSnapped = false;
     if (lim == null && snapped != null && snapped != pos) {
       lim = await speedLimitAt(
         snapped,
         headingDeg: _heading == 0 ? null : _heading,
+        keepKmh: keep,
       );
       usedSnapped = lim != null;
     }

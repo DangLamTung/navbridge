@@ -368,7 +368,12 @@ class _OverlayAppState extends State<OverlayApp> {
         divided = g?['divided'] == true;
       } catch (_) {}
 
-      final posted = await speedLimitAt(pos);
+      final posted = await speedLimitAt(
+        pos,
+        // Same continuity rule as the app: hold the value on screen when two
+        // parallel Waze records of one road disagree.
+        keepKmh: (_limit ?? 0) > 0 ? _limit : null,
+      );
       // Which layer answered, before the fallback overwrites the variable.
       final postedLayer = posted != null ? lastLimitLayer() : null;
       // ONE decision, shared with the app (roadInfoFromRoad + applyPostedLayer):

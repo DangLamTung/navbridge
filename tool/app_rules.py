@@ -198,4 +198,5 @@ if __name__ == '__main__':
     h = RoadNameHysteresis()
     assert h.accept('Ấp Bắc', 'Lũy Bán Bích', 4.0) is False
     assert h.accept('Ấp Bắc', 'Lũy Bán Bích', 4.0) is True
+
     print('app_rules self-check: OK')

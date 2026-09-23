@@ -85,6 +85,12 @@ def main() -> int:
     ap.add_argument('-o', '--out', default=os.path.join(REPO,
                                                        'docs/limit_audit.html'))
     ap.add_argument('--vehicle', default='motorbike')
+    ap.add_argument('--continuity', action='store_true',
+                    help='score against the pick WITH the continuity band (the '
+                         'value already on screen wins while a record carrying '
+                         'it is within 6 m) — what builds after 2026-09-23 do. '
+                         'Without it a deliberately held value is counted as a '
+                         'disagreement.')
     args = ap.parse_args()
 
     if not args.trip:
@@ -113,13 +119,14 @@ def main() -> int:
     segs = T.Segments(SEGS)
 
     rows = []
+    keep = None  # value on screen at the previous fix, for --continuity
     for e in doc.get('locations') or []:
         if not e.get('latitudeE7'):
             continue
         lat, lng = e['latitudeE7'] / 1e7, e['longitudeE7'] / 1e7
         h = e.get('heading')
         kmh = segs.query(lat, lng, h if isinstance(h, (int, float)) else None,
-                         25)[0]
+                         25, keep_kmh=keep if args.continuity else None)[0]
         hw = e.get('highway') or ''
         cls = T.effective_limit(hw or 'unclassified', args.vehicle,
                                 tagged_kmh=0)
@@ -127,6 +134,7 @@ def main() -> int:
         src = e.get('limitSource') or ('' if chip is not None else 'road(legacy)')
         if chip is None:
             chip = e.get('speedLimit')
+        keep = chip or None
         if not chip:
             state = 'none'
         elif not kmh:

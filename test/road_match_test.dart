@@ -223,7 +223,6 @@ void main() {
       expect(changes, 0);
     });
   });
-
   group('postedLimitMatchesName', () {
     test('accepts the segment whose street we are displaying', () {
       expect(postedLimitMatchesName('Lũy Bán Bích', 'Lũy Bán Bích'), isTrue);

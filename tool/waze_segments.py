@@ -185,7 +185,8 @@ class Segments:
         return (math.degrees(math.atan2(dx, dy)) + 360.0) % 360.0
 
     def query(self, lat: float, lng: float, heading_deg: float | None = None,
-              max_dist_m: float = 25.0, rings: int = 1):
+              max_dist_m: float = 25.0, rings: int = 1,
+              keep_kmh: int | None = None, keep_band_m: float = 6.0):
         """(kmh, street, road_class, divided, dist_m, seg_id) or (0, …, None).
 
         Picks the segment the car is IN, not merely the nearest one: a candidate
@@ -225,6 +226,22 @@ class Segments:
         if best is None:
             return 0, None, 0, False, None, None
         s, best_d = best
+        # CONTINUITY (mirror of _pickWithContinuity in the Dart reader): two
+        # parallel records of ONE road, 2-3 m apart, with different values and
+        # identical names after diacritic folding — only continuity can choose.
+        # Without this the value swaps with GPS noise (Cộng Hòa 60/50, 27
+        # same-road changes on the 2026-09-22 20:48 drive; 3 with the band).
+        if keep_kmh:
+            sticky, sticky_d = None, float('inf')
+            for s2, d2, brg2, over2 in cands:
+                if d2 > max_dist_m or d2 > best_d + keep_band_m:
+                    continue
+                if self.value(s2, heading_deg, brg2) != keep_kmh:
+                    continue
+                if d2 < sticky_d:
+                    sticky_d, sticky = d2, (s2, d2)
+            if sticky is not None:
+                s, best_d = sticky
         cls = (self.classes[s] & 0x3F) if self.classes else 0
         sep = bool(self.classes[s] & 0x80) if self.classes else False
         # The winning candidate's own bearing decides fwd vs rev — same as the
