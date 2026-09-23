@@ -55,13 +55,30 @@ Remaining 14: the slower alternations that outlive the band — Trần Quốc Ho
 
 ### Chip vs the engine's own rule (`tool/limit_audit.py`)
 Each build scored against what ITS rule should produce; `--continuity` for the
-builds that have it, so a held value is not counted as a disagreement.
+builds that have it, so a held value is not counted as a disagreement, and a
+`sign` state for a posted sign that lowers the layer value (by rule, see
+`signLimitInForce`) instead of calling it a disagreement.
 
-| run | ok | class fallback | **disagreed** |
-|---|---|---|---|
-| recorded drive (old build) | 493 (90.8%) | 17 (3.1%) | **31 (5.7%)** |
-| before the fix (clamp only) | 485 (92.0%) | 17 (3.2%) | **23 (4.4%)** |
-| **after the fix (continuity)** | **498 (94.7%)** | 7 (1.3%) | **19 (3.6%)** |
+| run | ok | sign (by rule) | class fallback | **disagreed** |
+|---|---|---|---|---|
+| recorded drive (old build) | 493 (90.8%) | 11 (2.0%) | 17 (3.1%) | **20 (3.7%)** |
+| before the fix (clamp only) | 485 (92.0%) | 11 (2.1%) | 17 (3.2%) | **12 (2.3%)** |
+| **after the fix (continuity)** | **498 (94.7%)** | 14 (2.7%) | 7 (1.3%) | **5 (1.0%)** |
+
+### What the last 5 are (every one is a single fix)
+* `Trần Quốc Hoàn` — the layer holds `Trần Quốc Hoàn (Làn xe 2 bánh)` 50 right
+  next to the general carriageway 60, and the pick is not vehicle-aware.
+* `Cộng Hòa` — alternations whose dwell is longer than the 6 m band, plus one
+  deliberate hold (60 held while the plain pick said 50).
+* `Nguyễn Văn Trỗi` — the closer record is UNNAMED and carries 50.
+
+### Why the earlier report showed 19 "bad"
+14 of them were a **posted speed sign in force** (`limitSource=sign`):
+`Trần Quốc Hoàn`'s segment says 60 while the sign index carries VietMap 50 km/h
+signs 127–174 m away (verified in `assets/offline_map/vietnam_signs.json`; there
+is also a 60 sign 37 m away), and the rule is that a sign may tighten a layer
+value, never raise it. The audit had no state for that and counted the rule as a
+defect — it now reports it separately as `sign`.
 
 ### The cost, measured rather than hidden
 `tool/continuity_side_effect.py` — over every recorded drive (20,616 fixes):

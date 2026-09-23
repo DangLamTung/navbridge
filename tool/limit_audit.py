@@ -143,6 +143,14 @@ def main() -> int:
             state = 'ok'
         elif chip == cls:
             state = 'class'
+        elif src == 'sign' and chip < kmh:
+            # A POSTED SIGN in force tightening the layer value. By rule:
+            # signLimitInForce lets a sign lower a layer value, never raise it
+            # (lib/core/sign_limit.dart). Trần Quốc Hoàn 09:48 of the
+            # 2026-09-23 16:44 replay: the segment says 60, the VietMap sign
+            # index carries 50 signs 127-174 m away, the chip shows 50. Scoring
+            # that as a disagreement measured the rule, not a defect.
+            state = 'sign'
         else:
             state = 'bad'
         rows.append({
@@ -186,7 +194,7 @@ def main() -> int:
     with open(args.out, 'w', encoding='utf-8') as fh:
         fh.write(html)
     print(f'{os.path.basename(args.trip)}: {n} fixes')
-    for k in ('ok', 'class', 'bad', 'nowaze', 'none'):
+    for k in ('ok', 'sign', 'class', 'bad', 'nowaze', 'none'):
         if counts.get(k):
             print(f'  {k:<7} {counts[k]:>5} ({100.0 * counts[k] / n:.1f}%)')
     print(f'  worst episodes: '
@@ -299,6 +307,8 @@ def _render(trip, rows, counts, eps, n, t0, vehicle, seglines) -> str:
     chip stayed on the class default {counts.get('class', 0)}</span>
   <span class="k"><i class="sw" style="background:#d93025"></i>chip differed from
     the layer (sign / cache) {counts.get('bad', 0)}</span>
+  <span class="k"><i class="sw" style="background:#7986cb"></i>posted sign
+    lowering the layer value {counts.get('sign', 0)}</span>
   <span class="k"><i class="sw" style="background:#9b59b6"></i>no Waze segment
     within 25 m → class default {counts.get('nowaze', 0)}</span>
   <span class="k"><i class="sw" style="background:#2f3436"></i>no limit shown
