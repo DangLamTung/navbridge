@@ -48,6 +48,19 @@ String pickRoadName({
   return candidate; // neither is on the route: trust the match
 }
 
+/// True when two names are the SAME spelling of the same road: identical keys,
+/// so only case, diacritics, punctuation and spacing differ.
+///
+/// Distinct from [sameRoad], which also treats containment as one road. This is
+/// the test for "is the label actually changing?": the 2026-09-22 20:54 drive
+/// churned 'Cộng Hòa' ⇄ 'Cộng Hoà' for 54 s because the publisher compared the
+/// strings with `!=` while the veto compared road keys — so a variant spelling
+/// counted as a new road, was confirmed twice, and repainted the label.
+bool sameRoadSpelling(String a, String b) {
+  final ka = roadKey(a);
+  return ka.isNotEmpty && ka == roadKey(b);
+}
+
 /// Whether a posted limit that came from a road segment may be adopted: the
 /// segment's own street name (when it has one) must agree with the name we are
 /// about to display. Name and limit must describe the SAME road.
@@ -83,17 +96,27 @@ class RoadNameHysteresis {
   String? _pending;
   int _count = 0;
   double _moved = 0;
+  DateTime? _lastObsAt;
 
   String? get pending => _pending;
   int get confirmations => _count;
 
   /// Feed one proposal. Returns true when the change should be published.
+  ///
+  /// [at] is when the observation was made. Two writers publish a road on the
+  /// same fix (the graph refresh and the layer correction), and if both propose
+  /// the same name they would otherwise burn the whole confirmation budget
+  /// inside ONE fix — which turns the hysteresis into a rename on every fix,
+  /// i.e. exactly the flapping it exists to prevent. Observations closer
+  /// together than [_minObservationGap] count once. Omitting [at] disables the
+  /// guard (unit tests call it that way).
   bool accept({
     required String current,
     required String candidate,
     required double movedM,
+    DateTime? at,
   }) {
-    if (candidate == current) {
+    if (sameRoadSpelling(candidate, current)) {
       reset();
       return false;
     }
@@ -101,10 +124,17 @@ class RoadNameHysteresis {
       _pending = candidate;
       _count = 1;
       _moved = movedM;
+      _lastObsAt = at;
       return false;
+    }
+    if (at != null &&
+        _lastObsAt != null &&
+        at.difference(_lastObsAt!).abs() < _minObservationGap) {
+      return false; // the same fix, agreeing itself
     }
     _count++;
     _moved += movedM;
+    _lastObsAt = at;
     if (_count >= confirmFixes || _moved >= confirmMeters) {
       reset();
       return true;
@@ -116,5 +146,9 @@ class RoadNameHysteresis {
     _pending = null;
     _count = 0;
     _moved = 0;
+    _lastObsAt = null;
   }
+
+  /// Observations closer together than this are one observation.
+  static const Duration _minObservationGap = Duration(milliseconds: 400);
 }

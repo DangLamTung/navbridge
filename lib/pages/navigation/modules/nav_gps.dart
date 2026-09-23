@@ -492,7 +492,7 @@ extension _NavGps on _NavigationPageState {
       candidateOnRoute: names.any((n) => sameRoad(n, next.name)),
       currentOnRoute: names.any((n) => sameRoad(n, cur.name)),
     );
-    if (name != cur.name) {
+    if (!sameRoadSpelling(name, cur.name)) {
       final moved = (at == null || _lastRoadPublishPos == null)
           ? 0.0
           : distanceMeters(_lastRoadPublishPos!, at);
@@ -500,10 +500,15 @@ extension _NavGps on _NavigationPageState {
         current: cur.name,
         candidate: name,
         movedM: moved,
+        at: DateTime.now(),
       )) {
         name = cur.name;
       }
     } else {
+      // A different spelling of the road already on screen is not a change:
+      // keep the spelling the driver has been reading (and do not let it reset
+      // the pending change for the road we might really be on).
+      name = cur.name;
       _roadNameGate.reset();
     }
     final out = name == next.name ? next : next.copyWith(name: name);

@@ -197,7 +197,7 @@ def engine_names_for(s_along, speed_mps):
 la = [((f.get('latitudeE7') or 0) / 1e7) for f in fixes if f.get('latitudeE7')]
 ln = [((f.get('longitudeE7') or 0) / 1e7) for f in fixes if f.get('longitudeE7')]
 bbox = (min(la) - 0.004, min(ln) - 0.004, max(la) + 0.004, max(ln) + 0.004)
-OSM_CACHE = '/tmp/osm_ways_bbox.json'
+OSM_CACHE = f'/tmp/osm_ways_{bbox[0]:.3f}_{bbox[2]:.3f}.json'
 if os.path.exists(OSM_CACHE):
     osm = json.load(open(OSM_CACHE))
 else:
@@ -350,6 +350,7 @@ odds = []
 s_along = 0.0
 route_names = []
 agree = {'n': 0, 'ok': 0}
+name_seq = []        # (ms, published name) for the oscillation metric
 
 for f in fixes:
     lat = (f.get('latitudeE7') or 0) / 1e7
@@ -404,7 +405,9 @@ for f in fixes:
             stats['veto_blocked'] += 1
             if same_road(published, f.get('street') or ''):
                 stats['veto_saved_bad'] += 1
-        published = sim
+        if sim:
+            published = sim
+            name_seq.append((ms, sim))
 
     # The layer's value is only usable for the road we are displaying: a named
     # segment that contradicts the settled name is a different street, and its
@@ -503,6 +506,32 @@ print(f'  hysteresis held a name back                       : '
       f'{stats["hyst_held"]}')
 print(f'  layer limit dropped (segment street != shown road): '
       f'{stats["layer_limit_dropped"]}')
+
+# Oscillations: A -> B -> A inside 4 fixes, i.e. the label flipping back and
+# forth (the app's own log shows 28 of these on the 2026-09-22 18:03 drive).
+collapsed = []
+for ms, nm in name_seq:
+    if not collapsed or collapsed[-1][1] != nm:
+        collapsed.append((ms, nm))
+osc = 0
+prev = None
+for i in range(1, len(collapsed) - 1):
+    if collapsed[i][1] != collapsed[i - 1][1] \
+            and collapsed[i + 1][1] == collapsed[i - 1][1]:
+        osc += 1
+app_osc = 0
+prev = None
+app_seq = []
+for f in fixes:
+    nm = f.get('street')
+    if nm and (not app_seq or app_seq[-1][1] != nm):
+        app_seq.append((int(f['timestampMs']), nm))
+for i in range(1, len(app_seq) - 1):
+    if app_seq[i][1] != app_seq[i - 1][1] \
+            and app_seq[i + 1][1] == app_seq[i - 1][1]:
+        app_osc += 1
+print(f'  name changes: app {len(app_seq) - 1}, simulated '
+      f'{len(collapsed) - 1};  oscillations: app {app_osc}, sim {osc}')
 if odds:
     print('\nsuspicious limits (needs a look):')
     for t, ola, oln, on, hw, nl, sk in odds:
@@ -514,7 +543,6 @@ if resid:
               f'(overpass pick {pick!r} {hw})')
 
 if stats['seg_off_road']:
-    print('\nWaze segment vs the road the car is on (route name):')
     print(f'  segment named a DIFFERENT street than displayed : '
           f'{stats["seg_off_road"]}')
     print(f'  ...and it changed the limit shown               : '

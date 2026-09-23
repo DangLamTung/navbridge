@@ -77,6 +77,28 @@ void main() {
     });
   });
 
+  group('sameRoadSpelling', () {
+    test('ignores case, diacritics and punctuation only', () {
+      // 2026-09-22 20:54: the label churned Cộng Hòa ⇄ Cộng Hoà for 54 s.
+      expect(sameRoadSpelling('Cộng Hòa', 'Cộng Hoà'), isTrue);
+      expect(sameRoadSpelling('Ni Sư Huỳnh Liên', 'Ni sư Huỳnh Liên'), isTrue);
+      expect(sameRoadSpelling('Lũy Bán Bích', 'Luy Ban Bich'), isTrue);
+    });
+
+    test('keeps a side street distinct from the road it hangs off', () {
+      // sameRoad() treats containment as one road (used for the route veto),
+      // but a name change must still be able to show the alley.
+      expect(sameRoad('Hẻm 62/1 Trương Công Định', 'Trương Công Định'), isTrue);
+      expect(sameRoadSpelling('Hẻm 62/1 Trương Công Định', 'Trương Công Định'),
+          isFalse);
+    });
+
+    test('empty names never match', () {
+      expect(sameRoadSpelling('', ''), isFalse);
+      expect(sameRoadSpelling('', 'Cộng Hòa'), isFalse);
+    });
+  });
+
   group('RoadNameHysteresis', () {
     test('a single odd fix cannot relabel the road', () {
       final h = RoadNameHysteresis();
@@ -125,6 +147,80 @@ void main() {
       h.accept(current: 'Ấp Bắc', candidate: 'Ấp Bắc', movedM: 5);
       expect(h.pending, isNull);
       expect(h.confirmations, 0);
+    });
+
+    test('a variant spelling of the current name is not a change', () {
+      final h = RoadNameHysteresis();
+      for (var i = 0; i < 5; i++) {
+        expect(
+          h.accept(current: 'Cộng Hòa', candidate: 'Cộng Hoà', movedM: 10),
+          isFalse,
+        );
+      }
+      expect(h.pending, isNull);
+    });
+
+    test('two writers on one fix are ONE observation', () {
+      // The graph refresh and the layer correction both publish on every fix;
+      // if both propose the same name, the change must still need two fixes.
+      final h = RoadNameHysteresis();
+      final t0 = DateTime(2026, 9, 22, 18, 5, 40);
+      expect(
+        h.accept(
+          current: 'Cộng Hòa',
+          candidate: 'Cầu vượt Hoàng Hoa Thám',
+          movedM: 12,
+          at: t0,
+        ),
+        isFalse,
+        reason: 'first writer on fix 1',
+      );
+      expect(
+        h.accept(
+          current: 'Cộng Hòa',
+          candidate: 'Cầu vượt Hoàng Hoa Thám',
+          movedM: 0,
+          at: t0.add(const Duration(milliseconds: 40)),
+        ),
+        isFalse,
+        reason: 'second writer on the SAME fix must not confirm it',
+      );
+      expect(h.confirmations, 1);
+      // The next fix, ~1 s later: that IS a second observation.
+      expect(
+        h.accept(
+          current: 'Cộng Hòa',
+          candidate: 'Cầu vượt Hoàng Hoa Thám',
+          movedM: 14,
+          at: t0.add(const Duration(seconds: 1)),
+        ),
+        isTrue,
+      );
+    });
+
+    test('alternating names every fix are never accepted', () {
+      // The 2026-09-22 18:05 pattern at the Hoàng Hoa Thám flyover: 28
+      // oscillations. Each name is proposed by both writers on its own fix.
+      final h = RoadNameHysteresis();
+      var t = DateTime(2026, 9, 22, 18, 5, 27);
+      var changes = 0;
+      const a = 'Cộng Hòa';
+      const b = 'Cầu vượt Hoàng Hoa Thám';
+      for (var fix = 0; fix < 40; fix++) {
+        final cand = fix.isEven ? b : a;
+        for (var w = 0; w < 2; w++) {
+          if (h.accept(
+            current: a,
+            candidate: cand,
+            movedM: w == 0 ? 15 : 0,
+            at: t.add(Duration(milliseconds: 30 * w)),
+          )) {
+            changes++;
+          }
+        }
+        t = t.add(const Duration(milliseconds: 1000));
+      }
+      expect(changes, 0);
     });
   });
 
