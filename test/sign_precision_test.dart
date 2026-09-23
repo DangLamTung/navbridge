@@ -51,15 +51,20 @@ void main() {
         reason: 'a ${coarse.isEmpty ? "" : coarse.first.kind.key} sign with a '
             'coarse coordinate reached the app');
 
-    // The announced turn signs keep only their well-placed rows: measured
-    // 2026-09-01 the index had 356 no_left_turn and 6 only_left.
-    final noLeft = signs.where((s) => s.kind == RoadSignKind.noLeftTurn).length;
-    final onlyLeft = signs.where((s) => s.kind == RoadSignKind.onlyLeft).length;
-    expect(noLeft, lessThan(356),
-        reason: 'the coarse no_left_turn rows (122) must not survive');
-    expect(onlyLeft, 0,
-        reason: 'all 6 only_left rows are on the 0.001° grid');
-    // …and the kinds whose feed is fine keep their rows.
+    // The turn signs are placed now: `tools/signs/repair_sign_coords.py`
+    // restored them from the Waze decode (6-decimal source, `source: waze`) and
+    // from E-DOG, so the guard is only the net for the 1,306 rows no source can
+    // place — it used to drop 9,762 rows out of 45,197.
+    final onlyLeft = signs.where((s) => s.kind == RoadSignKind.onlyLeft).toList();
+    expect(onlyLeft, hasLength(6),
+        reason: 'the 6 only_left rows exist in the Waze source and are precise '
+            'after the repair; before it they were all on the 0.001° grid');
+    expect(onlyLeft.every((s) => s.source == 'waze'), isTrue);
+    expect(signs.where((s) => s.kind == RoadSignKind.noLeftTurn).length,
+        greaterThan(300));
+    expect(signs.where((s) => s.kind == RoadSignKind.speed).length,
+        greaterThan(15000));
+    // …and the kinds whose feed was always fine keep their rows.
     expect(signs.where((s) => s.kind == RoadSignKind.stop).length,
         greaterThan(300));
     expect(signs.where((s) => s.kind == RoadSignKind.signal).length,
