@@ -130,7 +130,7 @@ void main() {
       // the street, but OSM has the first half tagged `residential` two-way, so
       // min(default 50, posted 60) showed 50 for 59 fixes of a 60 road (and the
       // chip jumped to 60 mid-street where the class changes to `secondary`).
-      // A posted sign is the authority — the class default is only the fallback
+      // A layer value is the authority — the class default is only the fallback
       // for "nothing posted".
       expect(
         effectiveLimit('residential',
@@ -138,13 +138,18 @@ void main() {
             taggedKmh: 60,
             lanes: 2,
             divided: false,
-            urban: true),
+            urban: true,
+            postedSrc: srcSegment),
         60,
       );
       // …and the same on the stretch OSM does tag as a classified road.
       expect(
         effectiveLimit('secondary',
-            vehicle: 'motorbike', taggedKmh: 60, lanes: 2, urban: true),
+            vehicle: 'motorbike',
+            taggedKmh: 60,
+            lanes: 2,
+            urban: true,
+            postedSrc: srcSegment),
         60,
       );
     });
@@ -154,7 +159,10 @@ void main() {
       // motorbike; a truck tops out at 50. Nothing posted keeps the form rule.
       expect(
         effectiveLimit('residential',
-            vehicle: 'motorbike', taggedKmh: 80, urban: true),
+            vehicle: 'motorbike',
+            taggedKmh: 80,
+            urban: true,
+            postedSrc: srcSegment),
         60,
       );
       expect(
@@ -171,6 +179,43 @@ void main() {
       expect(
         effectiveLimit('living_street', vehicle: 'motorbike', taggedKmh: 60),
         20,
+      );
+    });
+
+    test('an OSM maxspeed TAG is the last source: it may only tighten', () {
+      // Việt Nam OSM `maxspeed` is sparse and often stale, so for a motorbike
+      // our own rule decides and the tag can only make the driver slower.
+      expect(
+        effectiveLimit('residential',
+            vehicle: 'motorbike',
+            taggedKmh: 60,
+            lanes: 2,
+            urban: true,
+            postedSrc: srcOsm),
+        50,
+        reason: 'an OSM tag cannot raise a residential street to 60',
+      );
+      expect(
+        effectiveLimit('service', vehicle: 'motorbike', taggedKmh: 20,
+            postedSrc: srcOsm),
+        20,
+        reason: 'a stricter tag still stands',
+      );
+      // A Waze layer value IS the authority on the same road (see below).
+      expect(
+        effectiveLimit('residential',
+            vehicle: 'motorbike',
+            taggedKmh: 60,
+            lanes: 2,
+            urban: true,
+            postedSrc: srcSegment),
+        60,
+      );
+      // A car still takes the tag as its posted limit.
+      expect(
+        effectiveLimit('primary', vehicle: 'car', taggedKmh: 60,
+            postedSrc: srcOsm),
+        60,
       );
     });
 

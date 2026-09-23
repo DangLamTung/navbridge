@@ -47,13 +47,14 @@ def statutory_motorbike(highway, oneway=None, lanes=None, divided=False,
 
 
 def sim_limit(highway, oneway=None, lanes=None, posted=None,
-              divided=False, urban=True) -> int:
+              divided=False, urban=True, source='layer') -> int:
     """What the chip would show for a mô tô.
 
-    Mirrors effectiveLimit(): nothing posted -> the statutory table (form rule
-    for a built-up area); something posted -> the posted value, capped by the
-    vehicle's legal maximum for THIS road form (đường đôi = 60 in town), never
-    by the class default.
+    Mirrors effectiveLimit(). Sources, most trustworthy first: Waze layer →
+    the app's own built-up road-FORM rule → the statutory class default → an OSM
+    `maxspeed` TAG last. A layer value is the authority, capped only by the
+    vehicle's legal maximum for the road form (đường đôi = 60 in town); an OSM
+    tag (source='osm') may only TIGHTEN our own value, never set or raise it.
     """
     stat = statutory_motorbike(highway, oneway=oneway, lanes=lanes,
                               divided=divided, urban=urban)
@@ -63,6 +64,8 @@ def sim_limit(highway, oneway=None, lanes=None, posted=None,
         p = int(posted)
     except (TypeError, ValueError):
         return stat
+    if source == 'osm':
+        return min(stat, p)
     ceiling = statutory_motorbike(highway, oneway=True, lanes=2, divided=True,
                                  urban=urban)
     return min(ceiling, p)
@@ -175,6 +178,10 @@ if __name__ == '__main__':
     assert sim_limit('residential', posted=80) == 60        # car sign, capped
     assert sim_limit('residential', posted=30) == 30        # a real 30 stands
     assert sim_limit('living_street', posted=60) == 20
+    # An OSM `maxspeed` tag is LAST: it may only tighten, never set or raise.
+    assert sim_limit('residential', lanes=2, posted=60, source='osm') == 50
+    assert sim_limit('service', posted=20, source='osm') == 20
+    assert sim_limit('secondary', posted=60, source='osm', urban=False) == 60
     assert same_road('Đường 30 Tháng 4', 'duong 30 thang 4')
     assert same_road('Vườn Lài', 'Hẻm 4 Vườn Lài')
     assert not same_road('Trường Chinh', 'Trương Công Định')

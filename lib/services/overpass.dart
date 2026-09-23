@@ -270,21 +270,26 @@ int statutoryLimit(
 }
 
 /// Effective speed limit for [vehicle] on [highway], given an optional posted
-/// value ([taggedKmh], 0 = nothing posted — an OSM `maxspeed` tag or a Waze
-/// segment/point value).
+/// value ([taggedKmh], 0 = nothing posted).
 ///
-/// A posted value is the AUTHORITY for every vehicle; the statutory table is
-/// only the fallback for "nothing posted". For a car that is the end of it. For
-/// a motorbike / truck the posted value is capped by the vehicle's own legal
-/// MAXIMUM for this road form and context — never by its class default, which
-/// is not a ceiling:
-///   * a car-oriented 80/90/120 sign must not put a mô tô above 60 in town
-///     (the đường đôi / một chiều ≥2 làn value), nor above its rural class max;
-///   * a real 60 sign must be honoured on a street OSM happens to tag
-///     `residential` two-way — Lũy Bán Bích, 2026-09-22: Waze posts 60 on EVERY
-///     segment of the street while the first half is `residential`, so
-///     min(default 50, posted 60) showed 50 for 59 fixes of a 60 road, and the
-///     limit jumped 50 -> 60 mid-street where the class changed to `secondary`.
+/// The sources, most trustworthy first (see [postedSrc]):
+///   1. Waze per-SEGMENT posted limit (a sign keyed to the stretch of road)
+///   2. Waze / VietMap posted-limit POINTS
+///   3. the app's own built-up road-FORM rule (đường đôi 60 / hai chiều 50)
+///   4. the statutory class default
+///   5. an OSM `maxspeed` TAG — LAST.
+///
+/// A layer value is the authority for every vehicle, capped only by the
+/// vehicle's own legal MAXIMUM for the road form (đường đôi in town = 60 for a
+/// mô tô, 50 cho xe tải). The class default is NOT a cap — Lũy Bán Bích,
+/// 2026-09-22: the layer posts 60 on every segment while OSM tags the first half
+/// `residential` two-way, and min(default 50, posted 60) showed 50 for 59 fixes
+/// of a 60 road.
+///
+/// An OSM tag is different, and last: in Việt Nam `maxspeed` tagging is sparse
+/// and often stale, and it is car-oriented. For a motorbike / truck it may only
+/// TIGHTEN the value our own rule produced — it never sets or raises it. (A car
+/// has no other posted source, so there the tag IS the limit.)
 int effectiveLimit(
   String highway, {
   required String vehicle,
@@ -293,6 +298,7 @@ int effectiveLimit(
   int? lanes,
   bool divided = false,
   bool urban = false,
+  String postedSrc = srcOsm,
 }) {
   final statutory = statutoryLimit(
     highway,
@@ -306,6 +312,10 @@ int effectiveLimit(
   );
   if (taggedKmh <= 0) return statutory;
   if (vehicle == 'car') return taggedKmh;
+  if (postedSrc == srcOsm) {
+    // Last place: the tag may still make the driver slower, never faster.
+    return math.min(statutory, taggedKmh);
+  }
   final ceiling = statutoryLimit(
     highway,
     vehicle: vehicle,
@@ -356,6 +366,19 @@ RoadInfo roadInfoFromRoad({
   bool urban = false,
 }) {
   final hasPosted = taggedKmh > 0;
+  final statutory = statutoryLimit(
+    highway,
+    vehicle: vehicle,
+    oneway: oneway,
+    lanes: lanes,
+    divided: divided,
+    urban: urban,
+  );
+  // An OSM `maxspeed` tag is the LAST source we trust, so it may only be
+  // reported as the source when it actually decided the number: a car takes the
+  // tag as the limit, a motorbike/truck only when the tag is STRICTER than our
+  // own rule. A tag our rule overrode must not put "osm" on the chip.
+  final tagDecides = hasPosted && (vehicle == 'car' || taggedKmh < statutory);
   return RoadInfo(
     name: name,
     highway: highway,
@@ -374,19 +397,20 @@ RoadInfo roadInfoFromRoad({
     lanes: lanes,
     divided: divided,
     urban: urban,
-    // A real posted `maxspeed` beats the statutory tables; otherwise the value
-    // is the built-up or the class default.
-    src: hasPosted ? srcOsm : (urban ? srcCity : srcClass),
+    // Otherwise the value is ours: the built-up road-form rule, or the class
+    // default outside a built-up area.
+    src: tagDecides ? srcOsm : (urban ? srcCity : srcClass),
   );
 }
 
 /// Apply a posted-limit LAYER value (Waze segment / Waze point / VietMap point)
 /// to [road].
 ///
-/// The layer is authority, but the posted value is CAR-oriented: for motorbikes
-/// and trucks it only TIGHTENS the vehicle's statutory class default, never
-/// lifts it (see [effectiveLimit]). [name] is optional — the layer often carries
-/// a better street name than the graph/OSM way does.
+/// The layer is the authority for the limit (see [effectiveLimit]); the OSM
+/// `maxspeed` TAG is the last source we trust, and it is car-oriented: for a
+/// motorbike / truck it may only tighten the value our own rule produced.
+/// [name] is optional — the layer often carries a better street name than the
+/// graph/OSM way does.
 RoadInfo applyPostedLayer(
   RoadInfo road, {
   required int kmh,
@@ -406,6 +430,9 @@ RoadInfo applyPostedLayer(
       oneway: road.oneway,
       lanes: road.lanes,
       divided: road.divided,
+      urban: road.urban,
+      // The value comes from a LAYER, not from an OSM tag: it is the authority.
+      postedSrc: layerSrc,
     ),
     oneway: road.oneway,
     lanes: road.lanes,
