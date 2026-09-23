@@ -194,14 +194,21 @@ extension _NavBars on _NavigationPageState {
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: const Color(0xFFD93025), width: 1),
           ),
-          child: Text(
-            '📷 ${cam.routeMeters.round()}m',
-            style: const TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFFD93025),
-              height: 1.0,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const WazeCameraIcon(size: 14),
+              const SizedBox(width: 3),
+              Text(
+                '${cam.routeMeters.round()}m',
+                style: const TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFFD93025),
+                  height: 1.0,
+                ),
+              ),
+            ],
           ),
         ),
       );

@@ -24,6 +24,7 @@ import 'package:navbridge/services/offline_speed_limits.dart';
 import 'package:navbridge/services/overpass.dart';
 import 'package:navbridge/ui/limit_source.dart';
 import 'package:navbridge/ui/sign_icons.dart';
+import 'package:navbridge/ui/camera_icon.dart';
 import 'package:navbridge/ui/speed_dial.dart' show SpeedDialPainter;
 import 'package:navbridge/ui/widgets.dart';
 
@@ -838,16 +839,7 @@ class _OverlayAppState extends State<OverlayApp> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Image.asset(
-                'assets/waze/icon_alerter_cam_speed.png',
-                width: 18,
-                height: 18,
-                errorBuilder: (context, error, stackTrace) => const Icon(
-                  Icons.videocam_rounded,
-                  color: Colors.amberAccent,
-                  size: 16,
-                ),
-              ),
+              const WazeCameraIcon(size: 18),
               const SizedBox(width: 4),
               Text(
                 _fmtDist(cams[i]),

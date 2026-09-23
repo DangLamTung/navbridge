@@ -539,12 +539,16 @@ extension _NavMap on _NavigationPageState {
                       child: SignIcon(kind: s.kind, value: s.value, size: 30),
                     ),
                   ),
-                // Camera layer: colored dot per focus (speed / red-light /
-                // general). A single circle (no separate 📷 text) so it fits
-                // the 26×26 marker box. A tiny corner dot marks the source
-                // (waze/police/osm). Only NEAR-THE-USER cameras are drawn,
-                // density-culled by zoom (fewer when zoomed out), and HIDDEN
-                // when zoomed in further (>= z16).
+                // Camera layer: the SAME camera PNG the navigation map draws
+                // ([WazeCameraIcon]) — the start/browse map used to show a CCTV
+                // glyph in a focus-coloured circle instead. Nothing else is drawn
+                // on the marker now: the provenance dot that used to sit in the
+                // corner (waze=purple · police=teal · osm=green · vietmap=indigo)
+                // looked like a second camera badge next to the Waze icon (user:
+                // "why there is a dot near the camera") and the navigation marker
+                // has none — the source is in the tap sheet instead. Only
+                // NEAR-THE-USER cameras are drawn, density-culled by zoom (fewer
+                // when zoomed out), and HIDDEN when zoomed in further (>= z16).
                 if (_camerasVisible(_cameraZoom))
                   for (final c in _cameraSlice(_cameraZoom))
                     Marker(
@@ -555,45 +559,7 @@ extension _NavMap on _NavigationPageState {
                       // driver knows what it is and how much to trust it.
                       child: GestureDetector(
                         onTap: () => _showCameraInfo(c),
-                        child: Stack(
-                          children: [
-                            Container(
-                              decoration: BoxDecoration(
-                                color: _cameraFocusColor(c.focus),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Colors.white,
-                                  width: 2,
-                                ),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Colors.black38,
-                                    blurRadius: 4,
-                                  ),
-                                ],
-                              ),
-                              child: const CctvIcon(size: 11),
-                            ),
-                            // Source tag dot (waze=purple · police=teal ·
-                            // osm=green · vietmap=indigo).
-                            Positioned(
-                              right: 0,
-                              bottom: 0,
-                              child: Container(
-                                width: 7,
-                                height: 7,
-                                decoration: BoxDecoration(
-                                  color: _cameraSourceColor(c.source),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.white,
-                                    width: 1,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                        child: const Center(child: WazeCameraIcon(size: 24)),
                       ),
                     ),
               ],

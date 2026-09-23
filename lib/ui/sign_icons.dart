@@ -28,10 +28,10 @@ class SignIcon extends StatelessWidget {
   /// painters below.
   ///
   /// ⭐ ONLY kinds whose bundled artwork has been VISUALLY verified belong in
-  /// this list. Four kinds used to have an image and three of them drew the
-  /// WRONG sign while driving (user: "still using bad sign png in the run").
-  /// Audited by laying every asset out in one labelled sheet
-  /// (`tools/signs/sign_contact_sheet.py`) and reading them:
+  /// this list. Four kinds once had an image and drew the WRONG sign while
+  /// driving (user: "still using bad sign png in the run"). Audited by laying
+  /// every asset out in one labelled sheet (`tools/signs/sign_contact_sheet.py`)
+  /// and reading them:
   ///   • `stop.png` — a PHOTO of P.102 "CẤM ĐI NGƯỢC CHIỀU" (no entry),
   ///     watermarked "ThietBiBaoHoLaoDong.Net". The STOP sign is P.101.
   ///   • `give_way.png` — a red-bordered CIRCLE with two opposing arrows;
@@ -41,10 +41,12 @@ class SignIcon extends StatelessWidget {
   ///   • `no_passing.png` — "cấm vượt đối với XE TẢI" (truck + car); the
   ///     dataset's `no_passing` is the universal sign, so as drawn it tells a
   ///     rider the ban is about trucks.
-  /// Those now paint instead, which cannot drift from the kind they represent:
-  /// `_StopPainter` (red octagon + STOP), `_YieldPainter` (inverted triangle),
-  /// `_ProhibitionPainter(_ProGlyph.cars)` (cấm vượt) and
-  /// `_EndProhibitionsPainter()`.
+  /// All four now carry verified artwork again, and since 2026-09-23 so does
+  /// every other kind the Waze or VietMap data can emit — the requirement being
+  /// that a sign from EITHER source shows the official QCVN picture, not our
+  /// drawing (`_StopPainter`, `_YieldPainter`, `_ProhibitionPainter`,
+  /// `_CommandPainter`, `_RailwayPainter`, `_InfoPainter` remain only as
+  /// fallbacks for kinds no source emits).
   ///
   /// # Provenance of the images that ARE used (all real artwork, not ours)
   ///
@@ -55,6 +57,22 @@ class SignIcon extends StatelessWidget {
   /// | `no_u_turn.png`     | `Vietnam road sign P124a1.svg` —
   /// Commons description "No U-turn to the left" (VN drives on the right, so
   /// the standard U-turn is made to the left) | Public domain |
+  /// | `no_left_uturn.png` | QCVN 41 P.123a cấm rẽ trái VÀ quay đầu —
+  /// Commons `Vietnam road sign P124c.svg`, metadata "No left turn or U-turn"
+  /// | Public domain |
+  /// | `no_right_uturn.png`| QCVN 41 P.124a cấm rẽ phải VÀ quay đầu —
+  /// Commons `Vietnam road sign P124d.svg`, metadata "No right turn or U-turn"
+  /// | Public domain |
+  ///
+  /// The two combination kinds used to be PAINTED (a left/right arrow with a
+  /// second U-turn arrow stacked over it) — which is not QCVN P.123a/P.124a: the
+  /// real sign is ONE arrow that turns and doubles back. User: "cấm rẽ trái và
+  /// quay đầu / rẽ phải quay đầu still wrong sign". Both candidates were
+  /// verified two ways before bundling: the Commons extmetadata says which side
+  /// (`ImageDescription`), and the glyph's ink profile matches the U-turn sign's
+  /// (inner-bottom 0.58 and 0.59, against 0.08 for the plain P.123/P.124 arrows),
+  /// so they are combinations and not duplicates of the turn signs. A lone
+  /// thumbnail description got this BACKWARDS — read the metadata, then measure.
   ///
   /// The U-turn slot used to hold a CẤM VƯỢT image, and was briefly filled with
   /// a sign WE drew (`tools/signs/make_uturn_sign.py`, now historical) — user:
@@ -63,12 +81,75 @@ class SignIcon extends StatelessWidget {
   /// file metadata rather than inferred, because a U-turn arrow points down and
   /// reads as a plain "downward arrow" at thumbnail size.
   ///
+  /// | `slow_down.png` | W.245a "Slow" (ĐI CHẬM) | Public domain |
+  /// | `stop.png` | QCVN 41 P.122 "Stop" — the octagon | Public domain |
+  /// | `give_way.png` | QCVN 41 P.132 "Give way to oncoming traffic" (triangle)
+  /// | Public domain |
+  /// | `no_parking.png` | QCVN 41 P.131a "No parking" | Public domain |
+  /// | `no_moto.png` | QCVN 41 P.104 "No motorcycles" | Public domain |
+  /// | `no_passing_end.png` | QCVN 41 P.133 "End of the overtaking prohibition"
+  /// | Public domain |
+  /// | `end_prohibitions.png` | QCVN 41 P.135 "End of all previously signed
+  /// prohibitions" — the kind used to be labelled P.133, which is a different
+  /// sign | Public domain |
+  ///
+  /// Four kinds had been dropped to painters because their old PNG held the
+  /// WRONG sign (a photo of P.102 in the STOP slot, a circle in the give-way
+  /// slot, two cars for end-of-prohibitions, the xe-tải overtaking sign). They
+  /// now use real artwork again, verified TWO ways before bundling: the Commons
+  /// `ImageDescription` AND the image itself at size in one contact sheet
+  /// (`tools/signs/sign_contact_sheet.py`). That method found P.133 to be "end of
+  /// the overtaking prohibition" while P.135 is "end of ALL previously signed
+  /// prohibitions" — the label this code carried was wrong.
+  ///
+  /// # 2026-09-23 — every kind the DATA can emit now has official artwork
+  ///
+  /// Kinds coming out of the Waze decode and the VietMap/DATMAP dumps that still
+  /// fell back to a painter were given their real QCVN sign. As before, the
+  /// Commons `ImageDescription` was read first and the picture was then looked at
+  /// in a labelled sheet; two of these would have been WRONG on the metadata
+  /// alone (`R412a` is "Lane for coaches", not a turn sign; `R411` is a
+  /// lane-direction board), and the mandatory-direction family needed the eye to
+  /// choose: `R301b`/`R301c` draw a flat arrow, `R301d`/`R301e` the turning one.
+  ///
+  /// | file | Commons source | description as read |
+  /// |------|----------------|---------------------|
+  /// | `no_passing.png`     | `P.125 (QCVN 41-2019-BGTVT)` | No overtaking (the universal sign — the old bundled file was the xe-tải variant) |
+  /// | `no_auto.png`        | `P103a`            | No motor vehicles (the car pictogram) |
+  /// | `only_straight.png`  | `R301a`            | Proceed straight ahead only |
+  /// | `only_left.png`      | `R301e`            | Các xe chỉ được rẽ trái (turning arrow) |
+  /// | `only_right.png`     | `R301d`            | Các xe chỉ được rẽ phải (turning arrow) |
+  /// | `one_way.png`        | `I.407a (QCVN 41-2019-BGTVT)` | One way street |
+  /// | `railway_crossing.png`| `W242a`           | Railway level crossing (chỗ đường sắt cắt đường bộ) |
+  /// | `tunnel.png`         | `W240`             | Tunnel (Đường hầm) |
+  ///
+  /// `populated` / `populated_end` (R.420 / R.421) are NOT bundled: both kinds are
+  /// dropped at load ([droppedSignKinds]) because their data was wrong often
+  /// enough to write a wrong speed limit, so no artwork could ever be drawn.
+  ///
   /// `test/sign_icons_test.dart` pins this list AND checks every mapped file
   /// exists — add a kind here only after LOOKING at the image.
   static String? assetFor(RoadSignKind kind) => switch (kind) {
+    RoadSignKind.stop => '$_assetDir/stop.png',
+    RoadSignKind.giveWay => '$_assetDir/give_way.png',
     RoadSignKind.noLeftTurn => '$_assetDir/no_left_turn.png',
     RoadSignKind.noRightTurn => '$_assetDir/no_right_turn.png',
     RoadSignKind.noUTurn => '$_assetDir/no_u_turn.png',
+    RoadSignKind.noLeftUTurn => '$_assetDir/no_left_uturn.png',
+    RoadSignKind.noRightUTurn => '$_assetDir/no_right_uturn.png',
+    RoadSignKind.noParking => '$_assetDir/no_parking.png',
+    RoadSignKind.noMoto => '$_assetDir/no_moto.png',
+    RoadSignKind.noPassing => '$_assetDir/no_passing.png',
+    RoadSignKind.noPassingEnd => '$_assetDir/no_passing_end.png',
+    RoadSignKind.endProhibitions => '$_assetDir/end_prohibitions.png',
+    RoadSignKind.slowDown => '$_assetDir/slow_down.png',
+    RoadSignKind.noAuto => '$_assetDir/no_auto.png',
+    RoadSignKind.onlyStraight => '$_assetDir/only_straight.png',
+    RoadSignKind.onlyLeft => '$_assetDir/only_left.png',
+    RoadSignKind.onlyRight => '$_assetDir/only_right.png',
+    RoadSignKind.oneWay => '$_assetDir/one_way.png',
+    RoadSignKind.railwayCrossing => '$_assetDir/railway_crossing.png',
+    RoadSignKind.tunnel => '$_assetDir/tunnel.png',
     _ => null,
   };
 
@@ -102,24 +183,13 @@ class SignIcon extends StatelessWidget {
       width: size,
       height: size,
       child: switch (kind) {
-        RoadSignKind.stop => const CustomPaint(painter: _StopPainter()),
-        RoadSignKind.giveWay => const CustomPaint(painter: _YieldPainter()),
         RoadSignKind.speed => CustomPaint(painter: _SpeedPainter(value)),
         RoadSignKind.signal => const CustomPaint(painter: _SignalPainter()),
         RoadSignKind.noPassing => const CustomPaint(
           painter: _ProhibitionPainter(_ProGlyph.cars),
         ),
-        RoadSignKind.noPassingEnd => const CustomPaint(
-          painter: _ProhibitionPainter(_ProGlyph.cars, ended: true),
-        ),
         RoadSignKind.noAuto => const CustomPaint(
           painter: _ProhibitionPainter(_ProGlyph.auto),
-        ),
-        RoadSignKind.noMoto => const CustomPaint(
-          painter: _ProhibitionPainter(_ProGlyph.moto),
-        ),
-        RoadSignKind.noParking => const CustomPaint(
-          painter: _ProhibitionPainter(_ProGlyph.parking),
         ),
         RoadSignKind.noLeftTurn => const CustomPaint(
           painter: _ProhibitionPainter(_ProGlyph.leftTurn),
@@ -129,12 +199,6 @@ class SignIcon extends StatelessWidget {
         ),
         RoadSignKind.noUTurn => const CustomPaint(
           painter: _ProhibitionPainter(_ProGlyph.uTurn),
-        ),
-        RoadSignKind.noLeftUTurn => const CustomPaint(
-          painter: _ProhibitionPainter(_ProGlyph.leftUTurn),
-        ),
-        RoadSignKind.noRightUTurn => const CustomPaint(
-          painter: _ProhibitionPainter(_ProGlyph.rightUTurn),
         ),
         RoadSignKind.onlyStraight => const CustomPaint(
           painter: _CommandPainter(_CmdDir.straight),
@@ -157,12 +221,6 @@ class SignIcon extends StatelessWidget {
         RoadSignKind.reservedLane => const CustomPaint(
           painter: _InfoPainter('LÀN\nRIÊNG'),
         ),
-        RoadSignKind.endProhibitions => const CustomPaint(
-          painter: _EndProhibitionsPainter(),
-        ),
-        RoadSignKind.slowDown => const CustomPaint(
-          painter: _InfoPainter('GIẢM TỐC ĐỘ'),
-        ),
         RoadSignKind.tollBooth => const CustomPaint(
           painter: _InfoPainter('TRẠM THU PHÍ'),
         ),
@@ -170,6 +228,11 @@ class SignIcon extends StatelessWidget {
           painter: _RailwayPainter(),
         ),
         RoadSignKind.tunnel => const CustomPaint(painter: _InfoPainter('HẦM')),
+        // Every kind with real artwork returned above; the two U-turn
+        // combinations are among them now (P.123a / P.124a), so their painted
+        // stand-ins are gone. Nothing left to draw ⇒ draw nothing rather than
+        // invent a sign (user: "dont draw anyshit").
+        _ => const SizedBox.shrink(),
       },
     );
   }
@@ -289,81 +352,8 @@ class _RailwayPainter extends CustomPainter {
   bool shouldRepaint(covariant _RailwayPainter old) => false;
 }
 
-/// Biển 122 "STOP" — red octagon with a white border and white text.
-class _StopPainter extends CustomPainter {
-  const _StopPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final c = Offset(size.width / 2, size.height / 2);
-    final r = math.min(size.width, size.height) / 2 * 0.94;
-    final outer = _octagon(c, r);
-    canvas.drawPath(outer, Paint()..color = _signRed);
-    final inner = _octagon(c, r - size.width * 0.10);
-    canvas.drawPath(
-      inner,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = size.width * 0.055
-        ..color = Colors.white,
-    );
-    _drawText(canvas, 'STOP', c, size.height * 0.27);
-  }
-
-  Path _octagon(Offset c, double r) {
-    final p = Path();
-    for (var i = 0; i < 8; i++) {
-      final ang = math.pi / 8 + i * math.pi / 4;
-      final x = c.dx + r * math.cos(ang);
-      final y = c.dy + r * math.sin(ang);
-      if (i == 0) {
-        p.moveTo(x, y);
-      } else {
-        p.lineTo(x, y);
-      }
-    }
-    return p..close();
-  }
-
-  @override
-  bool shouldRepaint(covariant _StopPainter old) => false;
-}
-
-/// Biển 102 "Nhường đường" — inverted white triangle with a red border.
-class _YieldPainter extends CustomPainter {
-  const _YieldPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width, h = size.height;
-    final p = Path()
-      ..moveTo(w * 0.02, h * 0.02)
-      ..lineTo(w * 0.98, h * 0.02)
-      ..lineTo(w * 0.5, h * 0.98)
-      ..close();
-    canvas.drawPath(p, Paint()..color = Colors.white);
-    canvas.drawPath(
-      p,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = w * 0.09
-        ..strokeJoin = StrokeJoin.round
-        ..color = _signRed,
-    );
-    // Inset triangle hint (the point of the sign).
-    final inner = Path()
-      ..moveTo(w * 0.28, h * 0.30)
-      ..lineTo(w * 0.72, h * 0.30)
-      ..lineTo(w * 0.5, h * 0.72)
-      ..close();
-    canvas.drawPath(inner, Paint()..color = _signRed);
-  }
-
-  @override
-  bool shouldRepaint(covariant _YieldPainter old) => false;
-}
-
-/// Biển 127 "Hạn chế tốc độ" — white circle, red ring, the limit inside.
+/// Biển "Hạn chế tốc độ" — white circle, red ring, the limit inside. The only
+/// painter a sign-data kind still uses (the km/h comes from the data).
 class _SpeedPainter extends CustomPainter {
   const _SpeedPainter(this.value);
   final int? value;
@@ -433,16 +423,13 @@ enum _ProGlyph {
   leftTurn,
   rightTurn,
   uTurn,
-  leftUTurn,
-  rightUTurn,
   straight,
   bothTurns,
 }
 
 class _ProhibitionPainter extends CustomPainter {
-  const _ProhibitionPainter(this.glyph, {this.ended = false});
+  const _ProhibitionPainter(this.glyph);
   final _ProGlyph glyph;
-  final bool ended;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -458,12 +445,11 @@ class _ProhibitionPainter extends CustomPainter {
         ..strokeWidth = w * 0.10
         ..color = _signRed,
     );
-    final barColor = ended ? Colors.black38 : _signRed;
     canvas.drawLine(
       Offset(w * 0.20, h * 0.20),
       Offset(w * 0.80, h * 0.80),
       Paint()
-        ..color = barColor
+        ..color = _signRed
         ..strokeWidth = w * 0.085
         ..strokeCap = StrokeCap.round,
     );
@@ -490,12 +476,6 @@ class _ProhibitionPainter extends CustomPainter {
         _drawTurnArrow(canvas, size, left: false, ink: ink);
       case _ProGlyph.uTurn:
         _drawUTurn(canvas, size, left: true, ink: ink);
-      case _ProGlyph.leftUTurn:
-        _drawTurnArrow(canvas, size, left: true, ink: ink);
-        _drawUTurn(canvas, size, left: true, ink: ink, up: h * 0.30);
-      case _ProGlyph.rightUTurn:
-        _drawTurnArrow(canvas, size, left: false, ink: ink);
-        _drawUTurn(canvas, size, left: false, ink: ink, up: h * 0.30);
       case _ProGlyph.straight:
         // P.112 Cấm đi thẳng — an up arrow.
         _drawStraightArrow(canvas, size, ink);
@@ -674,41 +654,9 @@ class _ProhibitionPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ProhibitionPainter old) =>
-      old.glyph != glyph || old.ended != ended;
+      old.glyph != glyph;
 }
 
-/// Biển P.133 "Hết mọi lệnh cấm" — white circle, thin black ring, thick
-/// grey diagonal bar (no red).
-class _EndProhibitionsPainter extends CustomPainter {
-  const _EndProhibitionsPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width, h = size.height;
-    final c = Offset(w / 2, h / 2);
-    final r = math.min(w, h) / 2 * 0.96;
-    canvas.drawCircle(c, r, Paint()..color = Colors.white);
-    canvas.drawCircle(
-      c,
-      r,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = w * 0.045
-        ..color = Colors.black54,
-    );
-    canvas.drawLine(
-      Offset(w * 0.22, h * 0.22),
-      Offset(w * 0.78, h * 0.78),
-      Paint()
-        ..color = Colors.black45
-        ..strokeWidth = w * 0.12
-        ..strokeCap = StrokeCap.round,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _EndProhibitionsPainter old) => false;
-}
 
 /// Biển R.41x "Hướng phải đi / rẽ" — blue circle, white arrow.
 enum _CmdDir { straight, left, right }

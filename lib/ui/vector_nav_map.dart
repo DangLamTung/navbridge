@@ -24,6 +24,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:navbridge/services/nav_tile_server.dart';
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/offline_cameras.dart';
+import 'package:navbridge/ui/camera_icon.dart';
 import 'package:navbridge/services/offline_geo.dart';
 import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/poi_search.dart';
@@ -2509,18 +2510,9 @@ class _VectorNavMapState extends State<VectorNavMap>
     );
   }
 
-  /// Camera marker: a real camera PNG (the Waze alerter icon) drawn as a
+  /// Camera marker: the shared Waze camera PNG ([WazeCameraIcon]) drawn as a
   /// Flutter overlay, mirroring [SignIcon]. No MapLibre annotation involved.
-  Widget _cameraMarker() => SizedBox(
-    width: 28,
-    height: 28,
-    child: Image.asset(
-      'assets/waze/icon_alerter_cam_speed.png',
-      width: 28,
-      height: 28,
-      filterQuality: FilterQuality.medium,
-    ),
-  );
+  Widget _cameraMarker() => const WazeCameraIcon(size: 28);
 
   /// Small tappable wrapper for map markers: a tap fires [onTap]; no drag
   /// recognizer, so dragging the map over a marker still pans. When [onTap]

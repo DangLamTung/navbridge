@@ -19,40 +19,43 @@ import 'offline_scan.dart';
 import 'offline_scan_isolate.dart';
 
 /// The kind of road sign — drives the map icon and the spoken warning.
-/// Uses Việt Nam standard signage (QCVN 41:2019/BGTVT) codes where relevant
-/// (P.123 cấm rẽ trái, P.124 cấm rẽ phải, P.125 cấm quay đầu, P.127 cấm vượt,
-/// P.133 hết mọi lệnh cấm, R.41x hướng phải đi…).
+///
+/// Every label carries the QCVN 41 code OF THE BUNDLED PNG
+/// (`lib/ui/sign_icons.dart`), so the code in the info sheet can never
+/// contradict the picture: P.124a cấm quay đầu (was mislabelled P.125 — which is
+/// the overtaking ban), P.125 cấm vượt (was P.127), R.301a/d/e chỉ được đi
+/// thẳng / rẽ phải / rẽ trái (was R.411/R.412 — those are lane-direction boards).
 ///
 /// The built-up boundary ("bắt đầu / hết khu đông dân cư") is deliberately NOT
 /// here — see [droppedSignKinds]; its data was wrong often enough to write a
 /// wrong speed limit, so the whole layer is gone.
 enum RoadSignKind {
-  stop('stop', 'Biển STOP'),
+  stop('stop', 'P.122 Biển STOP'),
   giveWay('giveWay', 'Biển nhường đường'),
   speed('speed', 'Hạn chế tốc độ'),
   signal('signal', 'Đèn giao thông'),
-  noPassing('no_passing', 'P.127 Cấm vượt'),
-  noPassingEnd('no_passing_end', 'Hết cấm vượt'),
+  noPassing('no_passing', 'P.125 Cấm vượt'),
+  noPassingEnd('no_passing_end', 'P.133 Hết cấm vượt'),
   noLeftTurn('no_left_turn', 'P.123 Cấm rẽ trái'),
   noRightTurn('no_right_turn', 'P.124 Cấm rẽ phải'),
-  noUTurn('no_u_turn', 'P.125 Cấm quay đầu'),
-  noLeftUTurn('no_left_uturn', 'P.123a Cấm rẽ trái và quay đầu'),
-  noRightUTurn('no_right_uturn', 'P.124a Cấm rẽ phải và quay đầu'),
-  onlyStraight('only_straight', 'R.411 Hướng phải đi thẳng'),
-  onlyLeft('only_left', 'R.412a Hướng phải rẽ trái'),
-  onlyRight('only_right', 'R.412 Hướng phải rẽ phải'),
-  endProhibitions('end_prohibitions', 'P.133 Hết mọi lệnh cấm'),
+  noUTurn('no_u_turn', 'P.124a Cấm quay đầu'),
+  noLeftUTurn('no_left_uturn', 'P.124c Cấm rẽ trái và quay đầu'),
+  noRightUTurn('no_right_uturn', 'P.124d Cấm rẽ phải và quay đầu'),
+  onlyStraight('only_straight', 'R.301a Chỉ được đi thẳng'),
+  onlyLeft('only_left', 'R.301e Chỉ được rẽ trái'),
+  onlyRight('only_right', 'R.301d Chỉ được rẽ phải'),
+  endProhibitions('end_prohibitions', 'P.135 Hết mọi lệnh cấm'),
   slowDown('slow_down', 'Giảm tốc độ'),
-  noAuto('no_auto', 'P.124a Cấm ô tô'),
-  noMoto('no_moto', 'P.114 Cấm xe máy'),
-  oneWay('one_way', 'Đường một chiều'),
-  noStraight('no_straight', 'P.112 Cấm đi thẳng'),
-  noTurnBoth('no_turn_both', 'Cấm rẽ trái và rẽ phải'),
+  noAuto('no_auto', 'P.103a Cấm ô tô'),
+  noMoto('no_moto', 'P.104 Cấm xe máy'),
+  oneWay('one_way', 'I.407a Đường một chiều'),
+  noStraight('no_straight', 'P.136 Cấm đi thẳng'),
+  noTurnBoth('no_turn_both', 'P.137 Cấm rẽ trái và rẽ phải'),
   reservedLane('reserved_lane', 'Làn dành riêng'),
   noParking('no_parking', 'P.131a Cấm đỗ xe'),
   tollBooth('toll_booth', 'Trạm thu phí'),
-  railwayCrossing('railway_crossing', 'Đường ngang giao với đường sắt'),
-  tunnel('tunnel', 'Hầm đường bộ');
+  railwayCrossing('railway_crossing', 'W.242a Đường ngang giao với đường sắt'),
+  tunnel('tunnel', 'W.240 Hầm đường bộ');
 
   const RoadSignKind(this.key, this.label);
 

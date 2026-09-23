@@ -68,6 +68,7 @@ import 'package:navbridge/services/sound_alerts.dart';
 import 'package:navbridge/core/trip_plan.dart';
 import 'package:navbridge/ui/arrival_card.dart';
 import 'package:navbridge/ui/cctv_icon.dart';
+import 'package:navbridge/ui/camera_icon.dart';
 import 'package:navbridge/ui/vector_nav_map.dart';
 import 'package:navbridge/services/vietmap_api.dart';
 import 'package:navbridge/services/vietmap_config.dart';

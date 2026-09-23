@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 
 import 'package:navbridge/services/overlay_visibility.dart';
 import 'package:navbridge/services/overlay_widget.dart';
+import 'package:navbridge/ui/camera_icon.dart';
 
 /// Result object returned when popping [OverlayLayoutScreen].
 class OverlayLayoutResult {
@@ -392,7 +393,7 @@ class _OverlayLayoutScreenState extends State<OverlayLayoutScreen> {
           const Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.videocam_rounded, color: Colors.amberAccent, size: 12),
+              WazeCameraIcon(size: 12),
               Text(
                 '1.0km',
                 style: TextStyle(
@@ -450,7 +451,7 @@ class _OverlayLayoutScreenState extends State<OverlayLayoutScreen> {
           ),
           const Column(
             children: [
-              Icon(Icons.videocam_rounded, color: Colors.amberAccent, size: 10),
+              WazeCameraIcon(size: 10),
               Text(
                 '1.0km',
                 style: TextStyle(

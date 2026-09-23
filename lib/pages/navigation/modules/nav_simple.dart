@@ -223,9 +223,10 @@ extension _NavSimple on _NavigationPageState {
                         const Spacer(),
                         if (cam != null && cam.routeMeters <= 1500)
                           _simpleChip(
-                            '📷 ${cam.routeMeters.round()}m',
+                            '${cam.routeMeters.round()}m',
                             const Color(0xFFD93025),
                             dark,
+                            leading: const WazeCameraIcon(size: 16),
                           ),
                         if (ahead != null)
                           _simpleChip(
@@ -330,7 +331,11 @@ extension _NavSimple on _NavigationPageState {
   }
 
   /// Small info chip (camera ahead / weather ahead).
-  Widget _simpleChip(String text, Color color, bool dark) {
+  ///
+  /// [leading] draws the shared Waze camera PNG before the text — the camera
+  /// chip used to be a 📷 emoji, which is not the picture the map shows.
+  Widget _simpleChip(String text, Color color, bool dark,
+      {Widget? leading}) {
     return Container(
       margin: const EdgeInsets.only(left: 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -342,13 +347,22 @@ extension _NavSimple on _NavigationPageState {
           width: 1,
         ),
       ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-          color: dark ? Colors.white : color,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (leading != null) ...[
+            leading,
+            const SizedBox(width: 4),
+          ],
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: dark ? Colors.white : color,
+            ),
+          ),
+        ],
       ),
     );
   }
