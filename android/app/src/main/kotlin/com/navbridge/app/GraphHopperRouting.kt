@@ -353,8 +353,12 @@ class GraphHopperRouting {
             val snap = gh.locationIndex.findClosest(lat, lng, filter)
             if (snap == null || !snap.isValid) break
             if (!seen.add(snap.closestEdge.edge)) break
-            // getQueryDistance() is km.
-            cands.add(snap to snap.queryDistance * 1000.0)
+            // Snap.getQueryDistance() is already METRES (measured on the
+            // emulator: the same fixes the recorded track puts 8.3 m from an
+            // alley and 26.0 m from Ba Vân logged 8.2852 / 25.9917). Scaling it
+            // by 1000 made every distance dwarf the class penalty, so the class
+            // scoring silently did nothing.
+            cands.add(snap to snap.queryDistance)
         }
         if (cands.isEmpty()) return null
         var best: Snap? = null
@@ -375,6 +379,14 @@ class GraphHopperRouting {
                 val off = edgeLineAngle(gh, snap, headingDeg)
                 if (off != null && off > 45.0) score += 1000.0
             }
+            // Audit line: every candidate with its raw numbers, so a wrong pick
+            // can be read straight off logcat instead of guessed at.
+            android.util.Log.i(
+                "NavBridgeRouter",
+                "roadInfo cand[$i] d=${"%.1f".format(dist)}m cls=$cls " +
+                    "name=${snap.closestEdge.name} score=" +
+                    "%.1f".format(score),
+            )
             if (score < bestScore) {
                 bestScore = score
                 best = snap
