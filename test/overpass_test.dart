@@ -125,6 +125,55 @@ void main() {
       },
     );
 
+    test('an HONEST posted sign lifts a motorbike to the form ceiling', () {
+      // Lũy Bán Bích, 2026-09-22: the Waze layer posts 60 on every segment of
+      // the street, but OSM has the first half tagged `residential` two-way, so
+      // min(default 50, posted 60) showed 50 for 59 fixes of a 60 road (and the
+      // chip jumped to 60 mid-street where the class changes to `secondary`).
+      // A posted sign is the authority — the class default is only the fallback
+      // for "nothing posted".
+      expect(
+        effectiveLimit('residential',
+            vehicle: 'motorbike',
+            taggedKmh: 60,
+            lanes: 2,
+            divided: false,
+            urban: true),
+        60,
+      );
+      // …and the same on the stretch OSM does tag as a classified road.
+      expect(
+        effectiveLimit('secondary',
+            vehicle: 'motorbike', taggedKmh: 60, lanes: 2, urban: true),
+        60,
+      );
+    });
+
+    test('but a car-oriented sign still cannot exceed the form ceiling', () {
+      // Đường đôi / một chiều ≥2 làn = 60 in town, so 80/120 stay 60 for a
+      // motorbike; a truck tops out at 50. Nothing posted keeps the form rule.
+      expect(
+        effectiveLimit('residential',
+            vehicle: 'motorbike', taggedKmh: 80, urban: true),
+        60,
+      );
+      expect(
+        effectiveLimit('residential', vehicle: 'motorbike', urban: true),
+        50,
+        reason: 'two-way with nothing posted is still 50',
+      );
+      expect(
+        effectiveLimit('secondary', vehicle: 'truck', taggedKmh: 60,
+            urban: true),
+        50,
+      );
+      // A living street keeps its own 20 whatever is posted.
+      expect(
+        effectiveLimit('living_street', vehicle: 'motorbike', taggedKmh: 60),
+        20,
+      );
+    });
+
     test('truck behaves like motorbike (statutory, capped by lower tag)', () {
       expect(effectiveLimit('primary', vehicle: 'truck', taggedKmh: 80), 60);
       expect(effectiveLimit('secondary', vehicle: 'truck', taggedKmh: 40), 40);

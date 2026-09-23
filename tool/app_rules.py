@@ -48,20 +48,24 @@ def statutory_motorbike(highway, oneway=None, lanes=None, divided=False,
 
 def sim_limit(highway, oneway=None, lanes=None, posted=None,
               divided=False, urban=True) -> int:
-    """What the chip would show: the vehicle table, with a posted value as a cap.
+    """What the chip would show for a mô tô.
 
-    Mirrors effectiveLimit(): a posted (Waze segment) value only ever TIGHTENS
-    the vehicle's statutory limit for a motorbike.
+    Mirrors effectiveLimit(): nothing posted -> the statutory table (form rule
+    for a built-up area); something posted -> the posted value, capped by the
+    vehicle's legal maximum for THIS road form (đường đôi = 60 in town), never
+    by the class default.
     """
     stat = statutory_motorbike(highway, oneway=oneway, lanes=lanes,
-                               divided=divided, urban=urban)
-    if posted:
-        try:
-            p = int(posted)
-        except (TypeError, ValueError):
-            return stat
-        return min(stat, p)
-    return stat
+                              divided=divided, urban=urban)
+    if not posted:
+        return stat
+    try:
+        p = int(posted)
+    except (TypeError, ValueError):
+        return stat
+    ceiling = statutory_motorbike(highway, oneway=True, lanes=2, divided=True,
+                                 urban=urban)
+    return min(ceiling, p)
 
 
 # lib/services/overpass.dart — way class handling ---------------------------------
@@ -164,8 +168,13 @@ if __name__ == '__main__':
     assert statutory_motorbike('secondary', oneway='yes', lanes=1) == 50
     assert statutory_motorbike('primary', oneway='yes', lanes=None) == 60
     assert statutory_motorbike('service') == 30
-    assert sim_limit('primary', oneway='yes', posted=50) == 50  # posted caps
-    assert sim_limit('tertiary', posted=60) == 50               # capped by the table
+    # A posted sign is authority, capped by the vehicle's form ceiling:
+    # Lũy Bán Bích — residential two-way, Waze posts 60 -> 60 (it used to show 50).
+    assert sim_limit('residential', lanes=2, posted=60) == 60
+    assert sim_limit('residential', lanes=2) == 50          # nothing posted
+    assert sim_limit('residential', posted=80) == 60        # car sign, capped
+    assert sim_limit('residential', posted=30) == 30        # a real 30 stands
+    assert sim_limit('living_street', posted=60) == 20
     assert same_road('Đường 30 Tháng 4', 'duong 30 thang 4')
     assert same_road('Vườn Lài', 'Hẻm 4 Vườn Lài')
     assert not same_road('Trường Chinh', 'Trương Công Định')

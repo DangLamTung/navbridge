@@ -269,15 +269,22 @@ int statutoryLimit(
   return base;
 }
 
-/// Effective speed limit for [vehicle] on [highway], given an optional OSM
-/// `maxspeed` tag ([taggedKmh], 0 = untagged / unusable).
+/// Effective speed limit for [vehicle] on [highway], given an optional posted
+/// value ([taggedKmh], 0 = nothing posted — an OSM `maxspeed` tag or a Waze
+/// segment/point value).
 ///
-/// OSM `maxspeed` is a CAR-oriented tag: for a car it IS the posted limit,
-/// with the statutory class default as fallback. For motorbikes / trucks the
-/// car limit only ever TIGHTENS the vehicle's statutory class default — it
-/// never lifts it (a motorbike must not show 80 km/h just because the car
-/// lane is posted 80), so non-car vehicles use the VN statutory per-class
-/// table, capped by a lower posted sign.
+/// A posted value is the AUTHORITY for every vehicle; the statutory table is
+/// only the fallback for "nothing posted". For a car that is the end of it. For
+/// a motorbike / truck the posted value is capped by the vehicle's own legal
+/// MAXIMUM for this road form and context — never by its class default, which
+/// is not a ceiling:
+///   * a car-oriented 80/90/120 sign must not put a mô tô above 60 in town
+///     (the đường đôi / một chiều ≥2 làn value), nor above its rural class max;
+///   * a real 60 sign must be honoured on a street OSM happens to tag
+///     `residential` two-way — Lũy Bán Bích, 2026-09-22: Waze posts 60 on EVERY
+///     segment of the street while the first half is `residential`, so
+///     min(default 50, posted 60) showed 50 for 59 fixes of a 60 road, and the
+///     limit jumped 50 -> 60 mid-street where the class changed to `secondary`.
 int effectiveLimit(
   String highway, {
   required String vehicle,
@@ -298,7 +305,18 @@ int effectiveLimit(
     urban: urban && taggedKmh <= 0,
   );
   if (taggedKmh <= 0) return statutory;
-  return vehicle == 'car' ? taggedKmh : math.min(statutory, taggedKmh);
+  if (vehicle == 'car') return taggedKmh;
+  final ceiling = statutoryLimit(
+    highway,
+    vehicle: vehicle,
+    // The ceiling is the vehicle's legal maximum where the road IS a đường đôi
+    // / một chiều ≥2 làn (or its plain class max outside a built-up area).
+    oneway: true,
+    lanes: 2,
+    divided: true,
+    urban: urban,
+  );
+  return math.min(ceiling, taggedKmh);
 }
 
 /// True when the built-up ("khu đông dân cư") rule applies at [pos]: the road has
