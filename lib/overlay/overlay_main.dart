@@ -376,6 +376,7 @@ class _OverlayAppState extends State<OverlayApp> {
       // table applies with the built-up rule on top. This widget used to
       // re-derive the fallback itself and kept the RURAL class default in town
       // (60 on a 2-lane city street) while the app showed 50.
+      final inTown = await builtUpRuleApplies(pos, hasPosted: false);
       final road = roadInfoFromRoad(
         name: roadName,
         highway: hw,
@@ -391,6 +392,7 @@ class _OverlayAppState extends State<OverlayApp> {
               kmh: posted,
               vehicle: _vehicle,
               layerSrc: postedLayer ?? srcSegment,
+              inTown: inTown,
             )
           : road;
       final limit = decided.speedLimit;

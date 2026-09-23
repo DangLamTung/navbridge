@@ -653,10 +653,23 @@ extension _NavGps on _NavigationPageState {
         vehicle: vehicleType,
         layerSrc: layerKind ?? srcSegment,
         name: layerName,
+        inTown: await _townAt(pos),
       );
     } catch (_) {
       return road; // no layer data → the class default stands
     }
+  }
+
+  /// Is the car in a built-up area (khu đông dân cư)? Needed by the vehicle
+  /// ceiling on a layer value, and [RoadInfo.urban] cannot answer it: that flag
+  /// is false whenever the way carries an OSM `maxspeed` tag, even in a city.
+  /// Cached per 150 m — the probe is a 25-cell lookup over the bundled POI grid.
+  Future<bool> _townAt(LatLng pos) async {
+    final prev = _inTownPos;
+    if (prev != null && distanceMeters(prev, pos) < 150) return _inTown;
+    _inTownPos = pos;
+    _inTown = await builtUpRuleApplies(pos, hasPosted: false);
+    return _inTown;
   }
 
   /// Background speed-limit correction: re-fetch road info from OSM (which
@@ -767,15 +780,17 @@ extension _NavGps on _NavigationPageState {
       _publishRoad(cur.copyWith(name: name));
       return;
     }
-    // The posted sign is a CAR value; for motorbikes/trucks it only TIGHTENS
-    // the vehicle's statutory class default (never lifts it), same as the OSM
-    // maxspeed handling — both now live in [applyPostedLayer].
+    // The Waze value IS the authority for the limit (applyPostedLayer): our
+    // own class guess (service 30, living_street 20) must not clamp it, and the
+    // only thing that may is the vehicle's legal maximum in this context — see
+    // vehicleCeiling / effectiveLimit.
     final next = applyPostedLayer(
       cur,
       kmh: lim,
       vehicle: vehicleType,
       layerSrc: layerKind ?? srcSegment,
       name: name,
+      inTown: await _townAt(pos),
     );
     if (next.speedLimit == cur.speedLimit && next.name == cur.name) return;
     debugPrint(

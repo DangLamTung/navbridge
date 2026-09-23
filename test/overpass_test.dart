@@ -219,6 +219,78 @@ void main() {
       );
     });
 
+    test('a Waze value is clamped only by the vehicle ceiling, not the class',
+        () {
+      // The road CLASS is our guess about the road's form; a Waze sign is the
+      // sign. Measured on 56 recorded drives: 103 fixes had a real Waze 50/60
+      // clamped to 30 because the way under the car was classed `service`
+      // (e.g. 'Ấp Bắc' @10.79953,106.64123, layer=segment, 50 -> 30).
+      for (final service in [40, 50, 60]) {
+        expect(
+          effectiveLimit('service',
+              vehicle: 'motorbike',
+              taggedKmh: service,
+              urban: true,
+              postedSrc: srcSegment),
+          service,
+        );
+      }
+      // …but a car-oriented sign still cannot exceed the mô tô's legal max.
+      expect(
+        effectiveLimit('service',
+            vehicle: 'motorbike', taggedKmh: 90, urban: true,
+            postedSrc: srcSegment),
+        60,
+      );
+      expect(
+        effectiveLimit('service',
+            vehicle: 'motorbike', taggedKmh: 90, urban: false,
+            postedSrc: srcSegment),
+        70,
+        reason: 'ngoài khu đông dân cư a mô tô may legally do 70',
+      );
+      expect(
+        effectiveLimit('service',
+            vehicle: 'truck', taggedKmh: 60, urban: true,
+            postedSrc: srcSegment),
+        50,
+        reason: 'xe tải tops out at 50 in town',
+      );
+      // Nothing posted keeps the class default (service alley = 30).
+      expect(effectiveLimit('service', vehicle: 'motorbike', urban: true), 30);
+      expect(vehicleCeiling('motorbike', urban: true), 60);
+      expect(vehicleCeiling('motorbike'), 70);
+      expect(vehicleCeiling('truck', urban: true), 50);
+    });
+
+    test('the ceiling uses the LOCATION, not the road tagging', () {
+      // A way with an OSM `maxspeed` tag has RoadInfo.urban == false by
+      // definition (the tag replaces the built-up default) — even in the middle
+      // of a city. If the ceiling trusted that flag, a Waze 70 in town would be
+      // shown as 70 for a mô tô. applyPostedLayer takes the real town flag.
+      final tagged = roadInfoFromRoad(
+        name: 'Trường Chinh',
+        highway: 'primary',
+        vehicle: 'motorbike',
+        taggedKmh: 50, // tagged way → urban comes out false
+        maxspeedTag: '50',
+        urban: false,
+      );
+      expect(tagged.urban, isFalse);
+      final inTown = applyPostedLayer(tagged,
+          kmh: 70, vehicle: 'motorbike', layerSrc: srcSegment, inTown: true);
+      expect(inTown.speedLimit, 60, reason: 'mô tô: 60 trong khu đông dân cư');
+      final rural = applyPostedLayer(tagged,
+          kmh: 70, vehicle: 'motorbike', layerSrc: srcSegment, inTown: false);
+      expect(rural.speedLimit, 70);
+      // Falling back to the road's own flag keeps the old behaviour.
+      expect(
+        applyPostedLayer(tagged,
+            kmh: 70, vehicle: 'motorbike', layerSrc: srcSegment).speedLimit,
+        70,
+      );
+    });
+
     test('truck behaves like motorbike (statutory, capped by lower tag)', () {
       expect(effectiveLimit('primary', vehicle: 'truck', taggedKmh: 80), 60);
       expect(effectiveLimit('secondary', vehicle: 'truck', taggedKmh: 40), 40);

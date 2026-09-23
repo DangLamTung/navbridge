@@ -279,17 +279,18 @@ int statutoryLimit(
 ///   4. the statutory class default
 ///   5. an OSM `maxspeed` TAG — LAST.
 ///
-/// A layer value is the authority for every vehicle, capped only by the
-/// vehicle's own legal MAXIMUM for the road form (đường đôi in town = 60 for a
-/// mô tô, 50 cho xe tải). The class default is NOT a cap — Lũy Bán Bích,
-/// 2026-09-22: the layer posts 60 on every segment while OSM tags the first half
+/// A layer value is the authority for every vehicle, capped ONLY by the
+/// vehicle's own legal maximum in this context ([vehicleCeiling]) — the road
+/// class plays no part when the layer has spoken. Lũy Bán Bích, 2026-09-22: the
+/// layer posts 60 on every segment of the street while OSM tags the first half
 /// `residential` two-way, and min(default 50, posted 60) showed 50 for 59 fixes
-/// of a 60 road.
+/// of a 60 road; on 56 recorded drives 103 fixes had a real Waze 50/60 clamped
+/// to 30 because the way under the car was classed `service`.
 ///
-/// An OSM tag is different, and last: in Việt Nam `maxspeed` tagging is sparse
-/// and often stale, and it is car-oriented. For a motorbike / truck it may only
-/// TIGHTEN the value our own rule produced — it never sets or raises it. (A car
-/// has no other posted source, so there the tag IS the limit.)
+/// An OSM maxspeed TAG is different, and last: in Việt Nam it is sparse, often
+/// stale and car-oriented. For a motorbike / truck it may only TIGHTEN our own
+/// value — never set or raise it. (A car has no other posted source, so there
+/// the tag IS the limit.)
 int effectiveLimit(
   String highway, {
   required String vehicle,
@@ -316,17 +317,23 @@ int effectiveLimit(
     // Last place: the tag may still make the driver slower, never faster.
     return math.min(statutory, taggedKmh);
   }
-  final ceiling = statutoryLimit(
-    highway,
-    vehicle: vehicle,
-    // The ceiling is the vehicle's legal maximum where the road IS a đường đôi
-    // / một chiều ≥2 làn (or its plain class max outside a built-up area).
-    oneway: true,
-    lanes: 2,
-    divided: true,
-    urban: urban,
-  );
-  return math.min(ceiling, taggedKmh);
+  return math.min(vehicleCeiling(vehicle, urban: urban), taggedKmh);
+}
+
+/// The vehicle's legal MAXIMUM speed in [urban] context — Thông tư 31/2019
+/// TT-BGTVT Điều 6 (khu đông dân cư: đường đôi / một chiều ≥2 làn của mô tô 60,
+/// ngoài khu đông dân cư đường đôi 70; xe tải 50 trong / 60 ngoài). Nothing a
+/// Waze sign says can legally put a mô tô above this, so it is the only clamp
+/// applied to a layer value. Cars are uncapped here (the sign IS their limit).
+int vehicleCeiling(String vehicle, {bool urban = false}) {
+  switch (vehicle) {
+    case 'motorbike':
+      return urban ? 60 : 70;
+    case 'truck':
+      return urban ? 50 : 60;
+    default:
+      return 120;
+  }
 }
 
 /// True when the built-up ("khu đông dân cư") rule applies at [pos]: the road has
@@ -417,6 +424,12 @@ RoadInfo applyPostedLayer(
   required String vehicle,
   required String layerSrc,
   String? name,
+  /// Is the CAR in a built-up area (see [builtUpRuleApplies])? The vehicle
+  /// ceiling needs that, but [RoadInfo.urban] cannot answer it: it is false by
+  /// definition whenever the way carries an OSM `maxspeed` tag — even in the
+  /// middle of a city — because there the tag replaces the built-up default.
+  /// Null → fall back to [RoadInfo.urban].
+  bool? inTown,
 }) {
   return RoadInfo(
     name: (name != null && name.isNotEmpty) ? name : road.name,
@@ -430,7 +443,7 @@ RoadInfo applyPostedLayer(
       oneway: road.oneway,
       lanes: road.lanes,
       divided: road.divided,
-      urban: road.urban,
+      urban: inTown ?? road.urban,
       // The value comes from a LAYER, not from an OSM tag: it is the authority.
       postedSrc: layerSrc,
     ),

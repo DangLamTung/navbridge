@@ -50,11 +50,12 @@ def sim_limit(highway, oneway=None, lanes=None, posted=None,
               divided=False, urban=True, source='layer') -> int:
     """What the chip would show for a mô tô.
 
-    Mirrors effectiveLimit(). Sources, most trustworthy first: Waze layer →
-    the app's own built-up road-FORM rule → the statutory class default → an OSM
-    `maxspeed` TAG last. A layer value is the authority, capped only by the
-    vehicle's legal maximum for the road form (đường đôi = 60 in town); an OSM
-    tag (source='osm') may only TIGHTEN our own value, never set or raise it.
+    Mirrors effectiveLimit(). Nothing posted -> the statutory table (form rule
+    in a built-up area). A LAYER value (the default here) is the authority,
+    clamped ONLY by the vehicle's legal ceiling (60 in town, 70 outside) — never
+    by the road class: on 56 recorded drives 103 fixes had a real Waze 50/60
+    clamped to 30 because the way was classed `service`. An OSM TAG
+    (source='osm') is last and may only tighten our own value.
     """
     stat = statutory_motorbike(highway, oneway=oneway, lanes=lanes,
                               divided=divided, urban=urban)
@@ -66,9 +67,7 @@ def sim_limit(highway, oneway=None, lanes=None, posted=None,
         return stat
     if source == 'osm':
         return min(stat, p)
-    ceiling = statutory_motorbike(highway, oneway=True, lanes=2, divided=True,
-                                 urban=urban)
-    return min(ceiling, p)
+    return min(60 if urban else 70, p)
 
 
 # lib/services/overpass.dart — way class handling ---------------------------------
@@ -177,7 +176,13 @@ if __name__ == '__main__':
     assert sim_limit('residential', lanes=2) == 50          # nothing posted
     assert sim_limit('residential', posted=80) == 60        # car sign, capped
     assert sim_limit('residential', posted=30) == 30        # a real 30 stands
-    assert sim_limit('living_street', posted=60) == 20
+    assert sim_limit('living_street', posted=60) == 60      # sign beats class
+    # A Waze value is clamped only by the vehicle ceiling, never the road class:
+    assert sim_limit('service', posted=50) == 50
+    assert sim_limit('service', posted=60) == 60
+    assert sim_limit('service', posted=90) == 60          # legal ceiling
+    assert sim_limit('service', posted=90, urban=False) == 70
+    assert sim_limit('service') == 30                     # nothing posted
     # An OSM `maxspeed` tag is LAST: it may only tighten, never set or raise.
     assert sim_limit('residential', lanes=2, posted=60, source='osm') == 50
     assert sim_limit('service', posted=20, source='osm') == 20

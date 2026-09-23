@@ -558,6 +558,12 @@ class _NavigationPageState extends State<NavigationPage>
   /// Where the last road was published, for the hysteresis distance.
   LatLng? _lastRoadPublishPos;
 
+  /// Built-up area (khu đông dân cư) at [_inTownPos], cached per 150 m. The
+  /// vehicle ceiling on a Waze value needs the LOCATION's context — see
+  /// [NavGps.townAt].
+  bool _inTown = false;
+  LatLng? _inTownPos;
+
   // --- trip logging (Google Takeout) ---
   TripLogger? _trip;
 
