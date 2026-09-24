@@ -137,6 +137,10 @@ class _QueryAhead {
   final LatLng current;
   final List<LatLng> geometry;
   final double maxAheadMeters;
+
+  /// Perpendicular limit from the route (0 = no limit). A sign/camera to the
+  /// SIDE of the route belongs to the street it stands on, not to this route.
+  final double lateralMeters;
   _QueryAhead(
     this.id,
     this.replyPort,
@@ -144,6 +148,7 @@ class _QueryAhead {
     this.current,
     this.geometry,
     this.maxAheadMeters,
+    this.lateralMeters,
   );
 }
 
@@ -242,6 +247,7 @@ class OfflineScanIsolate {
         current,
         geometry,
         maxAheadMeters,
+        0, // cameras: no lateral limit (the alert filters by focus instead)
       ),
     );
     final list = (res as List?) ?? const [];
@@ -256,10 +262,14 @@ class OfflineScanIsolate {
   }
 
   /// Signs ahead of [current] along [geometry].
+  ///
+  /// [lateralMeters] keeps only signs standing ON this route (a roadside sign is
+  /// within ~40 m of the centreline; one 150 m away is another street's).
   Future<List<SignAhead>> signsAhead(
     LatLng current,
     List<LatLng> geometry, {
     double maxAheadMeters = 1500,
+    double lateralMeters = 40,
   }) async {
     if (geometry.length < 2) return const [];
     final res = await _query(
@@ -270,6 +280,7 @@ class OfflineScanIsolate {
         current,
         geometry,
         maxAheadMeters,
+        lateralMeters,
       ),
     );
     final list = (res as List?) ?? const [];
@@ -344,6 +355,7 @@ void _workerEntry(SendPort initial) {
             msg.geometry,
             cams ?? const [],
             msg.maxAheadMeters,
+            msg.lateralMeters,
           ));
         case _Kind.signs:
           res = pointsAheadOnRoute<RoadSign>((
@@ -351,6 +363,7 @@ void _workerEntry(SendPort initial) {
             msg.geometry,
             signs ?? const [],
             msg.maxAheadMeters,
+            msg.lateralMeters,
           ));
       }
       msg.replyPort.send(_Reply(msg.id, res));

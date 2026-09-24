@@ -620,15 +620,29 @@ extension _NavMap on _NavigationPageState {
   List<RoadSign> _signSlice(double zoom) {
     if (zoom < 11.0) return const [];
 
+    // Signs the car has PASSED are dropped (user: "sign behind the car can be
+    // remove, but when turn back must show") — the test is the current heading,
+    // so heading back down the road brings them straight back. Only applied
+    // when the heading is actually known (`_heading == 0` = unknown, the same
+    // convention the posted-limit lookups use), otherwise every sign south of
+    // the car would vanish.
+    final car = _current;
+    final heading = _heading;
+    List<RoadSign> aheadOf(List<RoadSign> list) =>
+        car == null || heading == null || heading == 0
+            ? list
+            : signsAheadOfDriver(list, car: car, headingDeg: heading);
+
     if (_route != null) {
       // Limit to important regulatory & safety signs on route
-      final important = _routeSigns.where((s) => s.isImportant).toList();
-      final pool = important.isNotEmpty ? important : _routeSigns;
+      final ahead = aheadOf(_routeSigns);
+      final important = ahead.where((s) => s.isImportant).toList();
+      final pool = important.isNotEmpty ? important : ahead;
       final cap = ((zoom - 11.0) * 24 + 20).round().clamp(20, 140);
       return _decimateList(pool, cap);
     }
 
-    final list = _nearSigns;
+    final list = aheadOf(_nearSigns);
     final isZoomedOut = zoom < 14.5;
     if (isZoomedOut) {
       final important = list.where((s) => s.isImportant).toList();

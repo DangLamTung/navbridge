@@ -316,11 +316,13 @@ Future<List<SignAhead>> signsAheadOnRoute(
   LatLng current,
   List<LatLng> geometry, {
   double maxAheadMeters = 1500,
+  double lateralMeters = 40,
 }) async {
   return OfflineScanIsolate.instance.signsAhead(
     current,
     geometry,
     maxAheadMeters: maxAheadMeters,
+    lateralMeters: lateralMeters,
   );
 }
 
@@ -473,6 +475,42 @@ List<RoadSign> keepNearestSpeedSign(List<RoadSign> signs) {
     if (kept) continue;
     kept = true;
     out.add(s);
+  }
+  return out;
+}
+
+/// Keep only the signs the driver has NOT passed yet.
+///
+/// A sign the car has gone by is behind it and no longer worth a marker — user,
+/// 2026-09-24: "sign behind the car can be remove, but when turn back must show".
+/// The test is against the CURRENT heading, not the route's stored order, which
+/// is what makes the second half work for free: turn around (U-turn, a re-route,
+/// or simply heading back down the same road) and the very same signs are in
+/// front again, so they come straight back — no state to reset.
+///
+/// [keepBehindM] keeps a sign that is only just behind (the post you are passing
+/// right now) so the icon does not blink out from under the car.
+///
+/// Only signs with a positive component ALONG the heading survive; a sign square
+/// to the side (along ≈ 0) is kept while driving past it, and goes once the
+/// heading itself turns away from it.
+List<RoadSign> signsAheadOfDriver(
+  List<RoadSign> signs, {
+  required LatLng car,
+  required double headingDeg,
+  double keepBehindM = 40,
+}) {
+  const mPerDegLat = 111320.0;
+  final rad = headingDeg * math.pi / 180.0;
+  final fx = math.sin(rad); // east component of the heading
+  final fy = math.cos(rad); // north component
+  final cosLat = math.cos(car.latitude * math.pi / 180.0);
+  final out = <RoadSign>[];
+  for (final s in signs) {
+    final dy = (s.lat - car.latitude) * mPerDegLat;
+    final dx = (s.lng - car.longitude) * mPerDegLat * cosLat;
+    final along = dx * fx + dy * fy; // >0 = in front of the car
+    if (along >= -keepBehindM) out.add(s);
   }
   return out;
 }

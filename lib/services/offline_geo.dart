@@ -93,6 +93,29 @@ double? routeMetersAhead(LatLng from, LatLng target, List<LatLng> geo) {
   return t - f;
 }
 
+/// Perpendicular distance (m) from [p] to the polyline [geo] — how far OFF the
+/// route a point sits, as opposed to how far along it.
+///
+/// A sign is a sign OF the road it stands on: one 150 m to the side belongs to a
+/// crossing or parallel street, and announcing it as "ahead on the route" is the
+/// misfire the driver reported (2026-09-24: "for sign outside the segment we can
+/// reduce"). [nearestAlong] knows this distance already but only uses it as a
+/// 200 m cutoff; this exposes it so callers can apply their own.
+///
+/// Returns null when [p] is farther than 200 m from [geo] (not this route at
+/// all).
+double? lateralOffsetMeters(List<LatLng> geo, LatLng p) {
+  const Distance d = Distance();
+  var best = double.infinity;
+  for (var i = 0; i < geo.length - 1; i++) {
+    final proj = projectOnSegment(geo[i], geo[i + 1], p);
+    final off = d.as(LengthUnit.Meter, proj, p);
+    if (off < best) best = off;
+  }
+  if (best > 200) return null;
+  return best;
+}
+
 /// Cumulative distance from the polyline start to the nearest point on it to
 /// [p]. Returns null if [p] is farther than 200 m from the polyline (i.e. not
 /// on the route — e.g. an object on a parallel street).

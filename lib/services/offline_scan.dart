@@ -24,9 +24,9 @@ abstract interface class OfflinePoint {
 ///
 /// Takes a single record so it can be passed straight to `compute(...)`.
 List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
-  (LatLng, List<LatLng>, List<T>, double) args,
+  (LatLng, List<LatLng>, List<T>, double, double) args,
 ) {
-  final (current, geometry, items, maxAheadMeters) = args;
+  final (current, geometry, items, maxAheadMeters, lateralMeters) = args;
   if (geometry.length < 2 || items.isEmpty) return const [];
   const Distance d = Distance();
   final out = <(int, double)>[];
@@ -34,6 +34,13 @@ List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
     final p = items[i].pos;
     // Quick reject: straight-line farther than max ahead → can't be ahead.
     if (d.as(LengthUnit.Meter, current, p) > maxAheadMeters + 500) continue;
+    // A point to the SIDE of the route belongs to the street it stands on (a
+    // crossing / parallel road), so it is not "ahead on this route" — see
+    // [lateralOffsetMeters]. Callers pass 0 to keep the old behaviour.
+    if (lateralMeters > 0) {
+      final off = lateralOffsetMeters(geometry, p);
+      if (off == null || off > lateralMeters) continue;
+    }
     final m = routeMetersAhead(current, p, geometry);
     if (m != null && m >= 0 && m <= maxAheadMeters) {
       out.add((i, m));

@@ -156,6 +156,7 @@ void main() {
         geo,
         cams,
         1500.0,
+        0.0, // cameras: no lateral limit (unchanged behaviour)
       ));
 
       final t0 = DateTime.now();
@@ -165,6 +166,7 @@ void main() {
           geo,
           cams,
           1500.0,
+          0.0,
         ));
       }
       final t1 = DateTime.now();
@@ -248,6 +250,7 @@ void main() {
             geo,
             cams,
             1500.0,
+            0.0,
           ));
         }
       }, const Duration(milliseconds: 830));
@@ -269,6 +272,7 @@ void main() {
         geo,
         cams,
         1500.0,
+        0.0,
       ));
       final newRes = await svc.camerasAhead(cur, geo, maxAheadMeters: 1500);
       expect(

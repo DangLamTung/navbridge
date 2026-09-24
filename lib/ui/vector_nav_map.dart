@@ -1663,9 +1663,17 @@ class _VectorNavMapState extends State<VectorNavMap>
     if (_zoom < 11.0) {
       activeSigns = const [];
     } else {
+      // Drop what the car has already driven past (see signsAheadOfDriver): a
+      // marker for a sign behind you is noise, and it returns by itself when the
+      // heading does. Needs a live position AND a known bearing.
+      final car = widget.current;
+      final bearing = _routeBearing();
+      final visible = car == null || bearing <= 0
+          ? signs
+          : signsAheadOfDriver(signs, car: car, headingDeg: bearing);
       final pool = _zoom < 13.0
-          ? signs.where((s) => s.isImportant).toList()
-          : signs;
+          ? visible.where((s) => s.isImportant).toList()
+          : visible;
       activeSigns = _nearestSigns(pool, signMarkerCap(_zoom), widget.current);
     }
     if (activeSigns.length != _lastSignCount) {
