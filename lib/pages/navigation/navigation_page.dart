@@ -695,6 +695,14 @@ class _NavigationPageState extends State<NavigationPage>
   DateTime? _pendingSince;
   DateTime? _lastLimitSpoke;
 
+  // ONE wording for the limit, and never twice for the same value: the maneuver
+  // callout already says "… Giới hạn tốc độ 50 km/h.", so the change
+  // announcement must not repeat it seconds later (user: "the giới hạn tốc độ
+  // and tốc độ tối đa why have 2 thing"). Value + when it was spoken, shared by
+  // both call sites.
+  int _limitSpokenValue = 0;
+  DateTime? _limitSpokenAt;
+
   /// Posted limit from the last speed-limit sign, but capped by the VEHICLE's
   /// statutory class default. OSM/DATMAP/Waze speed signs carry a CAR limit,
   /// so a motorbike/truck must never inherit a car's 80 km/h posted value

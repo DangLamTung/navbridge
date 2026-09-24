@@ -58,9 +58,33 @@ still announced: in the post-fix replay the 3 surviving light callouts sit 1,118
 137 m and 44 m from the nearest camera callout, whose own junction was 363 m
 further on — none of them the same junction.
 
+## 3. "the giới hạn tốc độ and tốc độ tối đa why have 2 thing"
+
+One fact (the posted limit) had two sentences, and could be heard twice within
+seconds: the maneuver callout said `Tốc độ tối đa 50 km/h.` while the
+limit-change announcement said `Giới hạn 50 km/h` (and the lower-limit-ahead
+warning a third variant, `Giảm tốc độ, giới hạn 40 km/h phía trước …`).
+
+ONE phrase now, everywhere: **`giới hạn tốc độ <X> km/h`** — the maneuver callout,
+the limit-change announcement (its pre-recorded Waze clip is "giới hạn tốc độ …",
+so TTS fallback and clip now agree) and the warning ahead
+(`Giới hạn tốc độ 40 km/h phía trước 300 mét`).
+
+And the value is remembered for 45 s (`_limitSpokenValue` / `_limitSpokenAt`,
+shared by all three call sites): a limit just spoken with a turn is **not**
+announced again when it takes effect. Only a *new* value is announced.
+
 ## Verification
 
 * `flutter analyze` clean; `flutter test` green (geometry test added).
 * Emulator, the same 3.84 km recorded drive replayed against the SIM_ROUTE build:
-  `docs/trips/device/2026-09-24_092420_Chuyến_đi.json`, audited with
-  `python3 tool/announce_speed_audit.py <trip>` → 6/6 and 5/5 falsifiable.
+  `docs/trips/device/2026-09-24_092420_Chuyến_đi.json` and `…094114…`, audited with
+  `python3 tool/announce_speed_audit.py <trip>` → 6/6 named-street, 5/5 falsifiable
+  (the old build: 0/2 falsifiable).
+* The phrase change, on `…094114…` (51 announcements): `Tốc độ tối đa` **0**,
+  bare `Giới hạn N` **0**, `Giảm tốc độ, giới hạn` **0** — the 18 limit-bearing
+  sentences all say `giới hạn tốc độ X km/h`.
+* Duplication: the same limit in two different sentences within 45 s went from
+  **138** (the two recorded drives) to **0**; the 7 remaining repeats are
+  maneuver/maneuver pairs — two different turns that happen to enter streets with
+  the same limit, where each sentence has to carry its own.

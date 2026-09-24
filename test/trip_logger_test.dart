@@ -166,7 +166,7 @@ void main() {
       driveThreeFixes(t);
       t.logAnnouncement(
         const LatLng(10.001, 106.001),
-        'Giới hạn 50 km/h',
+        'Giới hạn tốc độ 50 km/h',
         kind: 'limit',
       );
       await t.closeSpool();

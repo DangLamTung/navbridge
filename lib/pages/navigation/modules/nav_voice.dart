@@ -591,13 +591,31 @@ extension _NavVoice on _NavigationPageState {
     // street under the car — the callout names the next street, so the old
     // value read as "the next street's limit" while being the old street's.
     // Unknown ⇒ say nothing: a wrong number is worse than none.
+    // ONE phrase for the limit, everywhere (user, 2026-09-24: "the giới hạn tốc
+    // độ and tốc độ tối đa why have 2 thing"): the maneuver callout, the
+    // limit-change announcement and the lower-limit-ahead warning all say
+    // "giới hạn tốc độ X km/h".
     final limit = target.isNotEmpty ? _nextStreetLimit : _effectiveSpeedLimit;
-    final limitTxt = limit > 0 ? ' Tốc độ tối đa $limit km/h.' : '';
+    final limitTxt = limit > 0 ? ' Giới hạn tốc độ $limit km/h.' : '';
+    if (limit > 0) _noteLimitSpoken(limit);
     if (now) {
       return '$verb$into$nextNext.$limitTxt';
     }
     return 'Đi$onRoad, sau ${formatDistanceSpoken(m)}, '
         '$verb$into$nextNext.$limitTxt';
+  }
+
+  /// Remember the limit that was just spoken (see [_noteLimitSpoken]) so the
+  /// same value is not announced twice in two different sentences.
+  bool _limitSpokenRecently(int kmh, {int withinS = 45}) {
+    final at = _limitSpokenAt;
+    if (at == null || _limitSpokenValue != kmh) return false;
+    return DateTime.now().difference(at) < Duration(seconds: withinS);
+  }
+
+  void _noteLimitSpoken(int kmh) {
+    _limitSpokenValue = kmh;
+    _limitSpokenAt = DateTime.now();
   }
 
   /// Warn by voice when the driver EXCEEDS the road's speed limit. Announces
@@ -671,6 +689,15 @@ extension _NavVoice on _NavigationPageState {
         now.difference(_lastLimitSpoke!) < const Duration(seconds: 4)) {
       return; // cooldown from the last announcement
     }
+    // Already said with a turn a moment ago ("… Giới hạn tốc độ 50 km/h.") —
+    // same value, so the change announcement would be the SAME fact in a second
+    // sentence. Remember it (so it does not re-arm) and stay quiet.
+    if (_limitSpokenRecently(limit)) {
+      _lastSpokenLimit = limit;
+      _pendingLimit = null;
+      _pendingSince = null;
+      return;
+    }
     _lastLimitSpoke = now;
     _lastSpokenLimit = limit;
     _pendingLimit = null;
@@ -679,8 +706,9 @@ extension _NavVoice on _NavigationPageState {
     // this value now is — a sign only counts once the car is at it
     // (signLimitInForce), so there is no early-adopted sign left to phrase as
     // "tiếp theo" via TTS.
-    final txt = 'Giới hạn $limit km/h';
+    final txt = 'Giới hạn tốc độ $limit km/h';
     _logAnnouncement(txt, kind: 'limit');
+    _noteLimitSpoken(limit);
     unawaited(
       SoundAlerts.instance.playCurrentSpeedLimit(limit).then((played) {
         if (!played) {

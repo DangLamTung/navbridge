@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Audit what a maneuver callout says about SPEED.
 
-The callout is "Đi trên Y, sau Nm, rẽ … vào X[ … vào Z]. Tốc độ tối đa K km/h."
+The callout is "Đi trên Y, sau Nm, rẽ … vào X[ … vào Z]. Giới hạn tốc độ K km/h."
+(that is the ONE phrase since 2026-09-24; before it, the manoeuvre callout said
+"Tốc độ tối đa K km/h" — both are parsed here).
 It names the street(s) you turn INTO, so K must be the posted limit of one of
 THOSE — not of Y, the street under the car. That was the bug the driver reported
 (2026-09-24): "when announcement, the next street speed is not correct, still
@@ -40,7 +42,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SEGS = os.path.join(REPO, 'assets/offline_map/waze_segments.bin')
 
 SAU = re.compile(r'sau ([\d.,]+) (ki lô mét|km|mét)')
-SPOKEN = re.compile(r'Tốc độ tối đa (\d+) km/h')
+SPOKEN = re.compile(r'(?:Tốc độ tối đa|Giới hạn tốc độ) (\d+) km/h')
 ON = re.compile(r'Đi trên ([^,]+)')
 INTO = re.compile(r'vào ([^,.]+)')
 # words that follow "vào" without being a street name

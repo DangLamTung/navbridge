@@ -83,11 +83,13 @@ extension _NavSigns on _NavigationPageState {
               'spd-${a.sign.lat.toStringAsFixed(5)},'
               '${a.sign.lng.toStringAsFixed(5)}';
           if (!_speedChangeDedupe.seen(sig)) {
+            // Same phrase as every other limit announcement (see _announce).
             final spdTxt =
-                'Giảm tốc độ, giới hạn $v km/h phía trước '
+                'Giới hạn tốc độ $v km/h phía trước '
                 '${formatDistanceSpoken(a.routeMeters)}';
             _logAnnouncement(spdTxt, kind: 'sign');
             _voice.speak(spdTxt, priority: VoiceGuide.priorityHigh);
+            _noteLimitSpoken(v);
           }
         }
         break; // only the NEAREST speed sign matters

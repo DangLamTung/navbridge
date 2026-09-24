@@ -7,10 +7,16 @@ voice says the wrong street / speed" into something measurable instead of a
 memory of what it sounded like.
 
 Checks, per announcement:
-  * kind='limit'    — "Giới hạn N km/h": does N match the limit actually in
+  * kind='limit'    — "Giới hạn tốc độ N km/h": does N match the limit actually in
                       force at that moment (limitEffective)?
-  * kind='maneuver' — "Đi trên X, sau …, <verb> vào Y. Tốc độ tối đa N km/h":
-                      does X match the street under the car, and N the limit?
+  * kind='maneuver' — "Đi trên X, sau …, <verb> vào Y. Giới hạn tốc độ N km/h":
+                      does X match the street under the car, and N the limit of
+                      the street being entered (see tool/announce_speed_audit.py)?
+
+NOTE (2026-09-24): every limit announcement now uses ONE phrase,
+"giới hạn tốc độ N km/h"; before that the maneuver callout said
+"Tốc độ tối đa N km/h" and the change said "Giới hạn N km/h". Both forms are
+still parsed so trips recorded before the change stay auditable.
 
 Run:  python3 tool/check_voice_calls.py [docs/trips/device]
 Exit code is non-zero when a street/limit mismatch is found, so it can gate a
@@ -34,9 +40,11 @@ import re
 import sys
 import unicodedata
 
-LIMIT_RX = re.compile(r'Gi[ớo]i h[ạa]n (\d+) km/h')
+LIMIT_RX = re.compile(
+    r'Gi[ớo]i h[ạa]n(?: t[ốo]c [đd][ộo])? (\d+) km/h')
 ON_RX = re.compile(r'^Đi trên (.+?), sau ')
-MAX_RX = re.compile(r'T[ốo]c [đd][ộo] t[ốo]i [đd]a (\d+) km/h')
+MAX_RX = re.compile(
+    r'(?:T[ốo]c [đd][ộo] t[ốo]i [đd]a|Gi[ớo]i h[ạa]n t[ốo]c [đd][ộo]) (\d+) km/h')
 
 # Spoken turn verbs, most specific first. 'nhẹ' (slight) is excluded from the
 # direction check: its heading change is small enough to be ambiguous.
