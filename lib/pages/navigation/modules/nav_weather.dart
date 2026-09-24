@@ -303,7 +303,28 @@ extension _NavWeather on _NavigationPageState {
       final m = next.routeMeters.round();
       final near = next.routeMeters <= 100;
       final zsig = '$sig/${near ? 'near' : 'far'}';
+      // CADENCE for the surveillance kind ("Camera giám sát giao thông"): on the
+      // 2026-09-24 replay 23 of 51 announcements were cameras and 9 landed in one
+      // 2-minute window (58 s, 75 s, 80 s, 132 s …), eight of them the same
+      // "Camera giám sát giao thông ngay phía trước" sentence a few hundred
+      // metres apart. A monitoring camera carries no speed and no fine, so it is
+      // capped to one sentence per 20 s — while the ENFORCEMENT kinds (speed /
+      // red light / phạt nguội) still speak whenever they are due, because those
+      // the driver acts on.
+      final kind = next.camera.type ?? next.camera.focus;
+      final enforcement =
+          kind == 'speed_camera' || kind == 'penalty_camera' ||
+          next.camera.focus == 'speed' || next.camera.focus == 'red_light' ||
+          kind == 'red_light';
+      final last = _lastCameraSpokeAt;
+      if (!enforcement &&
+          last != null &&
+          DateTime.now().difference(last) < const Duration(seconds: 20)) {
+        debugPrint('CAMERA: surveillance callout skipped (cadence 20 s)');
+        return;
+      }
       if (!_cameraDedupe.seen(zsig)) {
+        _lastCameraSpokeAt = DateTime.now();
         final cam = next.camera;
         final dist = formatDistanceSpoken(next.routeMeters);
         // A lone CSGT (police) phạt nguội point is a manual report — only say

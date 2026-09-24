@@ -334,6 +334,11 @@ class _NavigationPageState extends State<NavigationPage>
   final _cameraGate = _PerSecondGate(); // 1 Hz per-fix check throttle
   final _cameraDedupe = _ZoneDedupe(); // speak each camera far + near only
 
+  /// When the last camera sentence was spoken — caps the surveillance kind
+  /// ("Camera giám sát giao thông") to one per 20 s so a cluster of them does not
+  /// chatter; enforcement cameras (speed / red light / phạt nguội) ignore it.
+  DateTime? _lastCameraSpokeAt;
+
   /// Cameras shown on the BROWSE map — bounded to NEAR-THE-USER only (NOT
   /// all ~70k nationwide markers, which crushed the low-end phone while
   /// browsing / right after finding a route). Refreshed when the user moves
@@ -402,7 +407,15 @@ class _NavigationPageState extends State<NavigationPage>
     // This allows the browse/preview map to show the route's signs and cameras
     // everywhere, and we vary density by zoom level.
     final routeCams = await camerasNearRoute(r.geometry);
-    final routeSigns = await signsNearRoute(r.geometry, corridorMeters: 200);
+    // CORRIDOR 60 m, not 200 m (user, 2026-09-24: "sign on the next segment must
+    // present … for sign outside the segment we can reduce"): a sign 200 m off
+    // the polyline is two blocks away — a crossing street's sign, not this
+    // road's — and it competed for the same marker budget as the signs actually
+    // on the stretch being driven. 60 m keeps every roadside sign of the route
+    // (VietMap puts signs on the carriageway, Waze notices on the road segment,
+    // DATMAP on the road) while dropping the off-segment ones. Both sources are
+    // kept — the index is one merged list and nothing filters on `source`.
+    final routeSigns = await signsNearRoute(r.geometry, corridorMeters: 60);
 
     if (!mounted) return;
 

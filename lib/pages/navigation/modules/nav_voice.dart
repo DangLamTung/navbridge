@@ -395,15 +395,21 @@ extension _NavVoice on _NavigationPageState {
     }
     final m = nav.meter;
     final speed = nav.speedMps.isFinite ? nav.speedMps : 0.0;
-    // Head-up callouts are timed in SECONDS before the maneuver so they ALWAYS
-    // sound ahead of the turn (never after — even with TTS + Bluetooth
-    // latency): far ≈ 20 s out, near ≈ 12 s out, final ≈ 8 s out. On a long
-    // straight stretch nothing repeats until the next maneuver gets close.
-    // The FIRST callout is ~300-400 m out (was 200 m — too late in town); the
-    // driver wants the turn told before the intersection, not on top of it.
-    final far = max(350.0, speed * 20.0); // first heads-up (20 s out)
-    final near = max(120.0, speed * 12.0); // closer heads-up (12 s out)
-    final finalM = max(80.0, speed * 8.0); // final "rẽ trái" (8 s out)
+    // THREE heads-ups, at the distances the driver asked for (user, 2026-09-24:
+    // "before a turn should announce 400m - 300m - 100m"): a first at 400 m, a
+    // reminder at 300 m, and the short "rẽ trái vào X" at 100 m.
+    //
+    // They used to be timed in seconds (`max(350, speed*20)` / `max(120,
+    // speed*12)` / `max(80, speed*8)`) so a turn could never be announced after
+    // it was reached — at 30 km/h that fired at 350/120/80 m, at 80 km/h at
+    // 444/267/178 m. The seconds rule is still honoured as a FLOOR for the fast
+    // cases only: nothing is spoken earlier than 400 m (too early to be useful)
+    // and the final callout never comes later than 100 m, but at speed the
+    // first two stretch out so they still land before the turn with TTS +
+    // Bluetooth latency.
+    final far = max(400.0, speed * 20.0); // first heads-up (≈20 s out)
+    final near = max(300.0, speed * 12.0); // reminder (≈12 s out)
+    final finalM = 100.0; // final "rẽ trái vào X" — the driver's number
     // A maneuver is new when the turn instruction changes. The signature
     // includes the street you turn INTO (`nextText`) + the maneuver's
     // coordinates so two CONSECUTIVE turns that share the same icon + road
@@ -511,10 +517,12 @@ extension _NavVoice on _NavigationPageState {
       if (layerName != null && layerName.isNotEmpty && target.isNotEmpty) {
         if (!postedLimitMatchesName(layerName, target)) {
           _nextStreetLimit = 0;
-          _logAnnouncement(
-            'next-street limit skipped: layer "$layerName" != target "$target"',
-            kind: 'limit',
-          );
+          // debugPrint, NOT _logAnnouncement: this line is diagnostics, and a
+          // logged announcement shows up in the trip file as if it were spoken
+          // (it did — tool/announce_speed_audit.py counted these as limit
+          // callouts on the 2026-09-24 replay).
+          debugPrint('NEXT-LIMIT: skipped, layer "$layerName" != target '
+              '"$target"');
           return;
         }
       }
