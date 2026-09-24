@@ -83,13 +83,23 @@ extension _NavSigns on _NavigationPageState {
               'spd-${a.sign.lat.toStringAsFixed(5)},'
               '${a.sign.lng.toStringAsFixed(5)}';
           if (!_speedChangeDedupe.seen(sig)) {
-            // Same phrase as every other limit announcement (see _announce).
+            // The sign's own value, capped for THIS vehicle — the number spoken
+            // is always the max that applies to the vehicle, never above the
+            // sign (user: "just say 1 for vehicle class").
+            final vEff = effectiveLimit(
+              '',
+              vehicle: vehicleType,
+              taggedKmh: v,
+              urban: _inTown,
+              postedSrc: srcSegment,
+            );
+            final shown = vEff > 0 ? vEff : v;
             final spdTxt =
-                'Giới hạn tốc độ $v km/h phía trước '
+                'Tốc độ tối đa $shown km/h phía trước '
                 '${formatDistanceSpoken(a.routeMeters)}';
             _logAnnouncement(spdTxt, kind: 'sign');
             _voice.speak(spdTxt, priority: VoiceGuide.priorityHigh);
-            _noteLimitSpoken(v);
+            _noteLimitSpoken(shown);
           }
         }
         break; // only the NEAREST speed sign matters

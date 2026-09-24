@@ -153,6 +153,14 @@ def run(path: str, layer: Layer):
           'under the car instead: %d/%d' % (good, len(rows), old, len(rows)))
     print('   -> where the two disagree (the falsifiable rows): %d/%d correct'
           % (disc_ok, disc))
+    # The law check the driver asked about: the spoken number is the vehicle's
+    # MAX, so it must never sit above the road it is spoken for.
+    above = [(k, nm, min(h[0] for _n, h in named if h))
+             for k, nm, named, _cur, _on in rows
+             if nm is not None and min(h[0] for _n, h in named if h) < k]
+    print('   -> spoken ABOVE the named street\'s own limit: %d%s'
+          % (len(above), '' if not above else
+             '  ← ' + ', '.join('%d>%d on %s' % (k, v, n[:16]) for k, n, v in above)))
     return good, old, len(rows)
 
 

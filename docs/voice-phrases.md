@@ -16,11 +16,12 @@ Templates combine: **verb** (from `maneuverVerb`) + **into-road** + **next-next*
 **speed-limit**. Two forms:
 
 - **Head-up (not yet close):** `Đi<onRoad>, sau <distance>, <verb><into><nextNext>.<limitTxt>`
-  - e.g. `Đi trên Nguyễn Huệ, sau 350 mét, rẽ phải vào Đồng Khởi. Giới hạn tốc độ 50 km/h.`
+  - e.g. `Đi trên Nguyễn Huệ, sau 350 mét, rẽ phải vào Đồng Khởi. Tốc độ tối đa 50 km/h.`
 - **Final (close):** `<verb><into><nextNext>.<limitTxt>`
-  - e.g. `Rẽ phải vào Đồng Khởi. Giới hạn tốc độ 50 km/h.`
-  - `<limitTxt>` is the limit of the street being turned INTO (resolved from the
-    segment layer 30 m past the turn) — never the street under the car.
+  - e.g. `Rẽ phải vào Đồng Khởi. Tốc độ tối đa 50 km/h.`
+  - `<limitTxt>` is the vehicle's max on the street being turned INTO (resolved
+    from the segment layer 30 m past the turn, capped by the vehicle ceiling) —
+    never the street under the car.
 - **Arrival:** `Bạn đã đến nơi.` or `Điểm đến bên trái.` / `Điểm đến bên phải.`
 
 ### Maneuver verbs (`nav_protocol.dart`)
@@ -109,20 +110,20 @@ Camera head varies by real type, then appends distance.
 
 ## 4. Speed (`nav_voice.dart`)
 
-⭐ ONE phrase for the posted limit, everywhere — the maneuver callout, the
-limit-change announcement and the lower-limit-ahead warning all say
-`giới hạn tốc độ <X> km/h`. It used to differ per call site (`Tốc độ tối đa` in
-the maneuver callout, `Giới hạn` on a change, `Giảm tốc độ, giới hạn` for a
-warning ahead), which is two ways of saying one fact seconds apart — user,
-2026-09-24: "the giới hạn tốc độ and tốc độ tối đa why have 2 thing". The value
-spoken is also remembered for 45 s, so a limit already said with a turn is not
-announced again when it takes effect.
+⭐ ONE number, ONE phrase: **`Tốc độ tối đa <X> km/h`** — the maximum that applies
+TO THIS VEHICLE on the road in question, which is what the app computes
+(`min(posted limit, vehicle ceiling)`, see `services/overpass.dart`). It is used by
+the maneuver callout, the limit-change announcement and the lower-limit-ahead
+warning. Three phrasings used to exist for the one fact and could be heard seconds
+apart — user, 2026-09-24: "the giới hạn tốc độ and tốc độ tối đa why have 2 thing"
++ "just say 1 for vehicle class". A spoken value is remembered for 45 s, so a
+limit already announced with a turn is not announced again when it takes effect.
 
 | Event | phrase |
 |---|---|
-| Maneuver callout (limit of the street you turn INTO) | `… vào <road>. Giới hạn tốc độ <X> km/h.` |
-| Speed-limit change | `Giới hạn tốc độ <X> km/h` (pre-recorded clip; TTS fallback same text) |
-| Lower limit ahead | `Giới hạn tốc độ <X> km/h phía trước <distance>` |
+| Maneuver callout (vehicle max on the street you turn INTO) | `… vào <road>. Tốc độ tối đa <X> km/h.` |
+| Speed-limit change | `Tốc độ tối đa <X> km/h` (pre-recorded clip; TTS fallback same text) |
+| Lower limit ahead | `Tốc độ tối đa <X> km/h phía trước <distance>` |
 | Overspeed (mild 5–10) | `Vượt quá tốc độ <X> km/h.` |
 | Overspeed (strong) | `Giảm tốc độ! Vượt quá tốc độ.` |
 | Motorbike on motorway | `Chú ý! Xe mô tô không được phép đi vào đường cao tốc. Xin thoát cao tốc khi có thể.` |

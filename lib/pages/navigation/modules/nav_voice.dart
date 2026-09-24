@@ -591,12 +591,15 @@ extension _NavVoice on _NavigationPageState {
     // street under the car — the callout names the next street, so the old
     // value read as "the next street's limit" while being the old street's.
     // Unknown ⇒ say nothing: a wrong number is worse than none.
-    // ONE phrase for the limit, everywhere (user, 2026-09-24: "the giới hạn tốc
-    // độ and tốc độ tối đa why have 2 thing"): the maneuver callout, the
-    // limit-change announcement and the lower-limit-ahead warning all say
-    // "giới hạn tốc độ X km/h".
+    // ONE number, ONE phrase: the MAX SPEED THAT APPLIES TO THIS VEHICLE on the
+    // road being entered — which the layer value already is after the vehicle
+    // ceiling (`effectiveLimit`), never above the road's own limit either. It
+    // used to be said three ways (`Tốc độ tối đa` in the callout, `Giới hạn` on a
+    // change, `Giảm tốc độ, giới hạn` for a warning ahead) — user, 2026-09-24:
+    // "the giới hạn tốc độ and tốc độ tối đa why have 2 thing" + "just say 1 for
+    // vehicle class".
     final limit = target.isNotEmpty ? _nextStreetLimit : _effectiveSpeedLimit;
-    final limitTxt = limit > 0 ? ' Giới hạn tốc độ $limit km/h.' : '';
+    final limitTxt = limit > 0 ? ' Tốc độ tối đa $limit km/h.' : '';
     if (limit > 0) _noteLimitSpoken(limit);
     if (now) {
       return '$verb$into$nextNext.$limitTxt';
@@ -706,7 +709,7 @@ extension _NavVoice on _NavigationPageState {
     // this value now is — a sign only counts once the car is at it
     // (signLimitInForce), so there is no early-adopted sign left to phrase as
     // "tiếp theo" via TTS.
-    final txt = 'Giới hạn tốc độ $limit km/h';
+    final txt = 'Tốc độ tối đa $limit km/h';
     _logAnnouncement(txt, kind: 'limit');
     _noteLimitSpoken(limit);
     unawaited(
