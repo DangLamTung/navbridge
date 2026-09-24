@@ -132,3 +132,33 @@ LatLng projectOnSegment(LatLng a, LatLng b, LatLng p) {
   t = t.clamp(0.0, 1.0);
   return LatLng(ay + t * dy, ax + t * dx);
 }
+
+/// The point [aheadM] metres PAST [from] along [geo] — for a maneuver at [from]
+/// this is the road on the FAR side of the turn, which is a different street with
+/// its own limit.
+///
+/// Used by the voice callout: "rẽ trái vào X, tốc độ tối đa …" must quote X, not
+/// the street the car is still on. Samples the polyline the route engine produced
+/// (so it cannot drift onto a parallel street the way a free-floating probe
+/// could), and returns [geo.last] when the route ends before [aheadM].
+LatLng? pointPast(LatLng from, List<LatLng> geo, double aheadM) {
+  if (geo.length < 2) return null;
+  final at = nearestAlong(geo, from);
+  if (at == null) return null;
+  const Distance d = Distance();
+  var acc = 0.0;
+  for (var i = 0; i + 1 < geo.length; i++) {
+    final a = geo[i];
+    final b = geo[i + 1];
+    final seg = d.as(LengthUnit.Meter, a, b);
+    if (acc + seg >= at + aheadM) {
+      final t = seg <= 0 ? 0.0 : ((at + aheadM) - acc) / seg;
+      return LatLng(
+        a.latitude + (b.latitude - a.latitude) * t,
+        a.longitude + (b.longitude - a.longitude) * t,
+      );
+    }
+    acc += seg;
+  }
+  return geo.last;
+}

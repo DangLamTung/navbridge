@@ -138,6 +138,14 @@ extension _NavSigns on _NavigationPageState {
       }
     }
     if (next == null) return;
+    // A traffic light AND a red-light camera at the same junction is ONE hazard:
+    // the camera alert already says "Camera đèn đỏ … phía trước" (with distance
+    // and, in the tap sheet, its source), so the sign callout would say the same
+    // thing twice (user, 2026-09-24: "we have đèn đỏ and đèn giao thông sắp tới
+    // which is overlap and not needed"). The LIGHT callout is the one dropped —
+    // it carries no colour and no source — but only where a red-light camera
+    // actually covers the junction; elsewhere the light is still announced.
+    if (next.kind == RoadSignKind.signal && _redLightCameraNear(m)) return;
     // Announce at most TWICE per sign: once far (the first time it enters the
     // 400 m range) and once near (~100 m) as the final reminder. The old
     // per-25 m bucket re-spoke every ~25 m, which nagged the driver.
@@ -261,5 +269,17 @@ extension _NavSigns on _NavigationPageState {
     _logAnnouncement(phrase, kind: 'sign');
     _voice.speak(phrase);
     if (mounted) setNavState(() {});
+  }
+
+  /// Is the upcoming camera alert the SAME junction as a traffic light
+  /// [signMeters] ahead? Only a red-light camera counts: at those the camera
+  /// alert and the light callout describe one hazard, and the camera one is the
+  /// more informative of the two (see the guard in [_announceSigns]).
+  bool _redLightCameraNear(double signMeters) {
+    final cam = _nextCamera;
+    if (cam == null) return false;
+    final c = cam.camera;
+    if (c.focus != 'red_light' && c.type != 'red_light') return false;
+    return (cam.routeMeters - signMeters).abs() <= 150;
   }
 }

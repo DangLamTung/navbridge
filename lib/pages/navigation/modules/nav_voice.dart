@@ -430,24 +430,108 @@ extension _NavVoice on _NavigationPageState {
     if (isNew && m > far) {
       // Fresh turn → announce it immediately with its distance.
       _spokenFar = true;
-      final txt = _announce(nav, m);
-      _logAnnouncement(txt, kind: 'maneuver', extra: _maneuverExtra(nav));
-      _voice.speak(txt, priority: VoiceGuide.priorityCritical);
+      _speakManeuver(nav, m);
     } else if (!_spokenFar && m <= far && m > near) {
       _spokenFar = true;
-      final txt = _announce(nav, m);
-      _logAnnouncement(txt, kind: 'maneuver', extra: _maneuverExtra(nav));
-      _voice.speak(txt, priority: VoiceGuide.priorityCritical);
+      _speakManeuver(nav, m);
     } else if (!_spokenNear && m <= near && m > finalM) {
       _spokenNear = true;
-      final txt = _announce(nav, m);
-      _logAnnouncement(txt, kind: 'maneuver', extra: _maneuverExtra(nav));
-      _voice.speak(txt, priority: VoiceGuide.priorityCritical);
+      _speakManeuver(nav, m);
     } else if (!_spokenFinal && m <= finalM) {
       _spokenFinal = true;
-      final txt = _announce(nav, m, now: true);
+      _speakManeuver(nav, m, now: true);
+    }
+  }
+
+  /// Speak a maneuver callout, resolving the speed limit of the road being
+  /// turned INTO first (that lookup is async — the segment index is O(1) after
+  /// load, so the wait is a fraction of a frame, far below the TTS latency).
+  void _speakManeuver(NavProgress nav, int m, {bool now = false}) {
+    unawaited(() async {
+      await _ensureNextStreetLimit(nav);
+      if (!mounted) return;
+      final txt = _announce(nav, m, now: now);
       _logAnnouncement(txt, kind: 'maneuver', extra: _maneuverExtra(nav));
       _voice.speak(txt, priority: VoiceGuide.priorityCritical);
+    }());
+  }
+
+  // --- speed limit of the road AFTER the next maneuver ----------------------
+  //
+  // The four fields live on the page state (`navigation_page.dart`) because this
+  // file is an extension and extensions cannot declare instance fields.
+
+  /// Resolve (once per maneuver) the limit of the road the driver turns INTO —
+  /// the value the callout quotes. The callout names the next street, so quoting
+  /// the street under the car was simply wrong (user, 2026-09-24: "when
+  /// announcement, the next street speed is not correct, still taken from old
+  /// street"). The 30 m sample past the turn is [pointPast] in `offline_geo.dart`.
+  Future<void> _ensureNextStreetLimit(NavProgress nav) {
+    final mv = nav.maneuver;
+    final target = nav.nextText;
+    if (mv == null || target.isEmpty) {
+      _nextStreetLimit = 0;
+      _nextStreetLimitKey = null;
+      _nextStreetLimitName = '';
+      return Future<void>.value();
+    }
+    if (_nextStreetLimitKey == mv && _nextStreetLimitName == target) {
+      return _nextStreetLimitJob ?? Future<void>.value();
+    }
+    _nextStreetLimitKey = mv;
+    _nextStreetLimitName = target;
+    _nextStreetLimit = 0;
+    final job = _resolveNextStreetLimit(mv, target);
+    _nextStreetLimitJob = job;
+    return job;
+  }
+
+  Future<void> _resolveNextStreetLimit(LatLng mv, String target) async {
+    try {
+      final geo = _route?.geometry ?? const <LatLng>[];
+      // Sample ~30 m PAST the maneuver: that is the new street, and querying it
+      // with the outgoing bearing picks the right carriageway when a road posts
+      // a different limit per direction.
+      final p = pointPast(mv, geo, 30) ?? mv;
+      final brg = _bearingDeg(mv, p);
+      final raw = await speedLimitAt(
+        p,
+        maxDistM: 30,
+        headingDeg: brg == 0 ? null : brg,
+      );
+      if (raw == null || raw <= 0) {
+        _nextStreetLimit = 0;
+        return;
+      }
+      // The record that supplied the value must be the street we are entering —
+      // the same veto the chip applies (`postedLimitMatchesName`). Otherwise the
+      // sample landed on a crossing street and that number belongs to it, so
+      // nothing is spoken rather than the wrong street's limit.
+      final layerName = lastWazeStreetName();
+      if (layerName != null && layerName.isNotEmpty && target.isNotEmpty) {
+        if (!postedLimitMatchesName(layerName, target)) {
+          _nextStreetLimit = 0;
+          _logAnnouncement(
+            'next-street limit skipped: layer "$layerName" != target "$target"',
+            kind: 'limit',
+          );
+          return;
+        }
+      }
+      // The posted value, capped for the vehicle (urban matters for the
+      // motorbike ceiling).
+      final capped = effectiveLimit(
+        // No graph road here: the layer value IS the authority and only the
+        // vehicle's own legal ceiling caps it (see effectiveLimit).
+        '',
+        vehicle: vehicleType,
+        taggedKmh: raw,
+        urban: await _townAt(p),
+        postedSrc: srcSegment,
+      );
+      _nextStreetLimit = capped > 0 ? capped : 0;
+    } catch (_) {
+      _nextStreetLimit = 0;
     }
   }
 
@@ -501,13 +585,13 @@ extension _NavVoice on _NavigationPageState {
         nextNext = ', sau đó $v2 vào ${nav.nextNextText}';
       }
     }
-    // Announce the effective speed limit of the current road (item 2) — the
-    // value shown in the road-info chip (sign-aware: the last speed-limit sign
-    // passed wins over the road's default). Omitted when unknown (0).
-    final limit = _effectiveSpeedLimit;
-    // No "tiếp theo" phrasing: a sign is only authority once the car is at it
-    // (signLimitInForce), so an unreached sign never becomes the effective
-    // limit and this value is always the one in force right now.
+    // ⭐ The limit spoken with a maneuver is the limit of the road YOU TURN
+    // INTO (`_nextStreetLimit`, resolved from the layer ~30 m past the turn and
+    // vetted against the street name the engine named), NOT the limit of the
+    // street under the car — the callout names the next street, so the old
+    // value read as "the next street's limit" while being the old street's.
+    // Unknown ⇒ say nothing: a wrong number is worse than none.
+    final limit = target.isNotEmpty ? _nextStreetLimit : _effectiveSpeedLimit;
     final limitTxt = limit > 0 ? ' Tốc độ tối đa $limit km/h.' : '';
     if (now) {
       return '$verb$into$nextNext.$limitTxt';

@@ -565,6 +565,21 @@ class _NavigationPageState extends State<NavigationPage>
   bool _inTown = false;
   LatLng? _inTownPos;
 
+  // --- the road AFTER the next maneuver, for the spoken callout -------------
+  // The callout names the street you turn INTO, so it quotes THAT street's
+  // limit (user, 2026-09-24: "when announcement, the next street speed is not
+  // correct, still taken from old street"). Resolved asynchronously once per
+  // maneuver — see `_ensureNextStreetLimit` in `modules/nav_voice.dart`.
+  /// km/h in force on the road being entered. 0 = unknown ⇒ not spoken.
+  int _nextStreetLimit = 0;
+  /// The maneuver it was resolved for (cache key), and the street name the
+  /// engine named for it — a different turn means a fresh lookup.
+  LatLng? _nextStreetLimitKey;
+  String _nextStreetLimitName = '';
+  /// Lookup in flight, awaited by the announcement so the first callout already
+  /// carries the right number.
+  Future<void>? _nextStreetLimitJob;
+
   // --- trip logging (Google Takeout) ---
   TripLogger? _trip;
 
