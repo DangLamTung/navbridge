@@ -23,11 +23,27 @@ abstract interface class OfflinePoint {
 /// along-route distance, limited to [maxAheadMeters]. Isolate-safe.
 ///
 /// Takes a single record so it can be passed straight to `compute(...)`.
+///
+/// ONLY the stretch of [geometry] the question can involve is scanned: an item
+/// that is [maxAheadMeters] ahead of the car cannot be found by looking at the
+/// polyline a thousand kilometres away, yet the projection helpers walk the
+/// WHOLE list per item. On the 1 690 km QL1A route (84 532 vertices) that made
+/// one query take 18 s on the web — where `compute()` runs on the same thread —
+/// and the nav loop never caught up with the drive. The window is derived once
+/// (a coarse nearest-vertex scan + a walk of ~[maxAheadMeters] ahead of it),
+/// then every item is projected against it; distances stay exact because both
+/// [current] and the item lie inside the same window.
 List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
-  (LatLng, List<LatLng>, List<T>, double, double) args,
-) {
+  (LatLng, List<LatLng>, List<T>, double, double) args, {
+  /// Per-item override of the lateral limit. A zone-referenced sign is stored
+  /// at an area vertex rather than on the carriageway, so it needs a wider
+  /// corridor than a roadside post — see [kZoneLateralMeters].
+  double Function(T item)? lateralFor,
+}) {
   final (current, geometry, items, maxAheadMeters, lateralMeters) = args;
   if (geometry.length < 2 || items.isEmpty) return const [];
+  final window = _aheadWindow(geometry, current, maxAheadMeters);
+  if (window.length < 2) return const [];
   const Distance d = Distance();
   final out = <(int, double)>[];
   for (var i = 0; i < items.length; i++) {
@@ -37,17 +53,66 @@ List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
     // A point to the SIDE of the route belongs to the street it stands on (a
     // crossing / parallel road), so it is not "ahead on this route" — see
     // [lateralOffsetMeters]. Callers pass 0 to keep the old behaviour.
-    if (lateralMeters > 0) {
-      final off = lateralOffsetMeters(geometry, p);
-      if (off == null || off > lateralMeters) continue;
+    final limit = lateralFor?.call(items[i]) ?? lateralMeters;
+    if (limit > 0) {
+      final off = lateralOffsetMeters(window, p);
+      if (off == null || off > limit) continue;
     }
-    final m = routeMetersAhead(current, p, geometry);
+    final m = routeMetersAhead(current, p, window);
     if (m != null && m >= 0 && m <= maxAheadMeters) {
       out.add((i, m));
     }
   }
   out.sort((a, b) => a.$2.compareTo(b.$2));
   return out;
+}
+
+/// The slice of [geometry] that can hold a point within [maxAheadMeters] AHEAD
+/// of [current]: a short lead-in behind the car (a fix that lands just past a
+/// vertex still projects onto the right segment) plus the way forward until the
+/// budget is spent.
+///
+/// The nearest vertex is found by a COARSE scan (≤ ~512 samples of the cheap
+/// equirectangular distance) refined over one coarse step — accurate to a few
+/// vertices, which is all a window needs (see [pointsAheadOnRoute]).
+List<LatLng> _aheadWindow(
+  List<LatLng> geometry,
+  LatLng current,
+  double maxAheadMeters,
+) {
+  final n = geometry.length;
+  if (n < 3) return geometry;
+  final step = math.max(1, (n / 512).ceil());
+  var best = 0;
+  var bestD = double.infinity;
+  for (var i = 0; i < n; i += step) {
+    final d = fastDistanceMeters(geometry[i], current);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  final hiRef = math.min(n - 1, best + step);
+  for (var i = math.max(0, best - step); i <= hiRef; i++) {
+    final d = fastDistanceMeters(geometry[i], current);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  var lo = best;
+  var back = 0.0;
+  while (lo > 0 && back < 200) {
+    back += fastDistanceMeters(geometry[lo - 1], geometry[lo]);
+    lo--;
+  }
+  var hi = best;
+  var ahead = 0.0;
+  while (hi < n - 1 && ahead < maxAheadMeters + 40) {
+    ahead += fastDistanceMeters(geometry[hi], geometry[hi + 1]);
+    hi++;
+  }
+  return geometry.sublist(lo, hi + 1);
 }
 
 /// Indices of [items] within ~[corridorMeters] of [geometry] — the map-layer

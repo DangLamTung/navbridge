@@ -147,6 +147,10 @@ or `~/Documents/Eink/flutter_sdk`).
 
 See `docs/PERFORMANCE.md` for the performance test report.
 
+See `docs/TESTING.md` for the test suites, how to drive the real web build with
+recorded drives, the precision/recall figures with their definitions, and the
+list of corrections to numbers that were wrong.
+
 ## Data & attribution
 
 The app ships with bundled offline datasets for Việt Nam (no network, no API

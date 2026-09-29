@@ -365,7 +365,7 @@ extension _NavVoice on _NavigationPageState {
   /// speed, the callouts move earlier; the fixed fallbacks keep them sane
   /// when stationary.
   void _maybeSpeakManeuver(NavProgress nav) {
-    if (!_voiceOn || !_voice.ready) return;
+    if (!_voiceOn || !_voiceReady) return;
     if (nav.iconCode == iconArrive) {
       if (_arrivedSpoken) return;
       _arrivedSpoken = true;
@@ -504,18 +504,16 @@ extension _NavVoice on _NavigationPageState {
         p,
         maxDistM: 30,
         headingDeg: brg == 0 ? null : brg,
+        expectStreet: target.isEmpty ? null : target,
       );
       if (raw == null || raw <= 0) {
         _nextStreetLimit = 0;
         return;
       }
       // The record that supplied the value must be the street we are entering —
-      // the same veto the chip applies (`postedLimitMatchesName`). Otherwise the
-      // sample landed on a crossing street and that number belongs to it, so
-      // nothing is spoken rather than the wrong street's limit.
       final layerName = lastWazeStreetName();
       if (layerName != null && layerName.isNotEmpty && target.isNotEmpty) {
-        if (!postedLimitMatchesName(layerName, target)) {
+        if (!streetNameMatches(target, layerName)) {
           _nextStreetLimit = 0;
           // debugPrint, NOT _logAnnouncement: this line is diagnostics, and a
           // logged announcement shows up in the trip file as if it were spoken
@@ -574,9 +572,10 @@ extension _NavVoice on _NavigationPageState {
     // looking at the chip, so the callout has to use the chip's source; the
     // engine name is the fallback, since 62 % of Waze segments carry no name.
     final liveRoad = _roadInfo?.name ?? '';
+    final engineName = nav.text == kContinuePlaceholder ? '' : nav.text;
     final cur = liveRoad.isNotEmpty
         ? liveRoad
-        : (nav.text.isNotEmpty ? nav.text : '');
+        : (engineName.isNotEmpty ? engineName : '');
     final target = nav.nextText.isNotEmpty ? nav.nextText : '';
     final onRoad = cur.isNotEmpty ? ' trên $cur' : '';
     // Emphasize the road you turn INTO — that's the part the driver needs.
@@ -606,28 +605,31 @@ extension _NavVoice on _NavigationPageState {
     // change, `Giảm tốc độ, giới hạn` for a warning ahead) — user, 2026-09-24:
     // "the giới hạn tốc độ and tốc độ tối đa why have 2 thing" + "just say 1 for
     // vehicle class".
-    final limit = target.isNotEmpty ? _nextStreetLimit : _effectiveSpeedLimit;
+    // ONE number, ONE phrase, and never a number that RISES: see
+    // [manoeuvreLimitToSpeak]. A next-street limit ABOVE the road under the car
+    // is silence — the change announcer says it when the car gets there.
+    final limit = manoeuvreLimitToSpeak(
+      nextStreetLimit: _nextStreetLimit,
+      currentLimit: _effectiveSpeedLimit,
+      namesNextStreet: target.isNotEmpty,
+    );
     final limitTxt = limit > 0 ? ' Tốc độ tối đa $limit km/h.' : '';
     if (limit > 0) _noteLimitSpoken(limit);
     if (now) {
       return '$verb$into$nextNext.$limitTxt';
     }
+    if (onRoad.isEmpty) {
+      return 'Sau ${formatDistanceSpoken(m)}, $verb$into$nextNext.$limitTxt';
+    }
     return 'Đi$onRoad, sau ${formatDistanceSpoken(m)}, '
         '$verb$into$nextNext.$limitTxt';
   }
 
-  /// Remember the limit that was just spoken (see [_noteLimitSpoken]) so the
-  /// same value is not announced twice in two different sentences.
-  bool _limitSpokenRecently(int kmh, {int withinS = 45}) {
-    final at = _limitSpokenAt;
-    if (at == null || _limitSpokenValue != kmh) return false;
-    return DateTime.now().difference(at) < Duration(seconds: withinS);
-  }
-
-  void _noteLimitSpoken(int kmh) {
-    _limitSpokenValue = kmh;
-    _limitSpokenAt = DateTime.now();
-  }
+  /// Remember the limit that was just spoken so the same value is not
+  /// announced twice in two different sentences. The change announcement
+  /// consults this itself (see [LimitChangeAnnouncer.announce]).
+  void _noteLimitSpoken(int kmh) =>
+      _limitAnnouncer.noteSpoken(kmh, navNow());
 
   /// Warn by voice when the driver EXCEEDS the road's speed limit. Announces
   /// once when the speeding episode starts, then at most every 60 s while
@@ -639,7 +641,7 @@ extension _NavVoice on _NavigationPageState {
   /// whole km/h, never decimals); anything worse is just a firm simple
   /// "Giảm tốc độ!".
   void _maybeSpeakOverspeed(double speedMps) {
-    if (!_voiceOn || !_voice.ready) return;
+    if (!_voiceOn || !_voiceReady) return;
     if (!_navigating && !_simulating) return;
     // Sign-aware limit: the last speed-limit sign (incl. Waze per-segment)
     // passed wins over the road's default.
@@ -648,7 +650,7 @@ extension _NavVoice on _NavigationPageState {
     final kmh = speedMps * 3.6;
     final over = kmh - limit;
     if (over >= 5) {
-      final now = DateTime.now();
+      final now = navNow();
       final last = _lastOverspeedAt;
       if (!_speedingSpoken ||
           (last != null &&
@@ -676,43 +678,14 @@ extension _NavVoice on _NavigationPageState {
   /// to be stable ~2 s (road info can flicker) and never repeats within ~4 s,
   /// so a bumpy boundary can't spam.
   void _maybeSpeakLimitChange() {
-    if (!_voiceOn || !_voice.ready) return;
+    if (!_voiceOn || !_voiceReady) return;
     if (!_navigating && !_simulating) return;
-    final limit = _effectiveSpeedLimit;
-    if (limit <= 0) return;
-    final now = DateTime.now();
-    if (limit == _lastSpokenLimit) {
-      _pendingLimit = null;
-      _pendingSince = null;
-      return;
-    }
-    if (limit != _pendingLimit) {
-      // New candidate limit — arm the stability window.
-      _pendingLimit = limit;
-      _pendingSince = now;
-      return;
-    }
-    if (_pendingSince == null ||
-        now.difference(_pendingSince!) < const Duration(seconds: 2)) {
-      return; // not yet stable
-    }
-    if (_lastLimitSpoke != null &&
-        now.difference(_lastLimitSpoke!) < const Duration(seconds: 4)) {
-      return; // cooldown from the last announcement
-    }
-    // Already said with a turn a moment ago ("… Giới hạn tốc độ 50 km/h.") —
-    // same value, so the change announcement would be the SAME fact in a second
-    // sentence. Remember it (so it does not re-arm) and stay quiet.
-    if (_limitSpokenRecently(limit)) {
-      _lastSpokenLimit = limit;
-      _pendingLimit = null;
-      _pendingSince = null;
-      return;
-    }
-    _lastLimitSpoke = now;
-    _lastSpokenLimit = limit;
-    _pendingLimit = null;
-    _pendingSince = null;
+    // Every guard — the ~2 s stability window, the ~4 s cooldown, "already
+    // said with the turn callout" — lives in the announcer (see
+    // lib/core/limit_change.dart, and its test for the timing contract).
+    final limit =
+        _limitAnnouncer.announce(_effectiveSpeedLimit, navNow());
+    if (limit == null) return;
     // The pre-recorded clip says "Tốc độ giới hạn HIỆN TẠI là N", which is what
     // this value now is — a sign only counts once the car is at it
     // (signLimitInForce), so there is no early-adopted sign left to phrase as
@@ -734,11 +707,11 @@ extension _NavVoice on _NavigationPageState {
   /// episode, then at most every 60 s while still bad; resets when the fix
   /// recovers under ~15 m (hysteresis). Only during navigation.
   void _maybeSpeakGpsWeak(double accuracyM) {
-    if (!_voiceOn || !_voice.ready) return;
+    if (!_voiceOn || !_voiceReady) return;
     if (!_navigating && !_simulating) return;
     if (!accuracyM.isFinite || accuracyM <= 0) return;
     if (accuracyM >= 30) {
-      final now = DateTime.now();
+      final now = navNow();
       final last = _lastGpsWeakAt;
       if (!_gpsWeakSpoken ||
           (last != null &&
@@ -756,6 +729,8 @@ extension _NavVoice on _NavigationPageState {
 
   /// Append a spoken announcement to the active trip log (with the car's
   /// current position) so it can be compared against the fixes + street data.
+  bool get _voiceReady => simCapturing || _voice.ready;
+
   void _logAnnouncement(
     String text, {
     String kind = 'voice',
@@ -763,6 +738,30 @@ extension _NavVoice on _NavigationPageState {
   }) {
     final t = _trip;
     final p = _current;
+    final eff = _effectiveLimit;
+    final ri = _roadInfo;
+    simAnnounce(
+      text,
+      kind: kind,
+      at: navNow(),
+      position: p,
+      metersToManeuver: _progress?.meter,
+      limitKmh: eff.limit,
+      limitSrc: eff.source,
+      vehicle: vehicleType,
+      roadContext: ri == null
+          ? null
+          : '${ri.name.isEmpty ? '(unnamed)' : ri.name}, ${ri.highway}, '
+                'dir=${switch (ri.oneway) { true => 'one-way', false => 'two-way', _ => '?' }}, '
+                'lanes=${ri.lanes ?? '?'}, '
+                '${ri.urban ? 'urban' : 'outside town'}, '
+                // The DIAGNOSIS fields: the road's own value next to the value
+                // actually posted, plus the road form. Without `road=` vs
+                // `posted=` a limit claim cannot be audited — you cannot tell
+                // "the app lowered it on purpose" from "the app read it wrong".
+                'form=${ri.divided ? 'divided' : 'two-way'}, '
+                'road=${ri.speedLimit}, posted=${eff.limit}, src=${ri.src}',
+    );
     if (t == null || p == null || text.isEmpty) return;
     t.logAnnouncement(p, text, kind: kind, extra: extra);
   }

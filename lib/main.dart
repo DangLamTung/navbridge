@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
@@ -10,17 +11,11 @@ import 'package:navbridge/services/trip_logger.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Port so the background nav task can tell the UI when the notification is
-  // tapped (→ reopen the navigation page).
-  FlutterForegroundTask.initCommunicationPort();
-  // DON'T block the first frame on notification setup (channel creation +
-  // POST_NOTIFICATIONS permission dialog). Run it in the background — the
-  // nav service is only used once the user starts navigating, by which time
-  // init has long finished.
-  unawaited(NavForegroundService.instance.init());
-  // A left-over `.part` spool means a drive that was killed mid-way: rebuild it
-  // into a normal trip file before the user looks for it (see TripSpool).
-  unawaited(recoverSpooledTrips());
+  if (!kIsWeb) {
+    FlutterForegroundTask.initCommunicationPort();
+    unawaited(NavForegroundService.instance.init());
+    unawaited(recoverSpooledTrips());
+  }
   runApp(const NavBridgeApp());
 }
 

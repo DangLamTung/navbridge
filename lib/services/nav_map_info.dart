@@ -12,7 +12,6 @@
 /// | `tools/data/saigon.pmtiles` | z0-14 | data at z0-z14, nothing at z15+ |
 ///
 /// Why the app needs it:
-/// * the nav camera sits at z19 (`VectorNavMap.defaultZoom`) and can pinch to
 ///   z19, i.e. ABOVE the archive's max zoom. The style declared no min/max zoom
 ///   on its source, so MapLibre requested z17-z19 tiles that do not exist, the
 ///   vector layers drew nothing, and only the raster basemap below them was left

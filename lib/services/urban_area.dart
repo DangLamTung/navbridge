@@ -22,8 +22,33 @@ import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
+import 'offline_speed_limits.dart' show segmentDensity;
+
+/// Segments of the Waze pack within [kUrbanRadiusM] that make a place built-up.
+///
+/// Measured with `test/trip/urban_area_test.dart` against 1 375 OSM towns and
+/// 882 verified-rural points (the sweep is `test/trip/_town_sweep_test.dart`),
+/// AFTER `segmentDensity` stopped counting a segment once per grid cell it
+/// overlaps:
+///
+///   thr   towns called built-up   open country called built-up
+///   >= 3        94.6%                    3.2%
+///   >= 5        92.1%                    2.2%
+///   >= 10       86.4%                    0.9%
+///    = 15       81.1%                    0.7%
+///   >= 20       76.9%                    0.3%
+///
+/// 10 is the knee: it keeps 5 points of town recall over 15 for two tenths of
+/// a point of false alarms. Below it the false alarms climb four times faster
+/// than the recall, and a false "in town" is what the driver notices — it caps
+/// an unposted road at the urban table (50) where the law says 60.
+const int kUrbanSegMin = 10;
+
 /// POIs within [kUrbanRadiusM] needed to call a place built-up. 25 is two
 /// orders of magnitude below a city centre and above the rural samples (0).
+/// Today it decides nothing the segment rule does not already decide (measured:
+/// adding `|| poi >= 25` changes no point of the table above) — it is kept as
+/// the answer for a place the segment pack happens not to cover.
 const int kUrbanPoiMin = 25;
 
 /// Radius of the density probe, metres.
@@ -55,8 +80,12 @@ Future<int> poiDensity(LatLng p) async {
   return n;
 }
 
-/// True when [p] looks built-up (khu đông dân cư) by POI density.
-Future<bool> isUrbanArea(LatLng p) async => await poiDensity(p) >= kUrbanPoiMin;
+/// True when [p] looks built-up (khu đông dân cư): dense road network from the
+/// Waze segment pack, or a POI cluster (which still identifies the big cities).
+Future<bool> isUrbanArea(LatLng p) async {
+  if (await segmentDensity(p) >= kUrbanSegMin) return true;
+  return await poiDensity(p) >= kUrbanPoiMin;
+}
 
 Future<Map<int, int>> _loadGrid() async {
   final cached = _grid;

@@ -10,6 +10,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
@@ -25,10 +26,36 @@ const String _downloadedMarker = '.downloaded';
 Future<String> navMapDir() async =>
     '${(await getApplicationSupportDirectory()).path}/nav_map';
 
-/// Path of the nav-map PMTiles on disk (or null when not present).
+/// Path of the nav-map PMTiles on disk (or null when not present). Checks app
+/// storage and external Download directory.
 Future<String?> navMapFilePath() async {
-  final f = File('${await navMapDir()}/$navMapName');
-  return f.existsSync() ? f.path : null;
+  final dir = await navMapDir();
+  final f = File('$dir/$navMapName');
+  if (f.existsSync()) return f.path;
+  if (!kIsWeb) {
+    for (final p in [
+      '/sdcard/Download/$navMapName',
+      '/storage/emulated/0/Download/$navMapName',
+    ]) {
+      final dl = File(p);
+      if (dl.existsSync()) {
+        try {
+          final d = Directory(dir);
+          if (!d.existsSync()) d.createSync(recursive: true);
+          dl.copySync(f.path);
+          File('$dir/$_downloadedMarker')
+              .writeAsStringSync(DateTime.now().toIso8601String());
+          try {
+            dl.deleteSync();
+          } catch (_) {}
+          return f.path;
+        } catch (_) {
+          return dl.path;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /// True when the user downloaded the nav map (a `.downloaded` marker exists).
@@ -36,23 +63,77 @@ Future<bool> navMapDownloaded() async =>
     File('${await navMapDir()}/$_downloadedMarker').existsSync();
 
 Future<int> navMapBytes() async {
-  final f = File('${await navMapDir()}/$navMapName');
+  final path = await navMapFilePath();
+  if (path == null) return 0;
+  final f = File(path);
   return f.existsSync() ? f.lengthSync() : 0;
 }
 
-/// Download the nav-map PMTiles from `$navMapDownloadBaseUrl/$navMapName` into
-/// app storage. Throws a clear error when no base URL is configured. Reports
-/// progress via [onProgress] (done bytes, total bytes).
-Future<void> downloadNavMap(
+/// Install a locally chosen PMTiles file into the app's offline nav-map store.
+Future<bool> installNavMapFile(String sourceFilePath) async {
+  final src = File(sourceFilePath);
+  if (!src.existsSync()) return false;
+  final dir = Directory(await navMapDir());
+  if (!dir.existsSync()) dir.createSync(recursive: true);
+  final out = File('${dir.path}/$navMapName');
+  if (out.existsSync()) out.deleteSync();
+  await src.copy(out.path);
+  await File('${dir.path}/$_downloadedMarker')
+      .writeAsString(DateTime.now().toIso8601String());
+  debugPrint('NAVMAP: installed $sourceFilePath -> ${out.path} (${src.lengthSync()} bytes)');
+  return true;
+}
+
+/// Extract bundled asset saigon_z16.pmtiles to nav_map directory if available.
+Future<bool> extractBundledNavMap({
   void Function(int done, int total)? onProgress,
-) async {
-  final base = navMapDownloadBaseUrl;
-  if (base.isEmpty) {
+}) async {
+  try {
+    final data = await rootBundle.load('assets/offline_map/$navMapName');
+    final dir = Directory(await navMapDir());
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    final out = File('${dir.path}/$navMapName');
+    final total = data.lengthInBytes;
+    final sink = out.openWrite();
+    const chunkSize = 64 * 1024;
+    var written = 0;
+    while (written < total) {
+      final len = (total - written) < chunkSize ? (total - written) : chunkSize;
+      final bytes = data.buffer.asUint8List(data.offsetInBytes + written, len);
+      sink.add(bytes);
+      written += len;
+      onProgress?.call(written, total);
+    }
+    await sink.flush();
+    await sink.close();
+    await File('${dir.path}/$_downloadedMarker')
+        .writeAsString(DateTime.now().toIso8601String());
+    debugPrint('NAVMAP: extracted bundled asset ($written bytes)');
+    return true;
+  } catch (e) {
+    debugPrint('NAVMAP: extract bundled asset failed: $e');
+    return false;
+  }
+}
+
+/// Download the nav-map PMTiles from [customUrl] or `$navMapDownloadBaseUrl/$navMapName` into
+/// app storage. Reports progress via [onProgress] (done bytes, total bytes).
+Future<void> downloadNavMap({
+  void Function(int done, int total)? onProgress,
+  String? customUrl,
+}) async {
+  String? urlStr = customUrl?.trim();
+  if (urlStr == null || urlStr.isEmpty) {
+    if (navMapDownloadBaseUrl.isNotEmpty) {
+      urlStr = '$navMapDownloadBaseUrl/$navMapName';
+    }
+  }
+  if (urlStr == null || urlStr.isEmpty) {
     throw StateError(
-      'Chưa cấu hình URL tải bản đồ dẫn đường (dùng --dart-define=NAVMAP_URL).',
+      'Chưa cấu hình URL tải bản đồ dẫn đường (nhập URL hoặc dùng --dart-define=NAVMAP_URL).',
     );
   }
-  final url = Uri.parse('$base/$navMapName');
+  final url = Uri.parse(urlStr);
   final client = http.Client();
   try {
     final req = http.Request('GET', url);

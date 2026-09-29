@@ -39,6 +39,29 @@ class _Announcement {
   String get label => kind == _AnnKind.tts ? (text ?? '') : (asset ?? '');
 }
 
+/// The utterance rate actually handed to the engine.
+///
+/// On WEB this value is assigned straight to `SpeechSynthesisUtterance.rate`
+/// (flutter_tts_web.dart: `void _setRate(double rate) => utterance.rate = rate;`)
+/// where **1.0 is the browser's normal speed**. The stored preference of 0.55
+/// therefore spoke at roughly HALF speed in Chrome — the "too slow in the web"
+/// complaint. The setting is a slow→fast slider, not a fraction of normal, so on
+/// web it is shifted up into a usable band.
+///
+/// `?rate=<x>` on the served page overrides it outright (0.3–3.0), so a run can
+/// be speed-matched to the replay without a rebuild.
+///
+/// On device the value is passed through unchanged: Android's engine already
+/// treats 1.0 as normal and the preference has been tuned against it.
+double effectiveSpeechRate() {
+  final pref = ttsSpeechRate.clamp(0.0, 1.0);
+  if (!kIsWeb) return pref;
+  final q = Uri.base.queryParameters['rate'];
+  final forced = q == null ? null : double.tryParse(q);
+  if (forced != null) return forced.clamp(0.3, 3.0);
+  return (0.5 + pref).clamp(0.5, 1.5);
+}
+
 class VoiceGuide {
   /// Single shared instance so the settings page and the nav page both talk
   /// to the same TTS engine (voice list, voice selection, speech).
@@ -121,12 +144,15 @@ class VoiceGuide {
   Future<void> init() async {
     try {
       await _tts.setLanguage('vi-VN');
-      await _tts.setSpeechRate(ttsSpeechRate.clamp(0.0, 1.0));
+      await _tts.setSpeechRate(effectiveSpeechRate());
+      debugPrint('VOICE: speech rate ${effectiveSpeechRate()} '
+          '(pref ${ttsSpeechRate.toStringAsFixed(2)}, web=$kIsWeb)');
       await _tts.setPitch(ttsPitch.clamp(0.5, 2.0));
       await _applyVolume();
       // Prefer the user-picked voice ("Giọng đọc") if one is selected;
       // otherwise fall back to the engine's default Vietnamese voice.
       await _applySavedVoice();
+      if (kIsWeb) await _applyWebVoice();
       // Make `speak()` resolve only when the utterance has actually FINISHED,
       // so the announcement queue can wait for it instead of guessing (and so
       // the next sentence never starts on top of this one).
@@ -235,11 +261,23 @@ class VoiceGuide {
       await _pauseMedia();
       await _boostVolume();
       if (a.kind == _AnnKind.clip) {
-        debugPrint('VOICE: clip "${a.asset}" (p${a.priority})');
+        // ONE rate for BOTH engines. The recorded pack used to play at a fixed
+        // 1.0x while TTS ran at `ttsSpeechRate` (0.55), so a speed-limit clip and
+        // a manoeuvre sentence came out at different tempos — the "voice pack
+        // speed does not match Android" report. Android applies this via
+        // MediaPlayer.setPlaybackParams; on web there is no pack at all (the
+        // channel is Android-only) and the caller falls back to TTS.
+        final clipRate = effectiveSpeechRate();
+        debugPrint('VOICE: clip "${a.asset}" (p${a.priority}) '
+            'rate=${clipRate.toStringAsFixed(2)}');
         // `wait: true` resolves when the clip actually ends, so the queue
         // cannot start the next announcement on top of this one.
         await _audioChannel
-            .invokeMethod('playAsset', {'asset': a.asset, 'wait': true})
+            .invokeMethod('playAsset', {
+              'asset': a.asset,
+              'wait': true,
+              'speed': clipRate,
+            })
             .timeout(_itemTimeout, onTimeout: () => null);
       } else {
         debugPrint('VOICE: speak "${a.text}" (p${a.priority})');
@@ -300,7 +338,7 @@ class VoiceGuide {
   /// driver changes them in Settings, so a tweak takes effect immediately.
   Future<void> applySpeech() async {
     try {
-      await _tts.setSpeechRate(ttsSpeechRate.clamp(0.0, 1.0));
+      await _tts.setSpeechRate(effectiveSpeechRate());
       await _tts.setPitch(ttsPitch.clamp(0.5, 2.0));
     } catch (_) {}
   }
@@ -315,6 +353,58 @@ class VoiceGuide {
     } catch (e) {
       debugPrint('VOICE: setVoice failed: $e');
     }
+  }
+
+  Future<void> _applyWebVoice() async {
+    for (var attempt = 0; attempt < 25; attempt++) {
+      List<Map<Object?, Object?>> voices = const [];
+      try {
+        final raw = await _tts.getVoices;
+        if (raw is List) voices = raw.cast<Map<Object?, Object?>>();
+      } catch (_) {}
+      if (voices.isNotEmpty) {
+        final vi = voices
+            .where(
+              (v) => (v['locale'] ?? '')
+                  .toString()
+                  .toLowerCase()
+                  .startsWith('vi'),
+            )
+            .toList();
+        if (vi.isEmpty) {
+          debugPrint(
+            'VOICE: this browser exposes no Vietnamese voice '
+            '(${voices.length} voices) — speech will use the default voice',
+          );
+          return;
+        }
+        final pick = ttsVoiceName.isNotEmpty
+            ? vi.firstWhere(
+                (v) => v['name'] == ttsVoiceName,
+                orElse: () => vi.first,
+              )
+            : vi.first;
+        try {
+          await _tts.setVoice(<String, String>{
+            'name': pick['name']?.toString() ?? '',
+            'locale': pick['locale']?.toString() ?? 'vi-VN',
+          });
+          await _tts.setLanguage(pick['locale']?.toString() ?? 'vi-VN');
+          debugPrint(
+            'VOICE: web voice = ${pick['name']} (${pick['locale']}) '
+            'of ${voices.length} available',
+          );
+        } catch (e) {
+          debugPrint('VOICE: web setVoice failed: $e');
+        }
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    debugPrint(
+      'VOICE: browser voices never loaded — the voice stays the browser '
+      'default (usually English)',
+    );
   }
 
   /// Lists the TTS voices the platform currently exposes (Android / iOS /

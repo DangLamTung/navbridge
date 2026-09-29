@@ -167,26 +167,66 @@ String maneuverVerb(int code) => switch (code) {
 // structural (a deliberate U-turn on a dual carriageway often swings only ~90°,
 // and a roundabout's own geometry is a circle), so those keep the router's word.
 
+/// Index of the geometry vertex closest to [point].
+///
+/// With [hint] the search looks in a ±[win] window around it first and only
+/// scans the WHOLE geometry when that window has nothing within [fallbackM] —
+/// the same rule the engine's own snap uses. Without a hint the full scan is
+/// the only correct answer.
+///
+/// Why this exists: the full scan is 16,650 haversines on a Hà Nội → Sài Gòn
+/// route, and [refineManeuverIcon] is asked 2-3x per GPS fix. Un-hinted, that
+/// was ~50k haversines per fix — the per-fix cost growing with route length,
+/// which is the same shape as the 2026-08-24 long-route ANR. Callers that know
+/// roughly where the car is pass the hint; the answer is identical, because a
+/// vertex within [fallbackM] of the maneuver gives the same turn angle.
+int nearestVertexIndex(
+  List<LatLng> geometry,
+  LatLng point, {
+  int? hint,
+  double window = 120,
+  double fallbackM = 25,
+}) {
+  var best = -1;
+  var bestD = double.infinity;
+  if (hint != null && geometry.isNotEmpty) {
+    final lo = (hint - window).clamp(0, geometry.length - 1).toInt();
+    final hi = (hint + window).clamp(0, geometry.length - 1).toInt();
+    for (var i = lo; i <= hi; i++) {
+      final d = _meters(geometry[i], point);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    if (bestD <= fallbackM) return best;
+  }
+  for (var i = 0; i < geometry.length; i++) {
+    final d = _meters(geometry[i], point);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
 /// [geometry] turn angle in degrees at [point]: positive = right (clockwise),
 /// negative = left. Chord bearings are taken [spanM] of polyline either side of
 /// the closest vertex, so a single tiny segment at the vertex can't dominate.
 /// Null when [point] can't be placed, or there isn't enough polyline on BOTH
 /// sides (route start/end).
+///
+/// [nearIndex] is a search hint for that closest vertex (see
+/// [nearestVertexIndex]); it changes nothing about the answer, only the cost.
 double? routeTurnDegrees(
   List<LatLng> geometry,
   LatLng point, {
   double spanM = 45,
+  int? nearIndex,
 }) {
   if (geometry.length < 3) return null;
-  var vi = -1;
-  var best = double.infinity;
-  for (var i = 0; i < geometry.length; i++) {
-    final d = _meters(geometry[i], point);
-    if (d < best) {
-      best = d;
-      vi = i;
-    }
-  }
+  final vi = nearestVertexIndex(geometry, point, hint: nearIndex);
   if (vi <= 0 || vi >= geometry.length - 1) return null;
 
   var backM = 0.0;
@@ -213,7 +253,16 @@ double? routeTurnDegrees(
 /// [fallback] code. Returns [fallback] whenever the geometry can't decide
 /// (no point, too little polyline, a near-straight or U-turn-sized angle) or
 /// the label is not a lateral turn.
-int refineManeuverIcon(List<LatLng> geometry, LatLng? point, int fallback) {
+///
+/// [nearIndex] hints where [point] sits on the geometry — pass the car's own
+/// snap (or the cached vertex of this maneuver) so a long route doesn't pay a
+/// full-geometry scan per fix.
+int refineManeuverIcon(
+  List<LatLng> geometry,
+  LatLng? point,
+  int fallback, {
+  int? nearIndex,
+}) {
   const lateral = {
     iconSlightLeft,
     iconSlightRight,
@@ -221,7 +270,7 @@ int refineManeuverIcon(List<LatLng> geometry, LatLng? point, int fallback) {
     iconTurnRight,
   };
   if (point == null || !lateral.contains(fallback)) return fallback;
-  final deg = routeTurnDegrees(geometry, point);
+  final deg = routeTurnDegrees(geometry, point, nearIndex: nearIndex);
   if (deg == null) return fallback;
   final a = deg.abs();
   // < 18° the geometry itself is uncertain; >= 135° is U-turn shaped, and a

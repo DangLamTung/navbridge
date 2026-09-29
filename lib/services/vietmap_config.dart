@@ -155,6 +155,16 @@ const String graphDownloadBaseUrl = String.fromEnvironment('GRAPH_URL');
 /// over the folder works.
 const String dataUpdateBaseUrl = String.fromEnvironment('DATA_URL');
 
+/// Dynamic custom URL for offline data auto-updates (can be changed in settings/offline).
+String customDataUpdateUrl = '';
+
+/// The effective base URL for offline data updates (cameras, signs, limits).
+String get effectiveDataUpdateUrl {
+  final custom = customDataUpdateUrl.trim();
+  if (custom.isNotEmpty) return custom;
+  return dataUpdateBaseUrl.trim();
+}
+
 /// CARTO API key — used to authenticate CARTO basemap raster tile requests.
 /// Provided at BUILD TIME via `--dart-define=CARTO_API_KEY=...`.
 const String cartoApiKey = String.fromEnvironment('CARTO_API_KEY');

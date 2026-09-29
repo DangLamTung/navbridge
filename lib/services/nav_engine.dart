@@ -10,6 +10,8 @@ import 'package:navbridge/core/nav_protocol.dart';
 import 'package:navbridge/services/offline_geo.dart';
 import 'package:navbridge/services/osrm.dart';
 
+const String kContinuePlaceholder = 'Tiến lên';
+
 /// Everything needed to build a nav frame for the clock.
 class NavProgress {
   final int meter; // distance to the next maneuver
@@ -79,6 +81,10 @@ class TurnByTurnEngine {
   int _curSeg =
       0; // segment index the car projects onto (for route "consuming")
 
+  /// Geometry vertex of each step's maneuver, resolved once per step (see
+  /// [_vertexHint]). Keyed by step index.
+  final Map<int, int> _stepVertex = {};
+
   /// Last position projected onto the route — used as the origin of the
   /// route-ahead bearing ([routeBearing]).
   LatLng? _lastSnapped;
@@ -127,6 +133,26 @@ class TurnByTurnEngine {
     for (var i = 1; i < route.geometry.length; i++) {
       c += fastDistanceMeters(route.geometry[i - 1], route.geometry[i]);
       _cum.add(c);
+    }
+    // The approximation runs SHORT of the route's own distance: measured
+    // -0.07 % on a Hà Nội → Sài Gòn route, which is 1.1 km at the destination
+    // — the banner would stop at "1.1 km" instead of arriving, because the
+    // remaining distance is `route.distance - cum`. Reconcile the cumulative
+    // with the route's own total (the number every other part of the app
+    // shows); on a city drive the correction is metres.
+    //
+    // Only a ROUNDING-level disagreement is reconciled: a route whose declared
+    // distance is nowhere near its geometry is left exactly as declared — that
+    // caller knows something this loop doesn't, and rescaling it would move
+    // every position on the route.
+    if (c > 0 && route.distance > 0) {
+      final k = route.distance / c;
+      if ((k - 1).abs() > 1e-9 && (k - 1).abs() < 0.02) {
+        for (var i = 1; i < _cum.length; i++) {
+          _cum[i] *= k;
+        }
+        c = route.distance;
+      }
     }
     var sc = 0.0;
     for (final s in route.steps) {
@@ -427,7 +453,16 @@ class TurnByTurnEngine {
     final nextIdx = upIdx + 1;
     final next = nextIdx < route.steps.length ? route.steps[nextIdx] : null;
 
-    final meter = (_stepCum[_nextStep] - cum).clamp(0, route.distance).round();
+    // Distance to the destination itself. The steps' cumulative sum is what
+    // the "next manoeuvre" meter is measured on, but a step list whose
+    // distances under-count the route (a replay track, a router response)
+    // used to reach the arrival step with part of the drive still ahead —
+    // the banner read "0 m · đến nơi" while the car had kilometres to go.
+    // Arrival is decided on this number, never on the step sum.
+    final remaining = (route.distance - cum).clamp(0.0, route.distance);
+    final meter = upcoming.type == 'arrive'
+        ? remaining.round()
+        : (_stepCum[_nextStep] - cum).clamp(0, route.distance).round();
     var icon = iconForManeuver(upcoming.type, upcoming.modifier);
     // ⭐ Verify the router's left/right LABEL against the route's own geometry
     // before anyone repeats it (banner arrow, voice verb, ESP32 maneuver
@@ -435,10 +470,18 @@ class TurnByTurnEngine {
     // disagreed on "said right / went left" callouts — the geometry is the path
     // the driver is about to drive, so it wins inside the lateral family
     // (U-turn/roundabout stay as routed; see refineManeuverIcon).
-    icon = refineManeuverIcon(route.geometry, upcoming.maneuver, icon);
+    //
+    // The hint is what keeps this affordable on a long route: without it the
+    // vertex lookup scanned the WHOLE geometry, 2-3x per fix.
+    icon = refineManeuverIcon(
+      route.geometry,
+      upcoming.maneuver,
+      icon,
+      nearIndex: _vertexHint(upIdx, upcoming.maneuver),
+    );
     // Don't announce "you have arrived" from the start of the last long road
     // — keep "go straight" until the destination is actually close.
-    if (upcoming.type == 'arrive' && meter > 80) icon = iconStraight;
+    if (upcoming.type == 'arrive' && remaining > 80) icon = iconStraight;
 
     // ETA from the remaining duration (proportional to remaining distance),
     // then ADAPTED to the driver's real pace: the routing engine's duration
@@ -472,7 +515,7 @@ class TurnByTurnEngine {
     }
     final eta = DateTime.now().add(Duration(seconds: remainSec));
 
-    final text = cur.name.isNotEmpty ? cur.name : 'Tiến lên';
+    final text = cur.name.isNotEmpty ? cur.name : kContinuePlaceholder;
 
     // Which stop are we heading to?
     var passed = 0;
@@ -493,6 +536,7 @@ class TurnByTurnEngine {
               route.geometry,
               next.maneuver,
               iconForManeuver(next.type, next.modifier),
+              nearIndex: _vertexHint(nextIdx, next.maneuver),
             ),
       // The road you turn INTO for the upcoming maneuver (used by the voice
       // announcement "turn left onto X" and the "then" chip).
@@ -513,10 +557,23 @@ class TurnByTurnEngine {
           ? 0
           : (cum / route.distance).clamp(0.0, 1.0),
       // Distance to the FINAL point (not the next maneuver).
-      remainingMeters: route.distance <= 0
-          ? 0
-          : (route.distance - cum).clamp(0.0, route.distance),
+      remainingMeters: remaining,
     );
+  }
+
+  /// Geometry vertex of a step's maneuver, resolved ONCE per step.
+  ///
+  /// The first lookup may search the whole geometry (the maneuver can sit far
+  /// ahead of the car); every later fix reuses the answer as a search hint, so
+  /// the per-fix cost stays bounded by the window instead of the route length.
+  int? _vertexHint(int stepIdx, LatLng? maneuver) {
+    if (maneuver == null) return null;
+    final hit = _stepVertex[stepIdx];
+    if (hit != null) return hit;
+    final v = nearestVertexIndex(route.geometry, maneuver, hint: _curIdx);
+    if (v < 0) return null;
+    _stepVertex[stepIdx] = v;
+    return v;
   }
 
   /// Nearest polyline index to `pos`, searching around the last snap first.

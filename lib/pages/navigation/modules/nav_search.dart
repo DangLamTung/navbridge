@@ -709,6 +709,9 @@ extension _NavSearch on _NavigationPageState {
       _stops.add(TripStop(name: name, lat: lat, lng: lng));
       _destination = LatLng(lat, lng);
       _searchCtrl.clear();
+      // A destination the driver just chose replaces the one being offered to
+      // continue.
+      _resumeTrip = null;
     });
     try {
       await _buildPlanRoute();

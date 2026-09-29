@@ -80,6 +80,75 @@ bool postedLimitMatchesName(String? segmentName, String settledName) {
   return sameRoad(segmentName, settledName);
 }
 
+/// The same question with EVERY name we know for the road under the car.
+///
+/// [settled] is the name on screen (empty until a road lookup answers),
+/// [osmName] the last OSM-tagged name, [routeNames] the route's own names here.
+/// The segment's value is adopted if it agrees with ANY of them.
+///
+/// A veto needs something to veto against: when all three are empty the
+/// segment is the only evidence there is, so its value is adopted. Refusing it
+/// is how a 1,686 km drive down QL1A showed no limit at all while the pack knew
+/// it within 25 m at 78 of its 79 sampled points (2026-09-27) — the road lookup
+/// that would have named the road was failing (Overpass 504 on the web build,
+/// offline graph elsewhere), and the layer was waiting for it.
+bool layerLimitMatchesNames({
+  required String? segmentName,
+  required String settled,
+  required String osmName,
+  required Iterable<String> routeNames,
+  bool ridden = false,
+}) {
+  if (segmentName == null || segmentName.isEmpty) return true; // 62% unnamed
+  // ⭐ A segment the car is RIDING is evidence about the road UNDER it, whatever
+  // name we happen to hold.
+  //
+  // Every rule below compares NAMES, so all of them can be defeated by one wrong
+  // name — and the name they compare against is the road matcher's, which names
+  // a road that is not the one under the car on ~48% of fixes (see the library
+  // doc). Measured on the 2026-09-29 08:37 drive at the Trường Chinh turn: the
+  // matcher held "Trương Công Định" (tertiary, 9.2 m, 83-128° across the car)
+  // while the segment the car rode was Trường Chinh 60 (7.9 m, 1-11° along it),
+  // so the value was refused and the dial showed the wrong road's 50 for 29
+  // fixes — the device's own log (`limitLayer=segment`, 50 km/h, street "Trương
+  // Công Định") is what proved it was not a simulator artefact.
+  //
+  // This does NOT reopen the case the check exists for. The check stops a segment
+  // that runs ACROSS the car (a crossing street) from posting its value for our
+  // road, and a crossing segment is by definition not riding-aligned — see
+  // `SpeedLimitResult.aligned`, set from the same 45° test `segmentScore` uses.
+  if (ridden) return true;
+  if (settled.isNotEmpty && sameRoad(segmentName, settled)) return true;
+  if (osmName.isNotEmpty && sameRoad(segmentName, osmName)) return true;
+  // Only names that really are names: the caller must already have filtered
+  // blanks and the engine's "carry on" placeholder with [routeRoadNames].
+  final routes = routeNames.where((n) => n.trim().isNotEmpty);
+  if (settled.isEmpty && osmName.isEmpty && routes.isEmpty) return true;
+  return routes.any((n) => sameRoad(n, segmentName));
+}
+
+/// The route's three name slots, filtered to names worth comparing.
+///
+/// The engine fills a step with [placeholder] ("Tiến lên" — carry on straight)
+/// when the step HAS no street name, and that placeholder is not a road. Passing
+/// it in as a route name made every real street disagree with the route, so the
+/// posted limit was dropped: measured on the 1,686 km QL1A fixture, the dial
+/// read '-' on all 84,532 fixes while the offline segment pack held 60 under the
+/// car. Blank slots are dropped for the same reason.
+Set<String> routeRoadNames(
+  Iterable<String?> slots, {
+  String placeholder = '',
+}) {
+  final out = <String>{};
+  for (final s in slots) {
+    final t = (s ?? '').trim();
+    if (t.isEmpty) continue;
+    if (placeholder.isNotEmpty && t == placeholder) continue;
+    out.add(t);
+  }
+  return out;
+}
+
 /// Hysteresis for a road-name change: the new name must be proposed
 /// [confirmFixes] times, or the car must travel [confirmMeters] while it is
 /// proposed, before it replaces the name on screen.
@@ -151,4 +220,45 @@ class RoadNameHysteresis {
 
   /// Observations closer together than this are one observation.
   static const Duration _minObservationGap = Duration(milliseconds: 400);
+}
+
+/// The name to hand the posted-limit layer as `expectStreet` — the name that is
+/// allowed to make the layer REJECT a segment whose own street disagrees.
+///
+/// Only a name the ROUTE confirms is trustworthy enough to veto with. The
+/// matcher names a road that is not the one under the car on ~48% of fixes
+/// (see [pickRoadName]), and vetoing with that wrong name makes the layer throw
+/// away the segment that is really there — so the WRONG road's limit is adopted
+/// and the chip never changes.
+///
+/// Measured on the 2026-09-29 drive: the car sat 2-24 m from **Trường Chinh**
+/// (60 km/h) for 24 consecutive fixes while `expectStreet` was the crossing
+/// **Trương Công Định**, pinning the answer to that road's 50 — and the layer's
+/// own answer for the same fixes was Trường Chinh. The driver saw exactly that:
+/// "trường chinh change too slow".
+///
+/// Returns the ROUTE's own current name when neither the OSM nor the shown name
+/// is one the route knows — the route is the one source that says which road the
+/// car is following. [routeCurrent] empty (and no confirmed name) returns '' i.e.
+/// no veto: the layer is then free to answer, and [layerLimitMatchesNames] still
+/// gates what comes back. An empty [routeNames] keeps the old behaviour — there
+/// is nothing to compare against, so the OSM name stands.
+String vetoStreetFor({
+  required String osmName,
+  required String shownName,
+  required Iterable<String> routeNames,
+  String routeCurrent = '',
+}) {
+  final names = [for (final n in routeNames) if (n.trim().isNotEmpty) n];
+  if (names.isEmpty) {
+    return osmName.trim().isNotEmpty ? osmName : shownName;
+  }
+  if (osmName.trim().isNotEmpty && names.any((n) => sameRoad(n, osmName))) {
+    return osmName;
+  }
+  if (shownName.trim().isNotEmpty && names.any((n) => sameRoad(n, shownName))) {
+    return shownName;
+  }
+  if (routeCurrent.trim().isNotEmpty) return routeCurrent;
+  return '';
 }

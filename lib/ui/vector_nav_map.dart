@@ -25,6 +25,7 @@ import 'package:navbridge/services/nav_tile_server.dart';
 import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/offline_cameras.dart';
 import 'package:navbridge/ui/camera_icon.dart';
+import 'package:navbridge/ui/nav_layout_math.dart';
 import 'package:navbridge/services/offline_geo.dart';
 import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/poi_search.dart';
@@ -150,7 +151,7 @@ class VectorNavMap extends StatefulWidget {
     this.smoothCamera = true,
     this.controller,
     this.showCompass = true,
-    this.defaultZoom = 19,
+    this.defaultZoom = 16,
     this.initialCenter,
     this.onPoiTap,
     this.onCameraTap,
@@ -161,8 +162,6 @@ class VectorNavMap extends StatefulWidget {
   /// Route polyline to draw (latlong2 points).
   final List<ll.LatLng> routeGeometry;
 
-  /// Starting camera zoom (default 19 ≈ ~200 m view). The PiP window uses a
-  /// lower zoom (~17 ≈ ~1 km) since it can't be pinched.
   final double defaultZoom;
 
   /// Route steps (maneuvers) — used for the traffic-colored route and the
@@ -381,10 +380,7 @@ class _VectorNavMapState extends State<VectorNavMap>
   final List<({PoiResult poi, Offset pos})> _poiOverlays = [];
   final List<({PoiResult poi, Offset pos})> _searchOverlays = [];
   bool _hasPosition = false;
-  // Vietmap-style nav camera: start at [widget.defaultZoom] (max for the full
-  // map, ~18 for the PiP window which can't be pinched). The user can pinch
-  // to a different zoom — it's adopted (see [_onCamIdle]) so follow keeps the
-  // map at the zoom the user chose instead of snapping back.
+  double? _camBearingDeg;
   late double _zoom = widget.defaultZoom;
   String? _lastRouteSig;
 
@@ -1475,39 +1471,33 @@ class _VectorNavMapState extends State<VectorNavMap>
     return '$bx,$by|$core';
   }
 
-  /// Cap [signs] to the [max] NEAREST to [cur] — the same rule as
-  /// [_nearestCameras], for the same two reasons: cost, and relevance. The list
-  /// arrives in DATABASE order, so "take the first N" is not a selection at all.
-  List<RoadSign> _nearestSigns(List<RoadSign> signs, int max, ll.LatLng? cur) {
-    if (signs.length <= max) return signs;
-    if (cur == null) return signs.take(max).toList();
-    final s = [...signs];
-    s.sort(
-      (a, b) => _distMeters(
-        cur,
-        ll.LatLng(a.lat, a.lng),
-      ).compareTo(_distMeters(cur, ll.LatLng(b.lat, b.lng))),
-    );
+  /// Cap [items] to the [max] nearest [cur]. The lists arrive in DATABASE order
+  /// (nationwide file order), so "take the first N" selects an arbitrary subset
+  /// of markers, usually tens of km away.
+  List<T> _nearest<T>(
+    List<T> items,
+    int max,
+    ll.LatLng? cur,
+    ll.LatLng Function(T) at,
+  ) {
+    if (items.length <= max) return items;
+    if (cur == null) return items.take(max).toList();
+    final s = [...items]
+      ..sort(
+        (a, b) =>
+            _distMeters(cur, at(a)).compareTo(_distMeters(cur, at(b))),
+      );
     return s.take(max).toList();
   }
 
-  /// Cap [cams] to the [max] nearest to [cur] (perf: 4 native circles per
-  /// camera — hundreds of circle adds freeze the map on dense cities).
+  List<RoadSign> _nearestSigns(List<RoadSign> signs, int max, ll.LatLng? cur) =>
+      _nearest(signs, max, cur, (s) => ll.LatLng(s.lat, s.lng));
+
   List<OfflineCamera> _nearestCameras(
     List<OfflineCamera> cams,
     int max,
     ll.LatLng? cur,
-  ) {
-    if (cams.length <= max || cur == null) return cams;
-    final s = [...cams];
-    s.sort(
-      (a, b) => _distMeters(
-        cur,
-        ll.LatLng(a.lat, a.lng),
-      ).compareTo(_distMeters(cur, ll.LatLng(b.lat, b.lng))),
-    );
-    return s.take(max).toList();
-  }
+  ) => _nearest(cams, max, cur, (c) => ll.LatLng(c.lat, c.lng));
 
   /// Camera markers (colored dot per focus) on the nav map. Mirrors
   /// [_updatePois]: clear-then-rebuild when the signature changes.
@@ -1632,6 +1622,39 @@ class _VectorNavMapState extends State<VectorNavMap>
     unawaited(_projectSignOverlays());
   }
 
+  /// Signs the layer may draw: important kinds only between z11 and z13, and
+  /// never one the car has already passed ([signsAheadOfDriver]).
+  List<RoadSign> _signPool(List<RoadSign> signs) {
+    final car = widget.current;
+    final bearing = _routeBearing();
+    final visible = car == null || bearing <= 0
+        ? signs
+        : signsAheadOfDriver(signs, car: car, headingDeg: bearing);
+    return _zoom < 13.0 ? visible.where((s) => s.isImportant).toList() : visible;
+  }
+
+  /// Why nothing was drawn: the car's heading, and how far along it the
+  /// candidates sit (negative = behind the car, i.e. filtered out).
+  void _logSignLayerEmpty(List<RoadSign> pool) {
+    final c = widget.current;
+    final b = _routeBearing();
+    var lo = double.infinity, hi = -double.infinity;
+    if (c != null) {
+      for (final s in pool) {
+        final along = alongHeadingMeters(c, ll.LatLng(s.lat, s.lng), b);
+        if (along < lo) lo = along;
+        if (along > hi) hi = along;
+      }
+    }
+    debugPrint(
+      'VECTORMAP: sign layer empty — candidates=${pool.length} '
+      'bearing=${b.toStringAsFixed(1)} car='
+      '${c?.latitude.toStringAsFixed(5)},${c?.longitude.toStringAsFixed(5)} '
+      'along=${lo.isFinite ? '${lo.toStringAsFixed(0)}..'
+          '${hi.toStringAsFixed(0)}m' : 'n/a'}',
+    );
+  }
+
   /// Project the non-traffic-light signs (real icons) to their on-screen
   /// spots so the SVG-like overlays stay glued to the map while following or
   /// panning. Same physical→logical fix as the car arrow (device px / dpr).
@@ -1660,20 +1683,11 @@ class _VectorNavMapState extends State<VectorNavMap>
     // Cameras have always picked nearest-first (_nearestCameras); signs now do
     // too, which is also what makes a bigger cap affordable.
     final List<RoadSign> activeSigns;
+    var pool = const <RoadSign>[];
     if (_zoom < 11.0) {
       activeSigns = const [];
     } else {
-      // Drop what the car has already driven past (see signsAheadOfDriver): a
-      // marker for a sign behind you is noise, and it returns by itself when the
-      // heading does. Needs a live position AND a known bearing.
-      final car = widget.current;
-      final bearing = _routeBearing();
-      final visible = car == null || bearing <= 0
-          ? signs
-          : signsAheadOfDriver(signs, car: car, headingDeg: bearing);
-      final pool = _zoom < 13.0
-          ? visible.where((s) => s.isImportant).toList()
-          : visible;
+      pool = _signPool(signs);
       activeSigns = _nearestSigns(pool, signMarkerCap(_zoom), widget.current);
     }
     if (activeSigns.length != _lastSignCount) {
@@ -1682,6 +1696,7 @@ class _VectorNavMapState extends State<VectorNavMap>
         'VECTORMAP: sign layer n=${activeSigns.length} '
         '(zoom ${_zoom.toStringAsFixed(1)} of ${signs.length} on route)',
       );
+      if (activeSigns.isEmpty && pool.isNotEmpty) _logSignLayerEmpty(pool);
     }
 
     if (activeSigns.isEmpty) {
@@ -1742,6 +1757,7 @@ class _VectorNavMapState extends State<VectorNavMap>
       }
     }
     if (list.isEmpty) return;
+    _spreadSignOverlays(list); // 40 px icons do not belong on the road centre
     try {
       // Diff to avoid rebuild spam (positions are recreated each call).
       var changed = list.length != _signOverlays.length;
@@ -1764,9 +1780,28 @@ class _VectorNavMapState extends State<VectorNavMap>
     } catch (_) {}
   }
 
+  void _spreadSignOverlays(List<({RoadSign sign, Offset pos})> list) {
+    final placed = spreadSignMarkers(
+      [for (final o in list) o.pos],
+      roadBearingDeg: _routeBearing(),
+      cameraBearingDeg: _camBearingDeg ?? _bearing(),
+      sidePx: _signSidePx,
+      stackPx: _signStackPx,
+      clusterPx: _signClusterPx,
+    );
+    for (var i = 0; i < list.length; i++) {
+      list[i] = (sign: list[i].sign, pos: placed[i]);
+    }
+  }
+
+  static const double _signSidePx = 24;
+  static const double _signStackPx = 56;
+  static const double _signClusterPx = 44;
+
   void _updateRoute() {
     final ctrl = _controller;
     if (ctrl == null) return;
+
     if (_lastRouteSig != _routeSignature()) {
       // Drop the old overlays and rebuild (route change = new geometry).
       // Bump the generation first so any in-flight _addRoute can't orphan a
@@ -1863,9 +1898,6 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// 3D perspective angle — Vietmap SimpleCamera.DEFAULT_TILT (50).
   static const double _tilt = 50;
 
-  /// Where the car sits on screen, as a fraction of the visible map height
-  /// measured from the camera center. 0 = dead center (the user wants the car
-  /// centered; at [_zoom] 19 there's still ~290 m of road visible ahead).
   static const double _carAnchor = 0.0;
 
   void _followPosition() {
@@ -1904,7 +1936,7 @@ class _VectorNavMapState extends State<VectorNavMap>
       widget.controller?.setZoom(_zoom);
     }
     if (ctrl.isCameraMoving) return;
-    final bearing = _bearing();
+    final bearing = _camBearingDeg ?? _bearing();
     final ahead = _followTarget(car, bearing > 0 ? bearing : 0, _zoom);
     final want = CameraPosition(
       target: LatLng(ahead.latitude, ahead.longitude),
@@ -1917,7 +1949,9 @@ class _VectorNavMapState extends State<VectorNavMap>
         ? null
         : ll.LatLng(last.target.latitude, last.target.longitude);
     final moved = lastTarget == null || _distMeters(lastTarget, ahead) > 1.0;
-    final turned = last == null || ((bearing - last.bearing) % 360).abs() > 1.0;
+    final turned =
+        last == null ||
+        ((bearing - last.bearing) % 360).abs() > (widget.smoothCamera ? 0.2 : 1.0);
     final zoomChanged = last == null || (want.zoom - last.zoom).abs() > 0.01;
     final tiltChanged = last == null || (want.tilt - last.tilt).abs() > 0.5;
     if (moved || turned || zoomChanged || tiltChanged) {
@@ -1961,6 +1995,13 @@ class _VectorNavMapState extends State<VectorNavMap>
     }
     final dtS = now.difference(_lastCamStep).inMilliseconds / 1000.0;
     _lastCamStep = now;
+    final wantBearing = _bearing();
+    final curBearing = _camBearingDeg;
+    if (curBearing == null || !widget.headingUp || dtS <= 0 || dtS > 1.0) {
+      _camBearingDeg = wantBearing; // (re)snap: first frame / north-up toggle
+    } else {
+      _camBearingDeg = easeBearingDeg(curBearing, wantBearing, dtS);
+    }
     // Dead-reckon the complementary filter between fixes (~30 fps) so the
     // camera keeps gliding smoothly; snap the predicted position back onto
     // the route so it never cuts a corner (Google-style "puck rides road")
@@ -2572,6 +2613,7 @@ class _VectorNavMapState extends State<VectorNavMap>
     widget.controller?.setFollowing(true);
     _hasPosition = false;
     _lastFollowCam = null;
+    _camBearingDeg = null; // snap the bearing on the next tick
     _followPosition();
   }
 

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base href="/">
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="NavBridge replay harness">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="eink_osm">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+  <title>NavBridge — logged replay</title>
+  <link rel="manifest" href="manifest.json">
+  <script>
+    // Drop any stale service worker first: it would keep serving the previous
+    // build to this page, and a replay of the OLD code is worse than no replay.
+    (function () {
+      try {
+        if (navigator.serviceWorker) {
+          navigator.serviceWorker.getRegistrations().then(function (rs) {
+            rs.forEach(function (r) { r.unregister(); });
+          });
+        }
+      } catch (e) {}
+    })();
+
+    // Console sink: the app's debugPrint goes to the browser console, and this
+    // build renders to a canvas — so nothing can be read from the DOM. Batch
+    // every console line and POST it to the server, which appends it to a file.
+    // sendBeacon is refused by this browser, so plain fetch (verified to
+    // deliver). A heartbeat every 3 s of silence is POSTed too: it marks the
+    // moment the page stops yielding, which is how a saturated run is spotted.
+    (function () {
+      var t0 = Date.now();
+      var buf = [];
+      var last = Date.now();
+      function send(lines) {
+        try {
+          fetch('/__log', { method: 'POST', body: lines.join('\n') });
+        } catch (e) {}
+      }
+      function push(line) {
+        buf.push('+' + (Date.now() - t0) + 'ms ' + line);
+        last = Date.now();
+      }
+      function flush() {
+        if (buf.length) {
+          var out = buf;
+          buf = [];
+          send(out);
+        } else if (Date.now() - last > 3000) {
+          last = Date.now();
+          send(['HB idle ' + (Date.now() - t0) + 'ms']);
+        }
+      }
+      ['log', 'warn', 'error', 'info'].forEach(function (k) {
+        var orig = console[k];
+        console[k] = function () {
+          try {
+            push(Array.prototype.map.call(arguments, function (a) {
+              return typeof a === 'string' ? a : JSON.stringify(a);
+            }).join(' '));
+          } catch (e) {}
+          if (orig) { try { orig.apply(console, arguments); } catch (e) {} }
+        };
+      });
+      window.addEventListener('error', function (e) {
+        // A resource that fails to load reports an EMPTY message, which made
+        // "PAGE-ERROR Uncaught" look like an app fault. Name the thing that
+        // failed so the line is self-explanatory (in practice these are the
+        // unreachable OSM tile fetches).
+        var t = e.target || {};
+        var where = t.src || t.href || e.filename || '';
+        var msg = e.message || (e.error && e.error.message) || e.type;
+        push('PAGE-ERROR ' + msg + (where ? '  <- ' + where : ''));
+      }, true);
+      window.addEventListener('unhandledrejection', function (e) {
+        push('PAGE-REJECT ' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+      });
+      setInterval(flush, 300);
+    })();
+  </script>
+</head>
+<body>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

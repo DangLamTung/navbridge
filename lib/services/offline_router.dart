@@ -355,38 +355,149 @@ Future<bool> routingGraphPresent() async {
   return false;
 }
 
-/// Download the GraphHopper routing data directly on the phone,
-/// convert it into the offline graph, and delete the downloaded file to save storage.
-Future<bool> downloadGraph([
-  void Function(int done, int total)? onProgress,
-  String? customUrl,
-]) async {
-  final urlStr = (customUrl != null && customUrl.isNotEmpty)
-      ? customUrl
-      : (graphDownloadBaseUrl.isNotEmpty
-            ? (graphDownloadBaseUrl.endsWith('.ghz') ||
-                      graphDownloadBaseUrl.endsWith('.pbf')
-                  ? graphDownloadBaseUrl
-                  : '$graphDownloadBaseUrl/graph.ghz')
-            : 'https://download.geofabrik.de/asia/vietnam-latest.osm.pbf');
+/// Built-in source for the offline routing graph: the Geofabrik Việt Nam OSM
+/// extract. It is an `.osm.pbf`, converted to a GraphHopper graph on the phone
+/// by [downloadGraph]; no separately hosted `.ghz` is required.
+const String graphDefaultUrl =
+    'https://download.geofabrik.de/asia/vietnam-latest.osm.pbf';
 
+/// Preset region for quick offline routing graph download.
+class GraphRegionPreset {
+  final String id;
+  final String name;
+  final String description;
+  final String url;
+  const GraphRegionPreset({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.url,
+  });
+}
+
+/// Popular region extracts available for direct download.
+const List<GraphRegionPreset> kGraphRegionPresets = [
+  GraphRegionPreset(
+    id: 'saigon',
+    name: 'TP. Hồ Chí Minh',
+    description: '~25 MB PBF, xử lý nhanh (~1-2 phút)',
+    url: 'https://download.bbbike.org/osm/bbbike/HoChiMinhCity/HoChiMinhCity.osm.pbf',
+  ),
+  GraphRegionPreset(
+    id: 'hanoi',
+    name: 'Hà Nội',
+    description: '~20 MB PBF, xử lý nhanh (~1-2 phút)',
+    url: 'https://download.bbbike.org/osm/bbbike/Hanoi/Hanoi.osm.pbf',
+  ),
+  GraphRegionPreset(
+    id: 'danang',
+    name: 'Đà Nẵng',
+    description: '~15 MB PBF, xử lý nhanh (~1 phút)',
+    url: 'https://download.bbbike.org/osm/bbbike/DaNang/DaNang.osm.pbf',
+  ),
+  GraphRegionPreset(
+    id: 'vietnam',
+    name: 'Toàn Việt Nam',
+    description: '~180 MB PBF (Geofabrik), toàn quốc',
+    url: 'https://download.geofabrik.de/asia/vietnam-latest.osm.pbf',
+  ),
+];
+
+/// The URL [downloadGraph] actually fetches: [customUrl] when given, else the
+/// build-time `GRAPH_URL` (with `/graph.ghz` appended unless it already names
+/// an archive), else the built-in [graphDefaultUrl].
+///
+/// Shared with the in-app link list (`offline_links.dart`) so the Offline
+/// screen can show the same URL the download would use.
+String resolveGraphUrl([String? customUrl]) {
+  if (customUrl != null && customUrl.isNotEmpty) return customUrl;
+  if (graphDownloadBaseUrl.isEmpty) return graphDefaultUrl;
+  if (graphDownloadBaseUrl.endsWith('.ghz') ||
+      graphDownloadBaseUrl.endsWith('.pbf')) {
+    return graphDownloadBaseUrl;
+  }
+  return '$graphDownloadBaseUrl/graph.ghz';
+}
+
+/// Which half of a graph install is running.
+///
+/// The two halves are very different to sit through: the download is minutes over
+/// the network WITH a percentage, the conversion is minutes of CPU with none. The
+/// screen needs to say which one it is in, or a bar sitting at 100% reads as a
+/// hung app while the phone is actually building the graph.
+enum GraphPhase { downloading, processing }
+
+/// Install the offline routing graph: **download it, then convert it on the
+/// phone**.
+///
+/// ONE region on purpose — Việt Nam. The default source is the Geofabrik Việt Nam
+/// extract ([graphDefaultUrl]), i.e. the whole country in one `.osm.pbf`; a
+/// per-province or per-tile scheme would need a different converter and a
+/// different storage layout, and the phone has to hold the extract AND the built
+/// graph at once. `--dart-define=GRAPH_URL` (or a URL typed on the Offline
+/// screen) replaces it with your own `.ghz`/`.pbf`, still for this one region.
+///
+/// ⛔ On a failed conversion the downloaded source is DELETED. Leaving it would
+/// make [routingGraphPresent] answer "installed" for the rest of time (it reads
+/// the existence of `routing_graph.osm.pbf` as a graph), so the app would claim
+/// offline routing it does not have and repeat the same doomed conversion at
+/// every start.
+Future<bool> downloadGraph({
+  void Function(int done, int total)? onProgress,
+  void Function(GraphPhase phase)? onPhase,
+  String? customUrl,
+}) async {
+  // resolveGraphUrl owns the precedence: a typed/pasted URL, else GRAPH_URL,
+  // else the built-in Việt Nam extract.
+  final urlStr = resolveGraphUrl(customUrl);
   final dir = await routingGraphDir();
   final isPbf = urlStr.contains('.pbf');
   final target = isPbf ? '$dir.osm.pbf' : '$dir.ghz';
+
+  onPhase?.call(GraphPhase.downloading);
   final ok = await downloadToFile(urlStr, target, onProgress ?? (_, _) {});
   if (!ok) {
     throw StateError('Không tải được bộ dữ liệu GraphHopper ($urlStr).');
   }
-  // Convert/extract on the phone. Once converted, the native loader automatically deletes the downloaded file!
-  return OfflineRouter.instance.load(target);
+
+  // Convert (`.pbf` → build a graph) or extract (`.ghz`) on the phone. This runs
+  // on the native executor, so minutes are normal for the country extract; the
+  // loader deletes the download itself once the graph is built.
+  onPhase?.call(GraphPhase.processing);
+  final loaded = await OfflineRouter.instance.load(target);
+  if (!loaded) {
+    _deleteQuietly(target);
+    if (isPbf) {
+      // The converter deletes the graph folder BEFORE importing, so after a
+      // failed import what is left is debris — and a non-empty folder also reads
+      // as "installed" to [routingGraphPresent].
+      _deleteQuietly(dir, recursive: true);
+    }
+  }
+  return loaded;
 }
 
-/// Download [url] to [target] with byte progress; returns true on success.
+/// Longest gap between two chunks before a transfer counts as dead.
+///
+/// The 30 s timeout below covers the response HEADERS only; the body had none at
+/// all, so a connection that went quiet mid-file left the download spinning for
+/// ever, with the button stuck and no way back except killing the app.
+const Duration _downloadStall = Duration(seconds: 45);
+
+/// Download [url] to [target]; true only when the WHOLE file arrived.
+///
+/// ⚠ ATOMIC: bytes go to `<target>.part` and are renamed into place only after the
+/// transfer completes, so a dropped connection can never leave a partial file
+/// under the real name. That is the difference between "the download failed, try
+/// again" and "the app believes it has a 4 GB Việt Nam extract, but what it has
+/// is the first 60% of one". `downloadNavMap` already worked this way. ⛔ This one
+/// mattered because [routingGraphPresent] trusts the FILENAME.
 Future<bool> downloadToFile(
   String url,
   String target,
   void Function(int done, int total) onProgress,
 ) async {
+  final part = File('$target.part');
   final client = http.Client();
   try {
     final req = http.Request('GET', Uri.parse(url));
@@ -395,24 +506,76 @@ Future<bool> downloadToFile(
     final streamed = await client
         .send(req)
         .timeout(const Duration(seconds: 30));
-    final total = streamed.contentLength ?? 0;
-    if (streamed.statusCode != 200) return false;
-    final file = File(target);
-    file.createSync(recursive: true);
-    final sink = file.openWrite();
-    var done = 0;
-    await for (final chunk in streamed.stream) {
-      sink.add(chunk);
-      done += chunk.length;
-      onProgress(done, total);
+    if (streamed.statusCode != 200) {
+      debugPrint('DL: HTTP ${streamed.statusCode} for $url');
+      return false;
     }
-    await sink.close();
+    final total = streamed.contentLength ?? 0;
+    part.parent.createSync(recursive: true);
+    if (part.existsSync()) part.deleteSync();
+    final sink = part.openWrite();
+    var done = 0;
+    var complete = false;
+    try {
+      // `.timeout` on the STREAM, not on the send: it fires per gap between
+      // chunks, so a transfer that dies mid-file fails instead of hanging.
+      await for (final chunk in streamed.stream.timeout(_downloadStall)) {
+        sink.add(chunk);
+        done += chunk.length;
+        onProgress(done, total);
+      }
+      await sink.flush();
+      complete = true;
+    } finally {
+      // Closed on EVERY path. The old version returned from the catch with the
+      // handle still open and its buffered tail never flushed.
+      await sink.close();
+    }
+    if (!complete || done == 0) return false;
+    if (total > 0 && done != total) {
+      // A proxy or a dropped connection that closes early looks exactly like a
+      // clean end of stream, so compare against the declared length.
+      debugPrint('DL: short read $done/$total for $url');
+      return false;
+    }
+    // A 200 carrying an HTML error page or a captive-portal login is not an
+    // extract: a `.pbf` is a protobuf blob and a `.ghz` is a zip, so neither
+    // begins with '<'.
+    final raf = part.openSync();
+    final magic = raf.readSync(16);
+    raf.closeSync();
+    if (magic.isNotEmpty && magic[0] == 0x3C) {
+      debugPrint('DL: got a text page, not a graph archive: $url');
+      return false;
+    }
+    final out = File(target);
+    if (out.existsSync()) out.deleteSync();
+    part.renameSync(target);
     return true;
-  } catch (_) {
+  } catch (e) {
+    debugPrint('DL: failed $url: $e');
     return false;
   } finally {
+    // After a successful rename `part` is already gone, so this only ever removes
+    // a FAILED transfer's leftovers.
+    _deleteQuietly(part.path);
     client.close();
   }
+}
+
+/// Delete [path] (file, or directory with [recursive]) and swallow failures.
+void _deleteQuietly(String path, {bool recursive = false}) {
+  try {
+    final f = File(path);
+    if (f.existsSync()) {
+      f.deleteSync();
+      return;
+    }
+    if (recursive) {
+      final d = Directory(path);
+      if (d.existsSync()) d.deleteSync(recursive: true);
+    }
+  } catch (_) {}
 }
 
 /// Best route source: on-device GraphHopper when loaded, OSRM otherwise.

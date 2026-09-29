@@ -16,6 +16,7 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:latlong2/latlong.dart';
 
 import 'offline_cameras.dart';
@@ -132,7 +133,8 @@ class _InitMsg {
 /// A query for points AHEAD of `current` along `geometry`.
 class _QueryAhead {
   final int id;
-  final SendPort replyPort;
+
+  final SendPort? replyPort;
   final _Kind kind;
   final LatLng current;
   final List<LatLng> geometry;
@@ -155,7 +157,7 @@ class _QueryAhead {
 /// A query for points NEAR the whole route polyline.
 class _QueryNear {
   final int id;
-  final SendPort replyPort;
+  final SendPort? replyPort;
   final _Kind kind;
   final List<LatLng> geometry;
   final double corridorMeters;
@@ -222,7 +224,12 @@ class OfflineScanIsolate {
     });
   }
 
-  Future<Object?> _query<T>(T Function(int id, SendPort reply) make) async {
+  Future<Object?> _query<T>(T Function(int id, SendPort? reply) make) async {
+    if (_inline) {
+      _cams ??= await loadOfflineCameras();
+      _signs ??= await loadOfflineRoadSigns();
+      return _runQuery(make(-1, null) as Object, _cams, _signs);
+    }
     await _ensure();
     final id = _seq++;
     final c = Completer<Object?>();
@@ -230,6 +237,11 @@ class OfflineScanIsolate {
     _send!.send(make(id, _receive.sendPort));
     return c.future;
   }
+
+  bool get _inline => kIsWeb;
+
+  List<OfflineCamera>? _cams;
+  List<RoadSign>? _signs;
 
   /// Cameras ahead of [current] along [geometry], ordered by along-route
   /// distance, limited to [maxAheadMeters]. Per-second nav check.
@@ -269,7 +281,7 @@ class OfflineScanIsolate {
     LatLng current,
     List<LatLng> geometry, {
     double maxAheadMeters = 1500,
-    double lateralMeters = 40,
+    double lateralMeters = kRoadsideLateralMeters,
   }) async {
     if (geometry.length < 2) return const [];
     final res = await _query(
@@ -347,47 +359,61 @@ void _workerEntry(SendPort initial) {
       return;
     }
     if (msg is _QueryAhead) {
-      final Object? res;
-      switch (msg.kind) {
-        case _Kind.cameras:
-          res = pointsAheadOnRoute<OfflineCamera>((
-            msg.current,
-            msg.geometry,
-            cams ?? const [],
-            msg.maxAheadMeters,
-            msg.lateralMeters,
-          ));
-        case _Kind.signs:
-          res = pointsAheadOnRoute<RoadSign>((
-            msg.current,
-            msg.geometry,
-            signs ?? const [],
-            msg.maxAheadMeters,
-            msg.lateralMeters,
-          ));
-      }
-      msg.replyPort.send(_Reply(msg.id, res));
+      msg.replyPort?.send(_Reply(msg.id, _runQuery(msg, cams, signs)));
       return;
     }
     if (msg is _QueryNear) {
-      final Object? res;
-      switch (msg.kind) {
-        case _Kind.cameras:
-          res = pointsNearRoute<OfflineCamera>((
-            msg.geometry,
-            cams ?? const [],
-            msg.corridorMeters,
-          ));
-        case _Kind.signs:
-          res = pointsNearRoute<RoadSign>((
-            msg.geometry,
-            signs ?? const [],
-            msg.corridorMeters,
-          ));
-      }
-      msg.replyPort.send(_Reply(msg.id, res));
+      msg.replyPort?.send(_Reply(msg.id, _runQuery(msg, cams, signs)));
     }
   }
 
   port.listen(serve);
+}
+
+Object? _runQuery(
+  Object msg,
+  List<OfflineCamera>? cams,
+  List<RoadSign>? signs,
+) {
+  if (msg is _QueryAhead) {
+    return switch (msg.kind) {
+      _Kind.cameras => pointsAheadOnRoute<OfflineCamera>((
+        msg.current,
+        msg.geometry,
+        cams ?? const [],
+        msg.maxAheadMeters,
+        msg.lateralMeters,
+      )),
+      _Kind.signs => pointsAheadOnRoute<RoadSign>(
+        (
+          msg.current,
+          msg.geometry,
+          signs ?? const [],
+          msg.maxAheadMeters,
+          msg.lateralMeters,
+        ),
+        // A zone-referenced sign (khu đông dân cư boundary, trạm thu phí …) is
+        // stored at an area vertex, not on the carriageway: keep the 40 m
+        // corridor for roadside posts and let these reach in from further out.
+        lateralFor: (s) => zoneSignKinds.contains(s.kind)
+            ? kZoneLateralMeters
+            : msg.lateralMeters,
+      ),
+    };
+  }
+  if (msg is _QueryNear) {
+    return switch (msg.kind) {
+      _Kind.cameras => pointsNearRoute<OfflineCamera>((
+        msg.geometry,
+        cams ?? const [],
+        msg.corridorMeters,
+      )),
+      _Kind.signs => pointsNearRoute<RoadSign>((
+        msg.geometry,
+        signs ?? const [],
+        msg.corridorMeters,
+      )),
+    };
+  }
+  return null;
 }

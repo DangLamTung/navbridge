@@ -156,7 +156,7 @@ extension _NavBuild on _NavigationPageState {
           // Navigation mode renders the offline VECTOR map with the
           // Vietmap-navigation-style banner + ETA bar (ui/nav_top_bar.dart +
           // ui/navigation_card.dart). Browsing/search keeps the raster map.
-          _navigating
+          _navigating && !kIsWeb
               ? VectorNavMap(
                   // Distinct key from the PiP map so leaving PiP builds a fresh
                   // map at the full-screen zoom (z19) rather than inheriting the
@@ -801,11 +801,13 @@ extension _NavBuild on _NavigationPageState {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          DisplaysButton(
-                            status: _displaysStatus,
-                            onTap: _toggleDisplays,
-                          ),
-                          const SizedBox(width: 8),
+                          if (!kIsWeb) ...[
+                            DisplaysButton(
+                              status: _displaysStatus,
+                              onTap: _toggleDisplays,
+                            ),
+                            const SizedBox(width: 8),
+                          ],
                           _micButton(size: 44),
                         ],
                       ),
@@ -925,8 +927,90 @@ extension _NavBuild on _NavigationPageState {
               ),
             ),
           ),
+          _simConsoleLayer(),
+          // Over the posted limit: a red frame around the whole screen. The
+          // chip's red number is easy to miss in peripheral vision while
+          // riding; a frame at the screen edge is not. IgnorePointer keeps
+          // every control underneath live.
+          if (_speedingNow)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: const Color(0xFFD93025),
+                      width: 8,
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
+    );
+  }
+
+  /// True while the car is over the effective posted limit (sign / Waze /
+  /// statutory, already vehicle-capped) — drives the red screen frame.
+  bool get _speedingNow {
+    final nav = _progress;
+    if (nav == null || !nav.speedMps.isFinite) return false;
+    final limit = _effectiveSpeedLimit;
+    return limit > 0 && nav.speedMps * 3.6 > limit;
+  }
+
+  Widget _simConsoleLayer() {
+    if (!simConsoleEnabled) return const SizedBox.shrink();
+    final size = MediaQuery.of(context).size;
+    final w = (size.width - 24).clamp(220.0, 360.0);
+    final h = (size.height - (_navigating ? 280 : 200)).clamp(240.0, 600.0);
+    return Positioned(
+      right: 12,
+      top: _navigating ? 96 : 150,
+      width: w,
+      height: h,
+      child: _showSimConsole
+          ? SimConsole(
+              onClose: () => setNavState(() => _showSimConsole = false),
+              onLayerChanged: _onDebugLayerChanged,
+            )
+          : Align(
+              alignment: Alignment.topRight,
+              child: Material(
+                elevation: 6,
+                color: const Color(0xF2181A22),
+                borderRadius: BorderRadius.circular(20),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(20),
+                  onTap: () => setNavState(() => _showSimConsole = true),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.bug_report,
+                          size: 15,
+                          color: Colors.white,
+                        ),
+                        SizedBox(width: 5),
+                        Text(
+                          'Mô phỏng',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
     );
   }
 

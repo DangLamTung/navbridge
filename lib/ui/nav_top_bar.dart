@@ -7,6 +7,7 @@
 /// navigation.
 library;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import 'package:navbridge/services/nav_engine.dart';
@@ -153,13 +154,14 @@ class NavTopBar extends StatelessWidget {
                         color: Colors.white,
                         size: 14,
                       ),
-                    Icon(
-                      Icons.bluetooth,
-                      color: clockConnected
-                          ? const Color(0xFFE3F7EC)
-                          : Colors.white38,
-                      size: 18,
-                    ),
+                    if (!kIsWeb)
+                      Icon(
+                        Icons.bluetooth,
+                        color: clockConnected
+                            ? const Color(0xFFE3F7EC)
+                            : Colors.white38,
+                        size: 18,
+                      ),
                     const SizedBox(height: 2),
                     InkWell(
                       customBorder: const CircleBorder(),

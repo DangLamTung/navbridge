@@ -14,6 +14,23 @@ import 'package:latlong2/latlong.dart';
 /// Sample budget for [withinCoarseCorridor]'s decimation.
 const int kCoarseTarget = 256;
 
+/// Metres per degree of latitude (equirectangular sphere, ±0.3 % over Việt Nam).
+const double kMetersPerDegLat = 111320.0;
+
+/// Metres per degree of longitude at [latDeg] — shrinks towards the poles.
+double metersPerDegLng(double latDeg) =>
+    kMetersPerDegLat * math.cos(latDeg * math.pi / 180.0);
+
+/// Signed metres of [p] along compass [headingDeg] from [from]: positive = in
+/// front of the heading, negative = behind. Used to drop markers the driver has
+/// already passed.
+double alongHeadingMeters(LatLng from, LatLng p, double headingDeg) {
+  final rad = headingDeg * math.pi / 180.0;
+  final dy = (p.latitude - from.latitude) * kMetersPerDegLat;
+  final dx = (p.longitude - from.longitude) * metersPerDegLng(from.latitude);
+  return dx * math.sin(rad) + dy * math.cos(rad);
+}
+
 /// Cheap equirectangular metres between two points — ~4-5x faster than
 /// haversine (one `cos` + one `sqrt` vs haversine's four trig + asin). Plenty
 /// for cumulative/decimation math where a few % of error is invisible; NOT for
@@ -75,7 +92,11 @@ bool withinCoarseCorridor(List<LatLng> geo, LatLng p, double corridorMeters) {
   final step = math.max(1, (geo.length / kCoarseTarget).ceil());
   var best = double.infinity;
   for (var i = 0; i < geo.length; i += step) {
-    final d = const Distance().as(LengthUnit.Meter, geo[i], p);
+    // [fastDistanceMeters], not haversine: this is a ×3-loose pre-filter and
+    // its ~0.3 % error is invisible at that margin, while the trig saved here
+    // is what the per-item pass runs millions of times (the country-length
+    // preview measured 18 s with the exact distance).
+    final d = fastDistanceMeters(geo[i], p);
     if (d < best) best = d;
     if (best <= corridorMeters * 3) return true; // close enough — early out
   }

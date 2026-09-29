@@ -21,6 +21,8 @@
 ///     road change ([currentRoad] then differs and the sign is dropped).
 library;
 
+import 'road_match.dart';
+
 /// A sign counts as "reached" within this distance along the route. Matches the
 /// adoption window's own resolution: the app re-adopts the nearest sign within
 /// [kSignAdoptM] and sets the distance to 0 once it is behind the car.
@@ -57,5 +59,5 @@ bool signLimitInForce({
   if (layerKmh > 0 && signValue > layerKmh) return false;
   // 3. posted on another road → not ours
   if (signRoad == null || signRoad.isEmpty) return true;
-  return signRoad == currentRoad;
+  return currentRoad != null && sameRoad(signRoad, currentRoad);
 }

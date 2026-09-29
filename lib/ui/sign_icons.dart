@@ -123,9 +123,9 @@ class SignIcon extends StatelessWidget {
   /// | `railway_crossing.png`| `W242a`           | Railway level crossing (chỗ đường sắt cắt đường bộ) |
   /// | `tunnel.png`         | `W240`             | Tunnel (Đường hầm) |
   ///
-  /// `populated` / `populated_end` (R.420 / R.421) are NOT bundled: both kinds are
-  /// dropped at load ([droppedSignKinds]) because their data was wrong often
-  /// enough to write a wrong speed limit, so no artwork could ever be drawn.
+  /// `populated` / `populated_end` (R.420 / R.421) are NOT bundled either: no
+  /// verified artwork exists for them, so they are drawn as blue label panels
+  /// (see the painter switch in [build]).
   ///
   /// `test/sign_icons_test.dart` pins this list AND checks every mapped file
   /// exists — add a kind here only after LOOKING at the image.
@@ -228,6 +228,14 @@ class SignIcon extends StatelessWidget {
           painter: _RailwayPainter(),
         ),
         RoadSignKind.tunnel => const CustomPaint(painter: _InfoPainter('HẦM')),
+        // Khu đông dân cư boundaries. R.420 / R.421 have no verified artwork on
+        // Commons, so these are label panels in the sign's own blue — the TEXT
+        // is the sign here, and drawing nothing would hide the boundary that
+        // the voice is announcing.
+        RoadSignKind.populated =>
+          const CustomPaint(painter: _InfoPainter('KHU DÂN CƯ')),
+        RoadSignKind.populatedEnd =>
+          const CustomPaint(painter: _InfoPainter('HẾT KHU DÂN CƯ')),
         // Every kind with real artwork returned above; the two U-turn
         // combinations are among them now (P.123a / P.124a), so their painted
         // stand-ins are gone. Nothing left to draw ⇒ draw nothing rather than

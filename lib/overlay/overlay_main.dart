@@ -374,9 +374,18 @@ class _OverlayAppState extends State<OverlayApp> {
         // Same continuity rule as the app: hold the value on screen when two
         // parallel Waze records of one road disagree.
         keepKmh: (_limit ?? 0) > 0 ? _limit : null,
+        expectStreet: roadName.isEmpty ? null : roadName,
       );
+      final heldName = lastWazeStreetName();
+      final usable =
+          posted != null &&
+          posted > 0 &&
+          !(heldName != null &&
+              heldName.isNotEmpty &&
+              roadName.isNotEmpty &&
+              !streetNameMatches(roadName, heldName));
       // Which layer answered, before the fallback overwrites the variable.
-      final postedLayer = posted != null ? lastLimitLayer() : null;
+      final postedLayer = usable ? lastLimitLayer() : null;
       // ONE decision, shared with the app (roadInfoFromRoad + applyPostedLayer):
       // the posted layer wins when it answered, otherwise the road's own class
       // table applies with the built-up rule on top. This widget used to
@@ -390,9 +399,9 @@ class _OverlayAppState extends State<OverlayApp> {
         oneway: oneway,
         lanes: lanes,
         divided: divided,
-        urban: await builtUpRuleApplies(pos, hasPosted: posted != null),
+        urban: inTown,
       );
-      final decided = (posted != null && posted > 0)
+      final decided = usable
           ? applyPostedLayer(
               road,
               kmh: posted,

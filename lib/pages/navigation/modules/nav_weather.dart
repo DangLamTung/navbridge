@@ -83,14 +83,14 @@ extension _NavWeather on _NavigationPageState {
     }
     if (raining == before) return; // no change → nothing worth saying
     if (!raining && _dryStreak < 2) return; // debounce the lull
-    final now = DateTime.now();
+    final now = navNow();
     final last = _lastRainSpoke;
     if (last != null && now.difference(last) < const Duration(minutes: 8)) {
       return;
     }
     _rainingHere = raining;
     _lastRainSpoke = now;
-    if (!_voiceOn || !_voice.ready) return;
+    if (!_voiceOn || !_voiceReady) return;
     final phrase = raining ? 'Trời bắt đầu mưa.' : 'Trời đã tạnh mưa.';
     _logAnnouncement(phrase, kind: 'rain');
     _voice.speak(phrase);
@@ -231,13 +231,14 @@ extension _NavWeather on _NavigationPageState {
     final phrase = (mins != null && mins >= 1)
         ? 'Sắp hết mưa, khoảng $mins phút nữa.'
         : 'Sắp hết mưa, khoảng $km ki lô mét nữa.';
-    if (!_voiceOn || !_voice.ready) return;
+    if (!_voiceOn || !_voiceReady) return;
     // Don't stack it on top of a just-spoken transition.
     final last = _lastRainSpoke;
-    if (last != null && DateTime.now().difference(last) < const Duration(minutes: 3)) {
+    if (last != null &&
+        navNow().difference(last) < const Duration(minutes: 3)) {
       return;
     }
-    _lastRainSpoke = DateTime.now();
+    _lastRainSpoke = navNow();
     _logAnnouncement(phrase, kind: 'rain');
     _voice.speak(phrase);
   }
@@ -303,28 +304,31 @@ extension _NavWeather on _NavigationPageState {
       final m = next.routeMeters.round();
       final near = next.routeMeters <= 100;
       final zsig = '$sig/${near ? 'near' : 'far'}';
-      // CADENCE for the surveillance kind ("Camera giám sát giao thông"): on the
-      // 2026-09-24 replay 23 of 51 announcements were cameras and 9 landed in one
-      // 2-minute window (58 s, 75 s, 80 s, 132 s …), eight of them the same
-      // "Camera giám sát giao thông ngay phía trước" sentence a few hundred
-      // metres apart. A monitoring camera carries no speed and no fine, so it is
-      // capped to one sentence per 20 s — while the ENFORCEMENT kinds (speed /
-      // red light / phạt nguội) still speak whenever they are due, because those
-      // the driver acts on.
+      // CADENCE — one minimum gap between camera SENTENCES, for EVERY kind.
+      // On the recorded 2026-09-24 replay 23 of 51 announcements were cameras
+      // (nine inside one two-minute window), and a long trip is worse: the
+      // 1 690 km QL1A route carries hundreds of camera points, and warning
+      // twice on each one turned the drive into a stream of camera sentences.
+      // Enforcement kinds (speed / red light / phạt nguội) still get a shorter
+      // gap than a plain surveillance camera, because the driver acts on them.
       final kind = next.camera.type ?? next.camera.focus;
       final enforcement =
           kind == 'speed_camera' || kind == 'penalty_camera' ||
           next.camera.focus == 'speed' || next.camera.focus == 'red_light' ||
           kind == 'red_light';
       final last = _lastCameraSpokeAt;
-      if (!enforcement &&
-          last != null &&
-          DateTime.now().difference(last) < const Duration(seconds: 20)) {
-        debugPrint('CAMERA: surveillance callout skipped (cadence 20 s)');
+      final gap = enforcement
+          ? const Duration(seconds: 20)
+          : const Duration(seconds: 45);
+      if (last != null && navNow().difference(last) < gap) {
+        debugPrint(
+          'CAMERA: callout skipped (${gap.inSeconds}s cadence'
+          '${enforcement ? '' : ', surveillance'})',
+        );
         return;
       }
       if (!_cameraDedupe.seen(zsig)) {
-        _lastCameraSpokeAt = DateTime.now();
+        _lastCameraSpokeAt = navNow();
         final cam = next.camera;
         final dist = formatDistanceSpoken(next.routeMeters);
         // A lone CSGT (police) phạt nguội point is a manual report — only say

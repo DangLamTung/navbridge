@@ -19,4 +19,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "${SKIP_SIGN_GATE:-0}" != "1" && "$mode" != "debug" ]]; then
+  python3 tools/signs/validate_sign_placement.py
+fi
+
 exec flutter build apk --"$mode" ${DART_DEFINES[@]+"${DART_DEFINES[@]}"} ${extra_args[@]+"${extra_args[@]}"}

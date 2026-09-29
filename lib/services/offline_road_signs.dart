@@ -14,6 +14,8 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:latlong2/latlong.dart';
 
+import '../core/nav_protocol.dart' show formatDistanceSpoken;
+import 'offline_geo.dart';
 import 'offline_loader.dart';
 import 'offline_scan.dart';
 import 'offline_scan_isolate.dart';
@@ -26,9 +28,11 @@ import 'offline_scan_isolate.dart';
 /// the overtaking ban), P.125 cấm vượt (was P.127), R.301a/d/e chỉ được đi
 /// thẳng / rẽ phải / rẽ trái (was R.411/R.412 — those are lane-direction boards).
 ///
-/// The built-up boundary ("bắt đầu / hết khu đông dân cư") is deliberately NOT
-/// here — see [droppedSignKinds]; its data was wrong often enough to write a
-/// wrong speed limit, so the whole layer is gone.
+/// The built-up boundary ("bắt đầu / hết khu đông dân cư") IS loaded: the
+/// driver asked to hear it ("Bắt đầu khu dân cư / Hết khu dân cư") and the two
+/// kinds carry real data — 4 685 starts + 4 526 ends, 103 of them within 100 m
+/// of the recorded 1 690 km Hà Nội → Sài Gòn drive. What they must NOT do is
+/// set the speed limit; see [droppedSignKinds].
 enum RoadSignKind {
   stop('stop', 'P.122 Biển STOP'),
   giveWay('giveWay', 'Biển nhường đường'),
@@ -55,7 +59,12 @@ enum RoadSignKind {
   noParking('no_parking', 'P.131a Cấm đỗ xe'),
   tollBooth('toll_booth', 'Trạm thu phí'),
   railwayCrossing('railway_crossing', 'W.242a Đường ngang giao với đường sắt'),
-  tunnel('tunnel', 'W.240 Hầm đường bộ');
+  tunnel('tunnel', 'W.240 Hầm đường bộ'),
+
+  // Khu đông dân cư boundaries (QCVN R.420 / R.421). Loaded, DRAWN and
+  // ANNOUNCED — but they never set a speed limit (see [droppedSignKinds]).
+  populated('populated', 'Bắt đầu khu đông dân cư'),
+  populatedEnd('populated_end', 'Hết khu đông dân cư');
 
   const RoadSignKind(this.key, this.label);
 
@@ -69,8 +78,8 @@ enum RoadSignKind {
     'stop' => stop,
     'giveWay' => giveWay,
     'speed' => speed,
-    // 'populated' / 'populated_end' (khu đông dân cư boundaries) are dropped
-    // before this is reached — see [droppedSignKinds].
+    'populated' => populated,
+    'populated_end' => populatedEnd,
     'no_passing' => noPassing,
     'no_passing_end' => noPassingEnd,
     'no_left_turn' => noLeftTurn,
@@ -116,24 +125,64 @@ enum RoadSignKind {
   };
 }
 
-/// JSON `kind` values that are DROPPED at load time.
+/// JSON `kind` values that are DROPPED at load time — **now empty**.
 ///
-/// "bắt đầu / hết khu đông dân cư" boundaries arrive from VietMap E-DOG
-/// (TYPE 9/10) and OSM — 9,211 points, 20.4% of the whole sign DB. They are
-/// dropped for what they COST, not because the data is provably wrong
-/// (measured by `tool/why_drop_kdc.py`):
-///  * a third limit source (a built-up cap) that cannot be validated from a
-///    recording — on 38 recorded drives NOT ONE boundary point came within
+/// It used to contain `populated` / `populated_end` (the "bắt đầu / hết khu
+/// đông dân cư" boundaries: 4 685 starts + 4 526 ends from VietMap E-DOG
+/// TYPE 9/10, Waze and OSM). They were dropped for what they COST, not because
+/// the data is wrong (measured by `tool/why_drop_kdc.py`):
+///  * a third LIMIT source (a built-up cap) that cannot be validated from a
+///    recording — on 38 recorded drives not one boundary point came within
 ///    200 m of the track, so the cap never fired and never got checked;
-///  * where one does sit on a Waze/WME segment (11% of them) that segment posts
-///    more than the cap 39% of the time, so when it fires it overrides a posted
-///    value instead of filling a gap;
-///  * 9,211 rows of a 45,197-row DB are scanned every second by the sign
-///    isolate for that.
+///  * where one does sit on a Waze/WME segment that segment posts more than the
+///    cap 39 % of the time, so when it fires it overrides a posted value.
+///
+/// Both reasons are about the LIMIT, and neither survives contact with the long
+/// drive (103 boundary points within 100 m of the recorded 1 690 km Hà Nội →
+/// Sài Gòn track). So the kinds are back — announced and drawn — while the
+/// built-up decision stays with the density rule in `urban_area.dart`:
+/// [RoadSign]s of these kinds are never read by `builtUpRuleApplies`.
 ///
 /// Filtered HERE (not in the asset) so an already-downloaded
 /// `vietnam_signs.json` from an older build stays usable.
-const Set<String> droppedSignKinds = {'populated', 'populated_end'};
+const Set<String> droppedSignKinds = {};
+
+const Set<RoadSignKind> zoneSignKinds = {
+  RoadSignKind.tollBooth,
+  RoadSignKind.noPassing,
+  RoadSignKind.noPassingEnd,
+  RoadSignKind.slowDown,
+  RoadSignKind.tunnel,
+  RoadSignKind.railwayCrossing,
+  // The boundaries come out of the same VietMap E-DOG zone dump (TYPE 9/10) as
+  // the kinds above, so their stored point may be a polygon vertex rather than
+  // the post on the carriageway — announce the ZONE, never a distance to it.
+  // (`tools/signs/snap_sign_roads.py` carries the same list as its POLICY so a
+  // rebuild can snap them onto the road.)
+  RoadSignKind.populated,
+  RoadSignKind.populatedEnd,
+};
+
+String signAheadTail(RoadSignKind kind, double meters) =>
+    zoneSignKinds.contains(kind) ? '' : ' ${formatDistanceSpoken(meters)}';
+
+/// Lateral tolerance for a normal road sign in the ahead scan, metres.
+///
+/// A sign POST stands on the carriageway; one 100 m to the side belongs to the
+/// street it stands on (a parallel road / a crossing), so it is not "ahead on
+/// this route".
+const double kRoadsideLateralMeters = 40.0;
+
+/// Lateral tolerance for [zoneSignKinds] in the ahead scan, metres.
+///
+/// 40 m is right for a POST on the carriageway — a sign 100 m away is another
+/// street's. A zone-referenced kind is not a post: it is stored at an area
+/// vertex, so the same 40 m silently dropped 140 of the 161 khu đông dân cư
+/// boundaries that come within 150 m of the recorded 1 690 km Hà Nội → Sài Gòn
+/// drive (measured 2026-09-28) — the boundary would have been announced at 1 in
+/// 8 of the places the driver actually crosses one. 150 m is the corridor the
+/// nav map already uses for its sign layer.
+const double kZoneLateralMeters = 150.0;
 
 /// One road-sign point.
 class RoadSign implements OfflinePoint {
@@ -316,7 +365,7 @@ Future<List<SignAhead>> signsAheadOnRoute(
   LatLng current,
   List<LatLng> geometry, {
   double maxAheadMeters = 1500,
-  double lateralMeters = 40,
+  double lateralMeters = kRoadsideLateralMeters,
 }) async {
   return OfflineScanIsolate.instance.signsAhead(
     current,
@@ -357,10 +406,10 @@ Future<List<RoadSign>> signsNearPoint(
   final signs = await loadOfflineRoadSigns();
   if (signs.isEmpty) return const [];
   const Distance d = Distance();
-  final span = maxDistM / 111320.0;
+  final span = maxDistM / kMetersPerDegLat;
   // Longitudes shrink with cos(lat); without this the bbox prunes signs that
   // are within range but due east/west (up to ~7% loss for Việt Nam).
-  final lngSpan = span / math.cos(pos.latitude * math.pi / 180.0);
+  final lngSpan = maxDistM / metersPerDegLng(pos.latitude);
   final out = <(RoadSign, double)>[];
   for (final s in signs) {
     if (s.lat < pos.latitude - span ||
@@ -415,9 +464,8 @@ Future<List<RoadSign>> signsNearPoint(
 /// Approximate metres between two lat/lng (equirectangular, fine at ≤ a few
 /// hundred metres — this only guards a ~100 m near-dup radius).
 double _approxM(double la1, double lo1, double la2, double lo2) {
-  const mPerDegLat = 111320.0;
-  final lat = (la1 - la2) * mPerDegLat;
-  final lng = (lo1 - lo2) * mPerDegLat * 0.95; // cos(VN lat ~18°)
+  final lat = (la1 - la2) * kMetersPerDegLat;
+  final lng = (lo1 - lo2) * metersPerDegLng((la1 + la2) / 2);
   return math.sqrt(lat * lat + lng * lng);
 }
 
@@ -500,16 +548,9 @@ List<RoadSign> signsAheadOfDriver(
   required double headingDeg,
   double keepBehindM = 40,
 }) {
-  const mPerDegLat = 111320.0;
-  final rad = headingDeg * math.pi / 180.0;
-  final fx = math.sin(rad); // east component of the heading
-  final fy = math.cos(rad); // north component
-  final cosLat = math.cos(car.latitude * math.pi / 180.0);
   final out = <RoadSign>[];
   for (final s in signs) {
-    final dy = (s.lat - car.latitude) * mPerDegLat;
-    final dx = (s.lng - car.longitude) * mPerDegLat * cosLat;
-    final along = dx * fx + dy * fy; // >0 = in front of the car
+    final along = alongHeadingMeters(car, LatLng(s.lat, s.lng), headingDeg);
     if (along >= -keepBehindM) out.add(s);
   }
   return out;
@@ -531,6 +572,10 @@ int _signPriority(RoadSignKind k) => switch (k) {
   RoadSignKind.railwayCrossing ||
   RoadSignKind.tunnel ||
   RoadSignKind.endProhibitions ||
+  // A built-up boundary changes which limit table applies, so it outranks any
+  // turn prohibition when the console has to choose what to show.
+  RoadSignKind.populated ||
+  RoadSignKind.populatedEnd ||
   RoadSignKind.slowDown => 1,
   RoadSignKind.noLeftTurn ||
   RoadSignKind.noRightTurn ||

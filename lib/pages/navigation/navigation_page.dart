@@ -13,10 +13,12 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'dart:math' show max, sin, cos, atan2, sqrt, pow;
 
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -29,9 +31,14 @@ import 'package:navbridge/services/ble_map_clock.dart';
 import 'package:navbridge/services/ble_auto_connect.dart';
 import 'package:navbridge/ui/device_picker.dart';
 import 'package:navbridge/services/elevation.dart';
+import 'package:navbridge/services/nav_clock.dart';
 import 'package:navbridge/services/nav_engine.dart';
+import 'package:navbridge/services/nav_sim.dart';
+import 'package:navbridge/services/trip_replay.dart';
+import 'package:navbridge/services/trip_resume.dart';
 import 'package:navbridge/services/offline_cameras.dart';
 import 'package:navbridge/core/nav_protocol.dart';
+import 'package:navbridge/core/limit_change.dart';
 import 'package:navbridge/core/road_match.dart';
 import 'package:navbridge/core/map_protocol.dart';
 import 'package:navbridge/core/nmea_parser.dart';
@@ -42,6 +49,7 @@ import 'package:navbridge/services/offline_poi.dart';
 import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/offline_speed_limits.dart';
 import 'package:navbridge/ui/sign_icons.dart';
+import 'package:navbridge/ui/resume_trip_bar.dart';
 import 'package:navbridge/services/offline_router.dart';
 import 'package:navbridge/services/offline_tiles.dart';
 import 'package:navbridge/services/poi_search.dart';
@@ -94,6 +102,7 @@ import 'package:navbridge/ui/road_info_chip.dart';
 import 'package:navbridge/ui/recent_searches_list.dart';
 import 'package:navbridge/ui/route_preview_card.dart';
 import 'package:navbridge/ui/search_pill.dart';
+import 'package:navbridge/ui/speech_controls.dart';
 import 'package:navbridge/ui/speed_dial.dart';
 import 'package:navbridge/ui/stops_panel.dart';
 import 'package:navbridge/ui/suggestions_list.dart';
@@ -101,6 +110,7 @@ import 'package:navbridge/ui/widgets.dart';
 
 part 'modules/nav_bars.dart';
 part 'modules/nav_build.dart';
+part 'modules/nav_debug_layers.dart';
 part 'modules/nav_gates.dart';
 part 'modules/nav_gps.dart';
 part 'modules/nav_map.dart';
@@ -113,6 +123,7 @@ part 'modules/nav_screens.dart';
 part 'modules/nav_search.dart';
 part 'modules/nav_signs.dart';
 part 'modules/nav_simple.dart';
+part 'modules/nav_sim_panel.dart';
 part 'modules/nav_voice.dart';
 part 'modules/nav_weather.dart';
 part 'modules/nav_widgets.dart';
@@ -406,7 +417,17 @@ class _NavigationPageState extends State<NavigationPage>
     // Fetch all cameras and signs along the entire route!
     // This allows the browse/preview map to show the route's signs and cameras
     // everywhere, and we vary density by zoom level.
-    final routeCams = await camerasNearRoute(r.geometry);
+    //
+    // DURING NAV the layers are CAR-CENTRIC (the doc above): the queries are
+    // handed only the stretch around the car, because the scanners walk the
+    // polyline per item — 18 s per call with the full 84 532-vertex route on
+    // the web, every second. The route-wide pass is what the PREVIEW needs, and
+    // there the polyline is decimated first: at marker scale the extra vertices
+    // buy nothing and the per-item walk is 20x shorter.
+    final geom = _navigating
+        ? _routeWindowAhead()
+        : decimatePolyline(r.geometry, spacingM: 150, maxPoints: 4000);
+    final routeCams = await camerasNearRoute(geom);
     // CORRIDOR 60 m, not 200 m (user, 2026-09-24: "sign on the next segment must
     // present … for sign outside the segment we can reduce"): a sign 200 m off
     // the polyline is two blocks away — a crossing street's sign, not this
@@ -415,7 +436,7 @@ class _NavigationPageState extends State<NavigationPage>
     // (VietMap puts signs on the carriageway, Waze notices on the road segment,
     // DATMAP on the road) while dropping the off-segment ones. Both sources are
     // kept — the index is one merged list and nothing filters on `source`.
-    final routeSigns = await signsNearRoute(r.geometry, corridorMeters: 60);
+    final routeSigns = await signsNearRoute(geom, corridorMeters: 60);
 
     if (!mounted) return;
 
@@ -425,7 +446,21 @@ class _NavigationPageState extends State<NavigationPage>
       // (they occupy the front of the priority list and crowded the map); the
       // freed slots go to the other kinds. Display only — the limit itself
       // comes from the sign index, not this list.
-      _routeSigns = collapseRepeatedSpeedSigns(routeSigns);
+      final keptRoute = collapseRepeatedSpeedSigns(routeSigns);
+      _routeSigns = keptRoute;
+      // SHOW-vs-ANNOUNCE test: THIS is the list the nav map draws (`signs:` in
+      // nav_build.dart), and it is a different pipeline from the browse map's
+      // _nearSigns. Printing the boundary members by coordinate makes the drawn
+      // set union-able across a trip.
+      bool isBoundary(RoadSign s) =>
+          s.kind == RoadSignKind.populated ||
+          s.kind == RoadSignKind.populatedEnd;
+      final routeB = keptRoute.where(isBoundary);
+      debugPrint('SIM/NAVMAP: signs=${keptRoute.length} '
+          'boundary=${routeB.length} '
+          'shown=${routeB.map((s) => '${s.kind.name}@'
+              '${s.pos.latitude.toStringAsFixed(5)},'
+              '${s.pos.longitude.toStringAsFixed(5)}').join('|')}');
     });
   }
 
@@ -496,7 +531,22 @@ class _NavigationPageState extends State<NavigationPage>
       // The browse map is an AREA view: repeat speed signs collapse to the one
       // that applies where the car is, so the marker budget goes to the other
       // kinds (cấm rẽ / quay đầu / cấm vượt / khu dân cư / STOP).
-      _nearSigns = keepNearestSpeedSign(collapseRepeatedSpeedSigns(nearSigns));
+      final kept = keepNearestSpeedSign(collapseRepeatedSpeedSigns(nearSigns));
+      _nearSigns = kept;
+      // SHOW-vs-ANNOUNCE test. A boundary sign that does not survive the query
+      // (6 km / 120 records) and this filter is never DRAWN, however loudly it
+      // is announced — the two paths are separate. Printing the kept boundary
+      // signs by coordinate makes the drawn set union-able across a trip.
+      bool boundary(RoadSign s) =>
+          s.kind == RoadSignKind.populated ||
+          s.kind == RoadSignKind.populatedEnd;
+      final keptB = kept.where(boundary);
+      debugPrint('SIM/LAYER: signs query=${nearSigns.length} '
+          'boundary=${nearSigns.where(boundary).length} '
+          'kept=${kept.length} boundary=${keptB.length} '
+          'shown=${keptB.map((s) => '${s.kind.name}@'
+              '${s.pos.latitude.toStringAsFixed(5)},'
+              '${s.pos.longitude.toStringAsFixed(5)}').join('|')}');
     });
   }
 
@@ -541,22 +591,21 @@ class _NavigationPageState extends State<NavigationPage>
 
   // --- nav-map camera follow (drives the auto-center button) -------------
   final VectorNavMapController _vmFollow = VectorNavMapController();
-
   // --- road info (Overpass) ---
   RoadInfo? _roadInfo;
   bool _roadLoading = false;
+
+  /// Counts posted-limit layer lookups, so the per-fix diagnostic in
+  /// `_correctSpeedFromWazeInner` can throttle itself.
+  int _layerLogs = 0;
+
+  RoadInfo? _roadOsm;
   DateTime? _lastRoadQuery;
 
   /// Where the car was at [_lastRoadQuery]. The road (and therefore the
   /// displayed/announced limit) must be re-resolved when the car MOVES onto a
   /// different street, not merely when 2 s have passed — see [_refreshRoad].
   LatLng? _lastRoadQueryPos;
-
-  /// True while the Waze segment correction is in flight. Its street name is
-  /// read from a module-global (`lastWazeStreetName`) that the NEXT segment
-  /// lookup overwrites, so two overlapping corrections would pair one
-  /// segment's limit with another segment's street. Re-entry is refused.
-  bool _wazeCorrecting = false;
 
   /// Latest nav progress from the tick. Its `text`/`nextText`/`nextNextText`
   /// are the ROUTE's own street names for where the car is, used to veto a road
@@ -577,6 +626,7 @@ class _NavigationPageState extends State<NavigationPage>
   /// [NavGps.townAt].
   bool _inTown = false;
   LatLng? _inTownPos;
+  bool _inTownBySign = false;
 
   // --- the road AFTER the next maneuver, for the spoken callout -------------
   // The callout names the street you turn INTO, so it quotes THAT street's
@@ -603,6 +653,7 @@ class _NavigationPageState extends State<NavigationPage>
   // never mix.
   String _tileSource = 'osm';
   OfflineTileProvider _tileProvider = OfflineTileProvider(source: 'osm');
+
   bool _offline = false;
 
   /// Whether to show the transient "Đang ngoại tuyến" banner. Shown briefly
@@ -657,6 +708,11 @@ class _NavigationPageState extends State<NavigationPage>
   // --- multi-stop plan ---
   final List<TripStop> _stops = [];
 
+  /// The journey to offer "Tiếp tục" for after navigation is turned off (see
+  /// [TripResume]): captured on exit, cleared as soon as another journey
+  /// starts.
+  TripResume? _resumeTrip;
+
   // --- voice: spoken guidance (Bluetooth speaker) + mic commands --------
   VoiceGuide get _voice => VoiceGuide.instance;
   final VoiceCommands _commands = VoiceCommands();
@@ -701,20 +757,10 @@ class _NavigationPageState extends State<NavigationPage>
   bool _fuelWarned = false; // long fuel gap ahead — warn once per gap
   Timer? _fuelTimer; // periodic fuel-gap watch while navigating
 
-  // Speed-limit-change announcement state: speak the limit only once it has
-  // been stable for ~2 s and not repeated within ~4 s (avoids boundary spam).
-  int? _lastSpokenLimit;
-  int? _pendingLimit;
-  DateTime? _pendingSince;
-  DateTime? _lastLimitSpoke;
-
-  // ONE wording for the limit, and never twice for the same value: the maneuver
-  // callout already says "… Giới hạn tốc độ 50 km/h.", so the change
-  // announcement must not repeat it seconds later (user: "the giới hạn tốc độ
-  // and tốc độ tối đa why have 2 thing"). Value + when it was spoken, shared by
-  // both call sites.
-  int _limitSpokenValue = 0;
-  DateTime? _limitSpokenAt;
+  // Speed-limit-change announcement state — the timing contract (stable ~2 s,
+  // cooldown ~4 s, never twice for one value) lives in [LimitChangeAnnouncer]
+  // so it can be tested without a widget. See lib/core/limit_change.dart.
+  final _limitAnnouncer = LimitChangeAnnouncer();
 
   /// Posted limit from the last speed-limit sign, but capped by the VEHICLE's
   /// statutory class default. OSM/DATMAP/Waze speed signs carry a CAR limit,
@@ -735,6 +781,11 @@ class _NavigationPageState extends State<NavigationPage>
       hw.isEmpty ? 'unclassified' : hw,
       vehicle: vehicleType,
       taggedKmh: sign,
+      urban: _inTownBySign ? _inTown : (_roadInfo?.urban ?? _inTown),
+      divided: _roadInfo?.divided ?? false,
+      oneway: _roadInfo?.oneway,
+      lanes: _roadInfo?.lanes,
+      postedSrc: srcSegment,
     );
     return capped > 0 ? capped : null;
   }
@@ -764,6 +815,243 @@ class _NavigationPageState extends State<NavigationPage>
   /// True once the emulator-replay harness has started navigation.
   bool _autoSimStarted = false;
 
+  bool _startedReplay = false;
+
+  /// The recorded road `_publishReplayRoad` last published, as a comparison key
+  /// (name + class + form).
+  ///
+  /// `_applyReplayRoad` used to answer "is there anything to do?" by comparing
+  /// the road ON SCREEN with the recording — but on screen the NAME is the
+  /// LAYER's now (see `_noIndependentRoadName`), so the moment the layer
+  /// corrected a name the two never matched again and the replay re-published on
+  /// every single fix. Measured at the Trường Chinh turn, 2026-09-29: 12
+  /// re-publishes inside 3 s, each one re-running the layer lookup — and a lookup
+  /// that missed there put the recording's wrong "Trương Công Định" back on
+  /// screen.
+  String _replayRoadKey = '';
+
+  bool _showSimConsole = simConsoleEnabled;
+
+  Future<void> _maybeReplayDrive() async {
+    if (!TripReplay.armed) return;
+    await _startReplaySession(TripReplay.source!, TripReplay.speed);
+  }
+
+  void _onDebugLayerChanged(String layer, bool on) {
+    simSetLayer(layer, on);
+    if (on) unawaited(_ensureDebugLayers());
+    setNavState(() {});
+  }
+
+  Timer? _debugSegTimer;
+
+  void _scheduleDebugSegments() {
+    _debugSegTimer?.cancel();
+    _debugSegTimer = Timer(const Duration(milliseconds: 400), () {
+      if (!mounted || !simShowSegments) return;
+      unawaited(_refreshDebugSegments().then((_) {
+        if (mounted) setNavState(() {});
+      }));
+    });
+  }
+
+  Future<void> _ensureDebugLayers() async {
+    if (simShowCameras && simAllCameras == null) {
+      final cams = await loadOfflineCameras();
+      if (!mounted) return;
+      simAllCameras = cams;
+      simLayerCameras = cams.length;
+      debugPrint('SIM/LAYER: cameras loaded ${cams.length}');
+    }
+    if (simShowSigns && simAllSigns == null) {
+      final signs = await loadOfflineRoadSigns();
+      if (!mounted) return;
+      simAllSigns = signs;
+      simLayerSigns = signs.length;
+      debugPrint('SIM/LAYER: signs loaded ${signs.length}');
+    }
+    if (simShowSegments) {
+      await _refreshDebugSegments();
+    }
+    if (mounted) setNavState(() {});
+  }
+
+  Future<void> _refreshDebugSegments() async {
+    await loadOfflineSpeedLimits();
+
+    if (kIsWeb) {
+      final zoom = _map.camera.zoom;
+      if (zoom < 15.0) {
+        if (mounted) {
+          setState(() {
+            simSegments = const [];
+            simLayerSegments = 0;
+          });
+        }
+        return;
+      }
+      final center = _map.camera.center;
+      const radiusDeg = 0.006; // ~660m around center
+      final segs = wazeSegmentsInBounds(
+        south: center.latitude - radiusDeg,
+        west: center.longitude - radiusDeg,
+        north: center.latitude + radiusDeg,
+        east: center.longitude + radiusDeg,
+        max: 300,
+      );
+      if (!mounted) return;
+      simSegments = segs;
+      simLayerSegments = segs.length;
+      debugPrint(
+        'SIM/LAYER: nearby segments in view ${segs.length} '
+        '(z=${zoom.toStringAsFixed(1)})',
+      );
+      return;
+    }
+
+    final b = _map.camera.visibleBounds;
+    final segs = wazeSegmentsInBounds(
+      south: b.south,
+      west: b.west,
+      north: b.north,
+      east: b.east,
+    );
+    if (!mounted) return;
+    simSegments = segs;
+    simLayerSegments = segs.length;
+    debugPrint(
+      'SIM/LAYER: segments in view ${segs.length} '
+      '(z=${_map.camera.zoom.toStringAsFixed(1)})',
+    );
+  }
+
+  void _onSimRevision() {
+    if (TripReplay.stopWanted) {
+      unawaited(_stopReplaySession());
+      return;
+    }
+    final ref = TripReplay.source;
+    if (ref == null) return;
+    unawaited(_startReplaySession(ref, TripReplay.speed));
+  }
+
+  Future<void> _startReplaySession(String ref, double speed) async {
+    await _stopReplaySession(quiet: true);
+    TripReplay.speedOverride = speed;
+    final fixes = await TripReplay.load(ref);
+    if (!mounted) return;
+    if (fixes.isEmpty) {
+      simEndRun(SimRunState.failed);
+      debugPrint('REPLAY: no fixes in "$ref" — nothing to drive');
+      return;
+    }
+    final fromFix = TripReplay.startFrom.clamp(0, fixes.length - 1);
+    final route = routeFromTrack(fixes);
+    if (route.geometry.length < 3) {
+      simEndRun(SimRunState.failed);
+      debugPrint(
+        'REPLAY: track too short (${route.geometry.length} points) to drive',
+      );
+      return;
+    }
+    final from = route.geometry.first;
+    final to = route.geometry.last;
+    simBeginRun(
+      label: ref == TripReplay.inlineRef ? TripReplay.inlineLabel : ref.split('/').last,
+      ref: ref,
+      speed: speed,
+      fixes: fixes.length,
+      meters: route.distance,
+      duration: replayTripDuration(fixes),
+      fromFix: fromFix,
+    );
+    if (fromFix > 0) {
+      debugPrint('REPLAY: continuing "$ref" at fix $fromFix/${fixes.length}');
+    }
+    debugPrint(
+      'REPLAY: $ref — ${route.geometry.length} track points, '
+      '${(route.distance / 1000).toStringAsFixed(2)} km, '
+      '${route.steps.length - 1} manoeuvres; path = the recorded track, '
+      '${from.latitude.toStringAsFixed(5)},${from.longitude.toStringAsFixed(5)}'
+      ' → ${to.latitude.toStringAsFixed(5)},${to.longitude.toStringAsFixed(5)}',
+    );
+    setNavState(() {
+      _route = route;
+      _alternativeRoutes = [];
+      _selectedRoute = 0;
+      _planPoints = [from, to];
+      _originOverride = from;
+      _origin = from;
+      _destination = to;
+      _current = from;
+      _routeBearing = 0;
+      _routeStartIndex = 0;
+      _navigating = false; // let _startNavigation() do its full sequence
+      _stops
+        ..clear()
+        ..add(
+          TripStop(
+            name: 'replay ${to.latitude.toStringAsFixed(4)},'
+                '${to.longitude.toStringAsFixed(4)}',
+            lat: to.latitude,
+            lng: to.longitude,
+          ),
+        );
+      _engine = TurnByTurnEngine(
+        route,
+        stopNames: _engineStopNames(route),
+        maxSpeedMps: _routeProfile.legalMaxMps,
+      );
+    });
+    await _startNavigation();
+    debugPrint('REPLAY: navigation STARTED — feeding recorded fixes');
+    await _startReplayGps(fixes);
+  }
+
+  Future<void> _stopReplaySession({bool quiet = false}) async {
+    if (!_startedReplay && !TripReplay.running) {
+      if (!quiet) simEndRun(SimRunState.idle);
+      return;
+    }
+    TripReplay.noteStopped(TripReplay.source ?? '', simFixesFed);
+    _startedReplay = false;
+    TripReplay.running = false;
+    await _gpsSub?.cancel();
+    _gpsSub = null;
+    resetNavClock();
+    if (!quiet) {
+      _reportReplayOutcome(SimRunState.stopped);
+    }
+    if (mounted) setNavState(() {});
+  }
+
+  void _reportReplayOutcome(SimRunState state) {
+    final total = simFixesFed;
+    final stuck = simFixesNoRoad;
+    final pct = total == 0 ? 0 : (stuck * 100 / total).round();
+    final wall = simStartedAt == null
+        ? null
+        : DateTime.now().difference(simStartedAt!);
+    if (state == SimRunState.done && simFixesTotal > 0 && total >= simFixesTotal) {
+      TripReplay.clearResume(TripReplay.source);
+    }
+    debugPrint(
+      'REPLAY: $state ($simTripLabel) — $total/$simFixesTotal fixes fed'
+      '${wall == null ? '' : ' in ${wall.inMilliseconds}ms'}'
+      ', road resolved on ${total - stuck}/${total > 0 ? total : 1}'
+      '${stuck > 0 ? ' ($pct% never resolved)' : ''}, '
+      '${simLog.length} announcements',
+    );
+    if (total > 0 && pct >= 20 && total >= 40) {
+      debugPrint(
+        'REPLAY: WARNING — the road lookup could not keep up at '
+        '$simSpeed×; the run UNDER-reports announcements. '
+        'Lower the speed for a faithful result.',
+      );
+    }
+    simEndRun(state);
+  }
+
   /// EMULATOR-REPLAY HARNESS — active only when the app is built with
   /// `--dart-define=SIM_ROUTE=lat,lng` (String.fromEnvironment is compiled in,
   /// so a normal build has an empty string and this returns immediately).
@@ -775,6 +1063,10 @@ class _NavigationPageState extends State<NavigationPage>
   /// chain (road lookup → posted-limit layer → sign adoption → announcements)
   /// without driving or touching the UI.
   void _maybeAutoSim() {
+    if (TripReplay.armed) {
+      unawaited(_maybeReplayDrive());
+      return;
+    }
     const spec = String.fromEnvironment('SIM_ROUTE');
     if (spec.isEmpty) return;
     final parts = spec.split(',');
@@ -838,10 +1130,8 @@ class _NavigationPageState extends State<NavigationPage>
     _signSpeedLimit = null;
     _signSpeedLimitRoad = null;
     _signAheadM = 0;
-    _lastSpokenLimit = null;
-    _pendingLimit = null;
-    _pendingSince = null;
-    _lastLimitSpoke = null;
+    _inTownBySign = false;
+    _limitAnnouncer.reset();
     _speedChangeDedupe.reset();
     _motorwayWarned = false;
   }
@@ -895,7 +1185,10 @@ class _NavigationPageState extends State<NavigationPage>
       final cur = _current ?? _origin;
       if (cur != null) {
         try {
-          final raw = await speedLimitAt(cur) ?? 0;
+          final raw = await speedLimitAt(
+            cur,
+            expectStreet: _roadInfo?.name,
+          ) ?? 0;
           limit = vehicleType == 'car'
               ? raw
               : raw > 0
@@ -903,6 +1196,10 @@ class _NavigationPageState extends State<NavigationPage>
                   _roadInfo?.highway ?? 'unclassified',
                   vehicle: vehicleType,
                   taggedKmh: raw,
+                  urban: _roadInfo?.urban ?? false,
+                  divided: _roadInfo?.divided ?? false,
+                  oneway: _roadInfo?.oneway,
+                  lanes: _roadInfo?.lanes,
                 )
               : 0;
         } catch (_) {
@@ -945,7 +1242,12 @@ class _NavigationPageState extends State<NavigationPage>
     final cur = _current ?? _origin;
     if (cur == null) return const [];
     try {
-      final geometry = _route?.geometry ?? const [];
+      // The window, not the whole route: this runs on the per-fix overlay
+      // update, and handing the scanners a 84 532-vertex polyline for a sign
+      // 800 m ahead measured 2.7 s per call on the web (no isolate there).
+      final geometry = _navigating
+          ? _routeWindowAhead()
+          : (_route?.geometry ?? const []);
       if (_navigating && geometry.length >= 2) {
         final ahead = await signsAheadOnRoute(
           cur,
@@ -1093,6 +1395,27 @@ class _NavigationPageState extends State<NavigationPage>
     // lookup, layer lookup, sign adoption, announcements) with no UI driving.
     // No define in a normal build → the constant is empty and this is a no-op.
     _maybeAutoSim();
+    if (kIsWeb) {
+      // ?vehicle=car drives the SAME build in another vehicle class. The class
+      // is what decides whether a posted limit is capped by that vehicle's
+      // ceiling (see effectiveLimit: a car takes the tagged value uncapped), so
+      // the accuracy harness has to be able to switch it without a rebuild.
+      final veh = Uri.base.queryParameters['vehicle']?.trim();
+      if (veh != null && veh.isNotEmpty) vehicleType = veh;
+      final want = Uri.base.queryParameters['layers'];
+      if (want != null) {
+        for (final l in want.split(',')) {
+          final name = l.trim();
+          if (name.isEmpty) continue;
+          simSetLayer(name, true);
+        }
+        unawaited(_ensureDebugLayers());
+      }
+    }
+    if (simConsoleEnabled || TripReplay.armedAtBoot) {
+      simAnnouncementSink ??= (a) => debugPrint('ANNOUNCE: $a');
+    }
+    TripReplay.revision.addListener(_onSimRevision);
     // Auto-show the floating speed/limit widget if the user left it enabled —
     // it runs in its own engine and keeps working over other apps when this
     // app is backgrounded. Best-effort; a missing permission just no-ops.
@@ -1125,23 +1448,22 @@ class _NavigationPageState extends State<NavigationPage>
         });
       },
     );
-    _autoConnect.init();
+    if (!kIsWeb) _autoConnect.init();
 
-    _mapClockSub = _mapClock.linkStream.listen((l) {
-      if (!mounted) return;
-      setState(() {
-        _mapStatus = switch (l) {
-          ClockLink.connected => 'connected',
-          ClockLink.connecting => 'connecting',
-          ClockLink.off => 'off',
-        };
+    if (!kIsWeb) {
+      _mapClockSub = _mapClock.linkStream.listen((l) {
+        if (!mounted) return;
+        setState(() {
+          _mapStatus = switch (l) {
+            ClockLink.connected => 'connected',
+            ClockLink.connecting => 'connecting',
+            ClockLink.off => 'off',
+          };
+        });
       });
-    });
-    // ESP32 GPS bridge: subscribe to the board's GPS broadcast — the compact
-    // AA55 binary frame (current protocol) + legacy raw NMEA. Fixes flow
-    // through the same pipeline as the phone GPS (ESP-first).
-    _mapGpsSub = _mapClock.gpsNmeaStream.listen(_onEspNmea);
-    _mapGpsFrameSub = _mapClock.gpsFrameStream.listen(_onEspGpsFrame);
+      _mapGpsSub = _mapClock.gpsNmeaStream.listen(_onEspNmea);
+      _mapGpsFrameSub = _mapClock.gpsFrameStream.listen(_onEspGpsFrame);
+    }
     // Nav vector-map zoom → floating-widget auto-hide. The nav map reports
     // its zoom through this controller; a ChangeNotifier listener here means
     // a zoom-out hides the widget even while following (no GPS fix needed).
@@ -1151,7 +1473,11 @@ class _NavigationPageState extends State<NavigationPage>
         'STARTUP: first frame at t+'
         '${DateTime.now().difference(_appStart).inMilliseconds}ms',
       );
-      if (await _requestPermission()) _startGps();
+      if (TripReplay.armed) {
+        debugPrint('REPLAY: armed (${TripReplay.source}) — GPS permission gate skipped');
+      } else if (await _requestPermission()) {
+        _startGps();
+      }
       // NOTE: the app boots ONLINE-FIRST — routing stays on the fast online
       // OSRM/Vietmap path. The heavy offline camera index is NOT preloaded
       // here (see [_ensureCameras]); it loads lazily when the user turns
@@ -1174,7 +1500,12 @@ class _NavigationPageState extends State<NavigationPage>
       forceOffline = s.forceOffline;
       dataSource = s.dataSource;
       vehicleType = s.vehicleType;
-      _routeProfile = switch (s.vehicleType) {
+      // ...unless the served page asked for another class in the URL. This has
+      // to be here as well as at boot: the persisted settings land AFTER
+      // initState and would otherwise silently undo ?vehicle=car.
+      final vehUrl = kIsWeb ? Uri.base.queryParameters['vehicle']?.trim() : null;
+      if (vehUrl != null && vehUrl.isNotEmpty) vehicleType = vehUrl;
+      _routeProfile = switch (vehicleType) {
         'motorbike' => RouteProfile.motorbike,
         _ => RouteProfile.car,
       };
@@ -1190,20 +1521,21 @@ class _NavigationPageState extends State<NavigationPage>
       wakeWord = s.wakeWord;
       overlayLayout = s.overlayLayout;
       overlayScale = s.overlayScale;
-      bleAutoConnect = s.bleAutoConnect;
+      bleAutoConnect = kIsWeb ? false : s.bleAutoConnect;
       lastBleMac = s.lastBleMac;
       lastBleName = s.lastBleName;
       lastBleType = s.lastBleType;
       debugPrint(
         'SETTINGS: cameraAlerts=$cameraAlerts radar=$radarOn '
-        '(persisted=${s.cameraAlerts}) bleAuto=$bleAutoConnect',
+        '(persisted=${s.cameraAlerts})'
+        '${kIsWeb ? '' : ' bleAuto=$bleAutoConnect'}',
       );
       setState(() => _offline = forceOffline ? true : _offline);
       if (radarOn) {
         unawaited(_ensureRadar());
       }
       // If Bluetooth auto-connect is enabled, start the auto-connect hunt.
-      if (bleAutoConnect) {
+      if (bleAutoConnect && !kIsWeb) {
         _autoConnect.rearm();
         unawaited(_autoConnect.autoConnect());
       }
@@ -1241,9 +1573,9 @@ class _NavigationPageState extends State<NavigationPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
     Future(() async {
-      if (await _requestPermission()) _startGps();
+      if (!TripReplay.armed && await _requestPermission()) _startGps();
     });
-    if (bleAutoConnect && !_mapClock.isConnected) {
+    if (bleAutoConnect && !kIsWeb && !_mapClock.isConnected) {
       _autoConnect.rearm();
       unawaited(_autoConnect.autoConnect());
     }
@@ -1274,6 +1606,8 @@ class _NavigationPageState extends State<NavigationPage>
     _weatherTimer?.cancel();
     _fuelTimer?.cancel();
     _simTimer?.cancel();
+    _debugSegTimer?.cancel();
+    TripReplay.revision.removeListener(_onSimRevision);
     RecentSearches.instance.removeListener(_onRecentSearchesChanged);
     _searchFocus.removeListener(_onSearchFocusChanged);
     _startFocus.removeListener(_onSearchFocusChanged);

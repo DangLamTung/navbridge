@@ -68,13 +68,38 @@ class OutlierGate {
 
   /// Returns true to ACCEPT [pos]; false rejects the outlier. [dt] = seconds
   /// since the last ACCEPTED fix (null on the first fix).
-  bool accept(LatLng pos, {double? accuracy, double? dt}) {
+  ///
+  /// [speedMps] is the fix's OWN reported speed. It is used only to seed the
+  /// prior on a cold start: with no accepted fix yet the prior is 0, the jump
+  /// floor is [OutlierGate._minPlausibleMps] × dt × factor (15 m at 1 s ≈
+  /// 54 km/h), and a drive that begins ALREADY MOVING is therefore rejected —
+  /// and because the EMA above only updates on accepted fixes, every later fix
+  /// is rejected too: the gate never recovers and the app shows nothing at all.
+  /// Measured on the long-trip replay (2026-09-27): `GPS: REJECTED dt=0.94s`
+  /// then `1.88s`, `2.82s` … for the whole run, while the car was doing 76 km/h
+  /// down QL1A. Real cases: the app opened while riding, or a replay resumed
+  /// mid-route with `?from=`.
+  bool accept(
+    LatLng pos, {
+    double? accuracy,
+    double? dt,
+    double? speedMps,
+  }) {
     // Reflect the persisted GPS-filter strength on every fix so a settings
     // change applies without restarting navigation.
     _applyStrength(gpsFilterStrength);
     if (accuracy != null && accuracy > _maxAccuracyM) {
       rejected++;
       return false;
+    }
+    // Cold start: believe the fix's own speed rather than assuming the car is
+    // standing still. Only until the first fix is accepted — from then on the
+    // measured EMA (which a bad reading cannot move) is the prior again.
+    if (accepted == 0 &&
+        speedMps != null &&
+        speedMps.isFinite &&
+        speedMps > _minPlausibleMps) {
+      _smoothSpeedMps = speedMps;
     }
     final prev = _lastFix;
     if (prev != null && dt != null && dt > 0) {

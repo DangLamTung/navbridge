@@ -9,8 +9,6 @@ import com.graphhopper.routing.ev.EnumEncodedValue
 import com.graphhopper.routing.ev.IntEncodedValue
 import com.graphhopper.routing.ev.RoadClass
 import com.graphhopper.routing.util.EdgeFilter
-import com.graphhopper.storage.index.Snap
-import com.graphhopper.util.FetchMode
 import com.graphhopper.util.shapes.GHPoint
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
@@ -195,25 +193,8 @@ class GraphHopperRouting {
     /** Road info (name / road class / maxspeed) at [lat],[lng] from the
      *  on-device graph — instant and offline (no Overpass round-trip).
      *  maxspeed is 0/absent when not tagged (Vietnam rarely tags it; the
-     *  Dart side applies statutory defaults per road class).
-     *
-     *  [headingDeg] (compass, 0 = north) is the car's own direction of travel.
-     *  Without it the lookup answers "which road is nearest", which at a junction
-     *  is often the road CROSSING the car's path — and the name, the class and so
-     *  the built-up 50/60 limit all come from it.
-     *
-     *  NOTE this used to call `findClosest(...ALL_EDGES)` directly, so
-     *  [closestAligned] (heading + road-class scoring) was dead code and every
-     *  fix took the nearest edge, alley mouth included: replayed at IDENTICAL
-     *  coordinates against the 2026-09-22 21:04 drive, 64 of 262 fixes got the
-     *  class of a hẻm/footway metres away (30 km/h on a 50 road, 10 km/h on a
-     *  60 road). */
-    fun roadInfo(
-        lat: Double,
-        lng: Double,
-        headingDeg: Double?,
-        result: MethodChannel.Result,
-    ) {
+     *  Dart side applies statutory defaults per road class). */
+    fun roadInfo(lat: Double, lng: Double, result: MethodChannel.Result) {
         executor.execute {
             try {
                 val gh = hopper
@@ -238,7 +219,7 @@ class GraphHopperRouting {
                 } catch (_: Exception) {
                     null
                 }
-                val snap = closestAligned(gh, lat, lng, headingDeg)
+                val snap = gh.locationIndex.findClosest(lat, lng, EdgeFilter.ALL_EDGES)
                 if (snap == null || !snap.isValid) {
                     postSuccess(result, null)
                     return@execute
@@ -289,157 +270,10 @@ class GraphHopperRouting {
         }
     }
 
-    /** The nearest edge the car is travelling ALONG, on the road it is really
-     *  on — not merely the nearest edge.
-     *
-     *  Two corrections, both needed once the lookup moved to the RAW GPS fix
-     *  (several metres off the centreline, in the lane):
-     *
-     *  1. Heading. The closest edge whose chord runs more than 45° off the
-     *     car's heading (a crossing street, metres away at a junction) is
-     *     penalised.
-     *  2. Road CLASS, exactly as the Dart Overpass path scores candidates
-     *     (`_classPriority` in lib/services/overpass.dart, 8 m per step) and
-     *     with non-drivable classes effectively excluded. Without this a hẻm
-     *     mouth 5 m away that happens to run parallel beat the road 14 m away:
-     *     replayed against the 2026-09-22 21:04 drive at IDENTICAL coordinates
-     *     (tool/sim_vs_real.py, max gap 5 m) the class was wrong on 64 of 262
-     *     fixes — `service` on Trương Công Định / Ba Vân / Lũy Bán Bích, a
-     *     `footway` twice on Lũy Bán Bích (10 km/h on a 60 road).
-     *
-     *  Every candidate that loses to a lower class is logged, so a drive can be
-     *  audited from logcat. */
-    private val classPriority = mapOf(
-        "motorway" to 0, "motorway_link" to 1, "trunk" to 2, "trunk_link" to 3,
-        "primary" to 4, "primary_link" to 5, "secondary" to 6,
-        "secondary_link" to 7, "tertiary" to 8, "tertiary_link" to 9,
-        "unclassified" to 10, "residential" to 11, "living_street" to 12,
-        "service" to 13, "track" to 14, "path" to 15, "pedestrian" to 16,
-        "footway" to 17, "cycleway" to 18, "steps" to 19,
-    )
-
-    /** Classes the car is not legitimately on; only used when nothing drivable
-     *  is available at all (a mapped footpath beside a road must never name or
-     *  limit the road). */
-    private val nonDrivable = setOf(
-        "footway", "path", "steps", "cycleway", "bridleway", "track",
-        "construction",
-    )
-
-    private fun closestAligned(
-        gh: GraphHopper,
-        lat: Double,
-        lng: Double,
-        headingDeg: Double?,
-        tries: Int = 4,
-    ): Snap? {
-        val em = gh.encodingManager
-        val roadClass = try {
-            @Suppress("UNCHECKED_CAST")
-            em.getEncodedValue(
-                "road_class", EnumEncodedValue::class.java
-            ) as EnumEncodedValue<RoadClass>
-        } catch (_: Exception) {
-            null
-        }
-        val seen = HashSet<Int>()
-        val cands = ArrayList<Pair<Snap, Double>>() // snap to its distance (m)
-        for (attempt in 0..tries) {
-            val filter = if (seen.isEmpty()) {
-                EdgeFilter.ALL_EDGES
-            } else {
-                EdgeFilter { e -> !seen.contains(e.edge) }
-            }
-            val snap = gh.locationIndex.findClosest(lat, lng, filter)
-            if (snap == null || !snap.isValid) break
-            if (!seen.add(snap.closestEdge.edge)) break
-            // Snap.getQueryDistance() is already METRES (measured on the
-            // emulator: the same fixes the recorded track puts 8.3 m from an
-            // alley and 26.0 m from Ba Vân logged 8.2852 / 25.9917). Scaling it
-            // by 1000 made every distance dwarf the class penalty, so the class
-            // scoring silently did nothing.
-            cands.add(snap to snap.queryDistance)
-        }
-        if (cands.isEmpty()) return null
-        var best: Snap? = null
-        var bestScore = Double.MAX_VALUE
-        var bestCls = ""
-        var nearestCls = ""
-        for ((i, cand) in cands.withIndex()) {
-            val (snap, dist) = cand
-            val cls = if (roadClass != null) {
-                snap.closestEdge.get(roadClass)?.name?.lowercase() ?: ""
-            } else {
-                ""
-            }
-            if (i == 0) nearestCls = cls
-            var score = dist + (classPriority[cls] ?: 20) * 8.0
-            if (cls in nonDrivable) score += 1000.0
-            if (headingDeg != null) {
-                val off = edgeLineAngle(gh, snap, headingDeg)
-                if (off != null && off > 45.0) score += 1000.0
-            }
-            // Audit line: every candidate with its raw numbers, so a wrong pick
-            // can be read straight off logcat instead of guessed at.
-            android.util.Log.i(
-                "NavBridgeRouter",
-                "roadInfo cand[$i] d=${"%.1f".format(dist)}m cls=$cls " +
-                    "name=${snap.closestEdge.name} score=" +
-                    "%.1f".format(score),
-            )
-            if (score < bestScore) {
-                bestScore = score
-                best = snap
-                bestCls = cls
-            }
-        }
-        if (best != null && bestCls != nearestCls) {
-            android.util.Log.i(
-                "NavBridgeRouter",
-                "roadInfo: ${best.closestEdge.name} [$bestCls] beat the nearest " +
-                    "edge [$nearestCls] — class/distance scoring",
-            )
-        }
-        return best ?: cands.first().first
-    }
-
-    /** Angle (deg, 0..90) between [headingDeg] and the direction of the snapped
-     *  edge at the snap point, read from the edge's own way geometry. Null when
-     *  the geometry cannot be read, which callers treat as "no signal". */
-    private fun edgeLineAngle(gh: GraphHopper, snap: Snap, headingDeg: Double): Double? {
-        return try {
-            val e = snap.closestEdge
-            val pts = e.fetchWayGeometry(FetchMode.ALL)
-            if (pts.size() < 2) return null
-            val i = snap.wayIndex.coerceIn(0, pts.size() - 1)
-            val j = if (i > 0) i - 1 else minOf(i + 1, pts.size() - 1)
-            val lat1 = pts.getLat(j)
-            val lng1 = pts.getLon(j)
-            val lat2 = pts.getLat(i)
-            val lng2 = pts.getLon(i)
-            val dy = lat2 - lat1
-            val dx = (lng2 - lng1) * Math.cos(Math.toRadians((lat1 + lat2) / 2.0))
-            if (dy == 0.0 && dx == 0.0) {
-                null
-            } else {
-                val bearing = (Math.toDegrees(Math.atan2(dx, dy)) + 360.0) % 360.0
-                var d = Math.abs(headingDeg - bearing) % 180.0
-                if (d > 90.0) d = 180.0 - d
-                d
-            }
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
     /** Nearest road edge + snapped point to [lat],[lng] (network matching, like
      *  Google Maps): returns {lat, lng, distance (m to the road), edge (id)}
      *  or null when no road is nearby. Used to (a) stick the puck to the road
-     *  and (b) detect when the car is on a road that is NOT part of the route.
-     *
-     *  Deliberately the plain NEAREST edge (no heading / class scoring): the
-     *  puck and the off-route test want the closest tarmac, not the road the car
-     *  is travelling along. Road naming/limits go through [roadInfo] instead. */
+     *  and (b) detect when the car is on a road that is NOT part of the route. */
     fun snapToRoad(lat: Double, lng: Double, result: MethodChannel.Result) {
         executor.execute {
             try {

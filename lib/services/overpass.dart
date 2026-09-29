@@ -16,6 +16,8 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import 'osrm.dart' show distanceMeters;
+import 'offline_road_signs.dart' show kVnMaxPostedKmh;
+import 'offline_speed_limits.dart' show streetNameMatches;
 import 'urban_area.dart';
 
 /// Road info resolved from OSM tags at a position.
@@ -62,6 +64,12 @@ class RoadInfo {
   /// the complete set of inputs [effectiveLimit] used.
   final bool urban;
 
+  /// Whether the road FORM (oneway / lanes / divided) is genuinely known for
+  /// this street (e.g. from OSM tags), rather than guessed or inherited from a
+  /// previous road. When false, the vehicle zone ceiling applies instead of
+  /// assuming a two-way road.
+  final bool formKnown;
+
   /// True for the three posted-limit LAYER sources. While this is true the
   /// layer is authority: a speed sign may only tighten the limit, never raise
   /// it — see [signLimitInForce].
@@ -78,6 +86,7 @@ class RoadInfo {
     this.divided = false,
     this.urban = false,
     this.src = 'class',
+    this.formKnown = true,
   });
 
   /// Same road, a couple of fields replaced. Use this instead of re-listing
@@ -85,20 +94,28 @@ class RoadInfo {
   /// was added, and silently dropped the new one when they weren't.
   RoadInfo copyWith({
     String? name,
+    String? highway,
     String? maxspeed,
+    String? label,
     int? speedLimit,
+    bool? oneway,
+    int? lanes,
+    bool? divided,
+    bool? urban,
     String? src,
+    bool? formKnown,
   }) => RoadInfo(
     name: name ?? this.name,
-    highway: highway,
+    highway: highway ?? this.highway,
     maxspeed: maxspeed ?? this.maxspeed,
-    label: label,
+    label: label ?? this.label,
     speedLimit: speedLimit ?? this.speedLimit,
-    oneway: oneway,
-    lanes: lanes,
-    divided: divided,
-    urban: urban,
+    oneway: oneway ?? this.oneway,
+    lanes: lanes ?? this.lanes,
+    divided: divided ?? this.divided,
+    urban: urban ?? this.urban,
     src: src ?? this.src,
+    formKnown: formKnown ?? this.formKnown,
   );
 }
 
@@ -246,11 +263,20 @@ int statutoryLimit(
       case 'cycleway':
         return base;
     }
-    return urbanLimit(
-      vehicle: vehicle,
-      oneway: oneway,
-      lanes: lanes,
-      divided: divided,
+    // …and the built-up rule may only ever TIGHTEN, never raise: a ramp
+    // (`trunk_link` / `primary_link` / `secondary_link`) carries a class
+    // default of 50, and returning the đường-đôi 60 for it made a town ramp
+    // read HIGHER than the same ramp in open country (found 2026-09-28 by the
+    // invariant in test/services/urban_limit_change_test.dart). Entering a
+    // built-up area must never tell the driver they may go faster.
+    return math.min(
+      base,
+      urbanLimit(
+        vehicle: vehicle,
+        oneway: oneway,
+        lanes: lanes,
+        divided: divided,
+      ),
     );
   }
   // `residential` / `unclassified` are built-up street classes by definition,
@@ -300,6 +326,7 @@ int effectiveLimit(
   bool divided = false,
   bool urban = false,
   String postedSrc = srcOsm,
+  bool formKnown = true,
 }) {
   final statutory = statutoryLimit(
     highway,
@@ -312,25 +339,87 @@ int effectiveLimit(
     urban: urban && taggedKmh <= 0,
   );
   if (taggedKmh <= 0) return statutory;
-  if (vehicle == 'car') return taggedKmh;
+  if (vehicle == 'car') {
+    // A car has no other posted source, so the tag IS the limit — but the tag
+    // can be junk: the shipped Waze layer carries 130 and 140 km/h segments on
+    // roads where 90 is legal, and those became illegal advice on QL1. The
+    // national maximum for any road is 120, so clamp there.
+    //
+    // NOT clamped to the 90/80 car rows: an expressway legitimately allows 120,
+    // and vehicleCeiling returns a flat 120 for cars (it has no expressway
+    // signal), so tightening it blindly would suppress a correct limit.
+    return math.min(taggedKmh, kVnMaxPostedKmh);
+  }
   if (postedSrc == srcOsm) {
     // Last place: the tag may still make the driver slower, never faster.
     return math.min(statutory, taggedKmh);
   }
-  return math.min(vehicleCeiling(vehicle, urban: urban), taggedKmh);
+  final ceiling = formKnown
+      ? vehicleCeiling(vehicle,
+          urban: urban, divided: divided, oneway: oneway, lanes: lanes)
+      : vehicleZoneCeiling(vehicle, urban: urban);
+  return math.min(ceiling, taggedKmh);
 }
 
-/// The vehicle's legal MAXIMUM speed in [urban] context — Thông tư 31/2019
-/// TT-BGTVT Điều 6 (khu đông dân cư: đường đôi / một chiều ≥2 làn của mô tô 60,
-/// ngoài khu đông dân cư đường đôi 70; xe tải 50 trong / 60 ngoài). Nothing a
-/// Waze sign says can legally put a mô tô above this, so it is the only clamp
-/// applied to a layer value. Cars are uncapped here (the sign IS their limit).
-int vehicleCeiling(String vehicle, {bool urban = false}) {
+/// The vehicle's absolute legal MAXIMUM in [urban] / rural zone regardless of
+/// road form — Thông tư 38/2024. Used when the road form is unknown (e.g. when
+/// the layer adopts a new street name) so a valid divided-road posted limit
+/// (e.g. 60 in town for motorbike) is not clamped by a two-way assumption.
+int vehicleZoneCeiling(String vehicle, {bool urban = false}) {
   switch (vehicle) {
     case 'motorbike':
       return urban ? 60 : 70;
     case 'truck':
-      return urban ? 50 : 60;
+      return urban ? 50 : 70;
+    default:
+      return kVnMaxPostedKmh;
+  }
+}
+
+/// Is this a "đường đôi" (two carriageways / một chiều có từ hai làn xe cơ
+/// giới)? The ONE definition of the road FORM — the built-up rule
+/// ([urbanLimit]) and the vehicle ceiling ([vehicleCeiling]) must agree on it,
+/// or a value the built-up rule calls 60 gets capped by a ceiling that thinks
+/// the road is two-way. "Đường đôi" = two carriageways split by a dải phân
+/// cách; OSM carries no median tag in VN, so the usable signals are [divided]
+/// (an opposite-way carriageway of the same street sits alongside) and a
+/// one-way way that itself carries ≥2 motor lanes ([oneway] + [lanes]).
+bool dividedForm({bool divided = false, bool? oneway, int? lanes}) =>
+    divided || (oneway == true && (lanes ?? 2) >= 2);
+
+/// The vehicle's legal MAXIMUM speed given WHERE it is and WHAT the road is —
+/// Thông tư 38/2024/TT-BGTVT (hiệu lực 01/01/2025):
+///
+///   xe mô tô ngoài khu đông dân cư: 70 trên đường đôi / một chiều ≥2 làn,
+///                                   60 trên đường hai chiều (điển hình QL1A)
+///   xe mô tô trong khu đông dân cư: 60 trên đường đôi, 50 trên đường hai chiều
+///   xe tải  trong khu đông dân cư: 50 đường đôi / 40 hai chiều
+///
+/// The road FORM matters: 70 is not a mô tô limit, it is the divided-road
+/// number. This used to return 70 for any road outside a built-up area, so a
+/// Waze segment claiming 70 stood unchallenged on a two-way rural road where
+/// the law says 60 — the clamp exists precisely to stop a layer value from
+/// exceeding the law. Nothing a Waze sign says can legally put a mô tô above
+/// this. Cars are uncapped here (the sign IS their limit).
+///
+/// An UNKNOWN form is read as the two-way case: most Vietnamese roads are, and
+/// erring on the lower number can only make the driver slower.
+int vehicleCeiling(
+  String vehicle, {
+  bool urban = false,
+  bool divided = false,
+  bool? oneway,
+  int? lanes,
+}) {
+  final isDivided = dividedForm(divided: divided, oneway: oneway, lanes: lanes);
+  switch (vehicle) {
+    case 'motorbike':
+      if (urban) return isDivided ? 60 : 50;
+      return isDivided ? 70 : 60;
+    case 'truck':
+      // The rural pair is left as the class-level 60 until a road-form split
+      // is verified for trucks.
+      return urban ? (isDivided ? 50 : 40) : 60;
     default:
       return 120;
   }
@@ -431,26 +520,55 @@ RoadInfo applyPostedLayer(
   /// Null → fall back to [RoadInfo.urban].
   bool? inTown,
 }) {
-  return RoadInfo(
-    name: (name != null && name.isNotEmpty) ? name : road.name,
-    highway: road.highway,
-    maxspeed: '$kmh',
-    label: road.label,
-    speedLimit: effectiveLimit(
-      road.highway,
-      vehicle: vehicle,
-      taggedKmh: kmh,
+  final hasName = name != null && name.trim().isNotEmpty;
+  final sameRoad = !hasName ||
+      road.name.trim().isEmpty ||
+      streetNameMatches(road.name, name);
+
+  // The road form (oneway / lanes / divided) is only genuinely known when
+  // road tags came from the graph/OSM for THIS street. If the road was
+  // synthesized from a layer rename, or if this call introduces a new street
+  // name, the previous road's form must not bleed over.
+  final formGenuinelyKnown =
+      sameRoad && road.name.trim().isNotEmpty && !road.fromLayer;
+
+  final int ceiling;
+  if (formGenuinelyKnown) {
+    ceiling = vehicleCeiling(
+      vehicle,
+      urban: inTown ?? road.urban,
+      divided: road.divided,
       oneway: road.oneway,
       lanes: road.lanes,
-      divided: road.divided,
+    );
+  } else {
+    // When road form is unknown from OSM or adopting a new road name from layer:
+    // use the vehicle zone ceiling (60 in town, 70 rural for motorbikes)
+    // so valid divided-road posted limits (60 on Lũy Bán Bích, Trường Chinh)
+    // are not clamped by a two-way assumption.
+    ceiling = vehicleZoneCeiling(
+      vehicle,
       urban: inTown ?? road.urban,
-      // The value comes from a LAYER, not from an OSM tag: it is the authority.
-      postedSrc: layerSrc,
-    ),
+    );
+  }
+
+  final effective = vehicle == 'car'
+      ? math.min(kmh, kVnMaxPostedKmh)
+      : math.min(ceiling, kmh);
+
+  final effectiveTown = inTown ?? road.urban;
+  final newDivided = sameRoad ? road.divided : false;
+
+  return RoadInfo(
+    name: hasName ? name : road.name,
+    highway: road.highway,
+    maxspeed: '$kmh',
+    label: road.label.isNotEmpty ? road.label : classInfo(road.highway).$1,
+    speedLimit: effective,
     oneway: road.oneway,
     lanes: road.lanes,
-    divided: road.divided,
-    urban: road.urban,
+    divided: newDivided,
+    urban: effectiveTown,
     // The posted-limit layer has now spoken: from here a speed sign may only
     // tighten this value (see [signLimitInForce]).
     src: layerSrc,
@@ -510,7 +628,7 @@ int urbanLimit({
   // through street (≥2 làn), while an explicit `lanes=1` is a genuine single
   // lane. This also keeps the answer stable on the many ways of the SAME
   // divided road that carry no `lanes` tag (5 of Lũy Bán Bích's 11 ways).
-  final isDivided = divided || (oneway == true && (lanes ?? 2) >= 2);
+  final isDivided = dividedForm(divided: divided, oneway: oneway, lanes: lanes);
   if (vehicle == 'truck') return isDivided ? 50 : 40;
   return isDivided ? 60 : 50;
 }
@@ -646,7 +764,7 @@ Future<RoadInfo?> fetchRoadInfo(
   // Nothing tagged → decide the urban table from POI density, so a class
   // default meant for the countryside (primary = 80/60) does not stand inside
   // a town (50, or 60 on a divided road).
-  final urban = await builtUpRuleApplies(pos, hasPosted: taggedKmh > 0);
+  final urban = await isUrbanArea(pos);
   // One constructor for every lookup path — see [roadInfoFromRoad].
   final info = roadInfoFromRoad(
     name: (tags['name'] ?? '') as String,

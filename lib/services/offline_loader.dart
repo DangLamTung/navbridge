@@ -8,6 +8,7 @@ library;
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
@@ -22,11 +23,46 @@ Future<Directory> offlineDataDir() async {
 }
 
 /// Path to an auto-updated data file (e.g. `vietnam_cameras.json`), or null if
-/// it hasn't been downloaded yet.
+/// it hasn't been downloaded yet. Checks app storage and external Download dir.
 Future<File?> offlineDataFile(String name) async {
   final dir = await offlineDataDir();
   final f = File('${dir.path}/$name');
-  return f.existsSync() ? f : null;
+  if (f.existsSync()) return f;
+  if (!kIsWeb) {
+    for (final p in [
+      '/sdcard/Download/$name',
+      '/storage/emulated/0/Download/$name',
+    ]) {
+      final dl = File(p);
+      if (dl.existsSync()) {
+        try {
+          dl.copySync(f.path);
+          try {
+            dl.deleteSync();
+          } catch (_) {}
+          return f;
+        } catch (_) {
+          return dl;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/// Manually install an offline data file (cameras, signs, segments) from a local path.
+Future<bool> installOfflineDataFile(String sourceFilePath) async {
+  try {
+    final src = File(sourceFilePath);
+    if (!src.existsSync()) return false;
+    final dir = await offlineDataDir();
+    final filename = src.uri.pathSegments.last;
+    final target = File('${dir.path}/$filename');
+    await src.copy(target.path);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 /// Read an offline data file, preferring an auto-updated copy from the server
@@ -67,6 +103,7 @@ Future<Uint8List> readOfflineBytes(String name) async {
 /// there is no app-support directory at all (unit tests, where path_provider
 /// has no plugin).
 Future<File?> _downloadedFile(String name) async {
+  if (kIsWeb) return null;
   try {
     return await offlineDataFile(name);
   } catch (_) {

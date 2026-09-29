@@ -253,6 +253,25 @@ extension _NavMap on _NavigationPageState {
     setNavState(() => _nightMode = !_nightMode);
   }
 
+  bool _inView(double lat, double lng) {
+    final b = _map.camera.visibleBounds;
+    const pad = 0.002; // ~220 m
+    return lat >= b.south - pad &&
+        lat <= b.north + pad &&
+        lng >= b.west - pad &&
+        lng <= b.east + pad;
+  }
+
+  Color _segmentColor(int kmh) {
+    if (kmh <= 0) return const Color(0xFF9E9E9E);
+    if (kmh <= 30) return const Color(0xFF8E24AA);
+    if (kmh <= 40) return const Color(0xFF1E88E5);
+    if (kmh <= 50) return const Color(0xFF2E7D32);
+    if (kmh <= 60) return const Color(0xFFF9A825);
+    if (kmh <= 70) return const Color(0xFFEF6C00);
+    return const Color(0xFFC62828);
+  }
+
   Widget _buildMap(OsrmRoute? route, LatLng? current) {
     // Browse map: load the camera/sign index LAZILY (after the first build)
     // so cold start stays fast but cameras + signs still appear on browse.
@@ -294,11 +313,16 @@ extension _NavMap on _NavigationPageState {
                   _refreshNearCameras(pos.center);
                 }
               }
+              if (simShowSegments) _scheduleDebugSegments();
             },
             // Google-style interactive route editing on the preview map:
             // tap an alternative route line to select it, long-press to add
             // a via point and re-plan.
             onTap: (_, tapPos) {
+              if (kIsWeb && simEditorMode) {
+                simAddEditorWaypoint(tapPos);
+                return;
+              }
               // Directions mode: a plain tap sets the ACTIVE field — the
               // start point (green) or the destination (red), Google-Maps
               // style. Tapping the route/alternative lines still selects
@@ -384,7 +408,9 @@ extension _NavMap on _NavigationPageState {
               // styles never mix.
               urlTemplate: _NavigationPageState._tileLayers[_tileSource],
               userAgentPackageName: 'com.navbridge.app',
-              tileProvider: _tileProvider,
+              tileProvider: kIsWeb
+                  ? NetworkTileProvider()
+                  : _tileProvider,
             ),
             // Rain radar (RainViewer) — a translucent live rain map above the
             // basemap, below the route. Online-only (fresh data every frame).
@@ -414,6 +440,87 @@ extension _NavMap on _NavigationPageState {
                   tileSize: 512,
                   maxNativeZoom: 6,
                 ),
+              ),
+            if (simShowSegments && simSegments != null)
+              PolylineLayer(
+                polylines: [
+                  for (final s in simSegments!)
+                    Polyline(
+                      points: s.points,
+                      color: _segmentColor(s.limit),
+                      strokeWidth: s.id == lastWazeSegmentId() ? 7 : 4,
+                    ),
+                ],
+              ),
+            if (simShowSigns && simAllSigns != null)
+              MarkerLayer(
+                markers: [
+                  for (final s in simAllSigns!)
+                    if (_inView(s.lat, s.lng))
+                      Marker(
+                        point: LatLng(s.lat, s.lng),
+                        width: 32,
+                        height: 32,
+                        child: _DebugSignMarker(sign: s),
+                      ),
+                ],
+              ),
+            if (simShowCameras && simAllCameras != null)
+              MarkerLayer(
+                markers: [
+                  for (final c in simAllCameras!)
+                    if (_inView(c.lat, c.lng))
+                      Marker(
+                        point: LatLng(c.lat, c.lng),
+                        width: 26,
+                        height: 26,
+                        child: _DebugCameraMarker(camera: c),
+                      ),
+                ],
+              ),
+            if (kIsWeb && simEditorMode && simEditorWaypoints.length >= 2)
+              PolylineLayer(
+                polylines: [
+                  Polyline(
+                    points: simEditorWaypoints,
+                    color: const Color(0xFF673AB7),
+                    strokeWidth: 5,
+                  ),
+                ],
+              ),
+            if (kIsWeb && simEditorMode && simEditorWaypoints.isNotEmpty)
+              MarkerLayer(
+                markers: [
+                  for (var i = 0; i < simEditorWaypoints.length; i++)
+                    Marker(
+                      point: simEditorWaypoints[i],
+                      width: 28,
+                      height: 28,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: i == 0
+                              ? Colors.green
+                              : (i == simEditorWaypoints.length - 1
+                                  ? Colors.red
+                                  : const Color(0xFF673AB7)),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                          boxShadow: const [
+                            BoxShadow(color: Colors.black38, blurRadius: 4),
+                          ],
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          '${i + 1}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             if (route != null)
               PolylineLayer(

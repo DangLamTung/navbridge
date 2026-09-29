@@ -1,6 +1,34 @@
 part of '../navigation_page.dart';
 
 extension _NavNavigation on _NavigationPageState {
+  /// The stretch of the route that matters RIGHT NOW: [backM] behind to
+  /// [aheadM] ahead of the current segment.
+  ///
+  /// Every per-second query used to be handed the WHOLE route polyline. On a
+  /// 1 690 km replay (84 532 vertices) the scanners walk that polyline per
+  /// item — measured 18 s per call on the web, where `compute()` has no isolate
+  /// to hide it — so refreshing the camera/sign layers took 37 s per fix and
+  /// the page never caught up with the drive. Nothing 1 500 m ahead of the car
+  /// can need geometry a thousand kilometres away, so the window is enough.
+  List<LatLng> _routeWindowAhead({double backM = 1000, double aheadM = 6000}) {
+    final geo = _route?.geometry ?? const <LatLng>[];
+    if (geo.length < 3) return geo;
+    final i = _routeStartIndex.clamp(0, geo.length - 1);
+    var back = i;
+    var d = 0.0;
+    while (back > 0 && d < backM) {
+      d += fastDistanceMeters(geo[back - 1], geo[back]);
+      back--;
+    }
+    var fwd = i;
+    d = 0;
+    while (fwd < geo.length - 1 && d < aheadM) {
+      d += fastDistanceMeters(geo[fwd], geo[fwd + 1]);
+      fwd++;
+    }
+    return geo.sublist(back, fwd + 1);
+  }
+
   /// Shared by real GPS: snap the fix to the route, update the nav card,
   /// push to the clock and keep the camera on the car.
   void _handleNav(LatLng pos, {required double speedMps}) {
@@ -10,7 +38,10 @@ extension _NavNavigation on _NavigationPageState {
     // longer reset the 5 s timer, so a real deviation still reroutes.
     // Stationary (<~5 km/h) never reroutes — a bad fix at a red light
     // shouldn't yank the route.
+    // PROBE (temporary): per-fix cost breakdown on a long route.
+    final tOff = Stopwatch()..start();
     final off = _engine!.offRouteDistance(pos);
+    tOff.stop();
     final spd = speedMps.isNaN ? 0.0 : speedMps;
 
     // Detect if driver is moving in a new direction divergent from route (>65°).
@@ -70,7 +101,7 @@ extension _NavNavigation on _NavigationPageState {
     if (_isRerouting) {
       _current = pos;
       _logFix(pos, speedMps);
-      _map.move(pos, 17);
+      _map.move(pos, 16);
       if (mounted) setNavState(() {});
       return;
     }
@@ -78,9 +109,13 @@ extension _NavNavigation on _NavigationPageState {
     // the puck, the camera bearing and the turn meter all stay stable even
     // when the real GPS fix wanders a few meters off the road (this is what
     // kept the arrow flickering — the raw fix fed the nearest-vertex bearing).
+    final tSnap = Stopwatch()..start();
     final snapped = _engine!.snapToRoute(pos);
+    tSnap.stop();
     _current = snapped; // keep the vector map + POI search on the route
+    final tUpd = Stopwatch()..start();
     final nav = _engine!.update(snapped, speedMps: speedMps);
+    tUpd.stop();
     _progress = nav;
     // Consume the driven part of the route (the map only draws from here on).
     _routeStartIndex = _engine!.snappedSegmentIndex;
@@ -89,10 +124,15 @@ extension _NavNavigation on _NavigationPageState {
     _sendToClock(nav);
     _maybeSpeakManeuver(nav);
     _maybeSpeakOverspeed(spd);
-    _checkCameraAhead(snapped, _route?.geometry ?? const []);
+    final window = _routeWindowAhead();
+    final tCam = Stopwatch()..start();
+    _checkCameraAhead(snapped, window);
+    tCam.stop();
     // Road signs: announce the next STOP / give-way sign ahead (traffic
     // lights are map-only). Offline index, ~1 Hz throttle inside.
-    _checkSignAhead(snapped, _route?.geometry ?? const []);
+    final tSign = Stopwatch()..start();
+    _checkSignAhead(snapped, window);
+    tSign.stop();
     // Keep the nav-map camera/sign layer near the car (~1 s, same cadence as
     // the GPS fix) so it stays a handful of markers instead of a whole route's
     // worth, AND updates as the car moves past a sign/camera (the old 5 s lag
@@ -105,7 +145,9 @@ extension _NavNavigation on _NavigationPageState {
       _lastNearbyLayers = nlNow;
       unawaited(_refreshRouteCameras());
     }
+    final tRoad = Stopwatch()..start();
     _refreshRoad(pos, snapped: snapped);
+    tRoad.stop();
     // The tick's NavProgress carries the ROUTE's own street names for where the
     // car is; the road-info publish uses them to veto an off-route match
     // (see core/road_match.dart).
@@ -127,7 +169,7 @@ extension _NavNavigation on _NavigationPageState {
       NavForegroundService.instance.updateNav(nav, eta: _etaLabel(nav)),
     );
     unawaited(NavForegroundService.instance.notifyManeuver(nav));
-    _map.move(snapped, 17);
+    _map.move(snapped, 16);
     // ESP display: refresh the near path-ahead as the car advances (the board
     // only shows ~1.5 km at zoom 15, so we keep the drawn lane just ahead of
     // the car instead of one static whole-route frame).
@@ -777,9 +819,26 @@ extension _NavNavigation on _NavigationPageState {
 
   Future<void> _exitNavigation() async {
     debugPrint('SIM: EXIT navigation called');
+    // Keep where the driver was going (stops + routing choices) so the map can
+    // offer "Tiếp tục" — the route itself is not kept, it gets re-planned from
+    // the car's current position.
+    final resume = TripResume.capture(
+      stops: _stops,
+      profile: _routeProfile,
+      avoidHighway: _avoidHighway,
+      avoidFerry: _avoidFerry,
+      preference: _routePreference,
+      wasNavigating: _navigating,
+      arrived: _progress?.iconCode == iconArrive,
+    );
     _stopSimulation(); // cancel the simulated-drive timer if running
     navigationActive = false;
     setNavState(() {
+      // Only an exit that ends a real navigation session may replace the offer.
+      // The same routine is also behind "Xoá lộ trình" and the voice "dừng"
+      // command, which run while nothing is being navigated — those must leave
+      // a live offer alone.
+      if (resume != null || _navigating) _resumeTrip = resume;
       _navigating = false;
       _simulating = false;
       _isRerouting = false;
@@ -816,6 +875,47 @@ extension _NavNavigation on _NavigationPageState {
     PipService.instance.isPipMode.value = false;
     if (mounted) setNavState(() => _pipActive = false);
     await _finishTrip(); // save the recorded trip
+  }
+
+  /// "Tiếp tục": plan the journey that was turned off — from where the car is
+  /// now, with the stops and routing choices it had — and start guiding again.
+  Future<void> _continueTrip() async {
+    final offer = _resumeTrip;
+    if (offer == null || _building || _navStarting || _navigating) return;
+    setNavState(() {
+      _building = true;
+      _resumeTrip = null; // used up; a failed build puts it back below
+      _originOverride = null; // start from HERE, not from the old origin
+      _stops
+        ..clear()
+        ..addAll(offer.stops);
+      _destination = offer.destination;
+      _routeProfile = offer.profile;
+      _avoidHighway = offer.avoidHighway;
+      _avoidFerry = offer.avoidFerry;
+      _routePreference = offer.preference;
+    });
+    try {
+      await _buildPlanRoute();
+    } catch (e) {
+      // Offline with no matching data, a routing error: keep the offer so the
+      // destination is not lost with it.
+      if (mounted) {
+        setNavState(() => _resumeTrip = offer);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không nối lại được chuyến đi: $e')),
+        );
+      }
+      return;
+    } finally {
+      if (mounted) setNavState(() => _building = false);
+    }
+    if (!mounted) return;
+    if (_engine == null) {
+      setNavState(() => _resumeTrip = offer); // build failed quietly
+      return;
+    }
+    await _startNavigation();
   }
 
   /// Single button for the ESP32 2.8" nav display (NAV-OSM).

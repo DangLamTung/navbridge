@@ -83,7 +83,12 @@ from array import array
 DEFAULT_CRAWL = '/Users/tungdl/Documents/Eink/Decode_Waze'
 OUT = 'assets/offline_map/waze_segments.bin'
 CELL_E4 = 50          # 0.005 deg ~ 550 m — a 3x3 query covers ~1.6 km
-MIN_KMH, MAX_KMH = 5, 150
+# Vietnam's statutory ceiling is 120 km/h (Thông tư 31/2019, Thông tư 38/2024).
+# Anything above it is a corrupt / mistagged community edit: the 2026-09 crawl
+# carried 2,819 directional values > 120 (179x 150, 1,248x 140, 937x 130,
+# 448x 125 on Xa lộ Hà Nội / QL51). They are rejected here so they never enter
+# the shipped binary; the app also caps the value per vehicle class.
+MIN_KMH, MAX_KMH = 5, 120
 
 
 def tiles(args) -> list[str]:

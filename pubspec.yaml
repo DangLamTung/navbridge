@@ -102,6 +102,8 @@ flutter:
     - assets/offline_map/fonts/Roboto Condensed Italic/
     # AI assistant system prompt (editable, see assets/ai/system_prompt.txt).
     - assets/ai/
+    # Recorded drives for the replay console (`tool/sim_trips.py --asset`).
+    - assets/trips/
     # Waze-Mod HUD widget images (extracted from the Waze Mod APK):
     # speedometer dial (grey/red), turn arrow, speed-camera + hazard icons.
     - assets/waze/

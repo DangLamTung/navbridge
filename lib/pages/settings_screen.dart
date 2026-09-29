@@ -15,6 +15,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import 'package:navbridge/pages/offline_screen.dart';
@@ -108,13 +109,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () => _open(const DataSourcePage()),
           ),
           const SizedBox(height: 10),
-          SettingsLinkTile(
-            icon: Icons.bluetooth,
-            title: 'Màn hình ngoài',
-            subtitle: 'Tự động kết nối Bluetooth',
-            onTap: () => _open(const BluetoothSettingsPage()),
-          ),
-          const SizedBox(height: 10),
+          if (!kIsWeb) ...[
+            SettingsLinkTile(
+              icon: Icons.bluetooth,
+              title: 'Màn hình ngoài',
+              subtitle: 'Tự động kết nối Bluetooth',
+              onTap: () => _open(const BluetoothSettingsPage()),
+            ),
+            const SizedBox(height: 10),
+          ],
           SettingsLinkTile(
             icon: Icons.auto_awesome,
             title: 'Trợ lý AI',

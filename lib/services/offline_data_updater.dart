@@ -25,7 +25,7 @@ import 'offline_cameras.dart' show reloadOfflineCameras;
 import 'offline_loader.dart' show offlineDataDir;
 import 'offline_road_signs.dart' show reloadOfflineRoadSigns;
 import 'offline_speed_limits.dart' show reloadOfflineSpeedLimits;
-import 'vietmap_config.dart' show dataUpdateBaseUrl;
+import 'vietmap_config.dart' show effectiveDataUpdateUrl;
 
 /// Last-known remote versions per file, persisted in
 /// `<support>/offline_data/version.json` (the SAME file the server publishes,
@@ -37,8 +37,8 @@ class OfflineDataUpdater {
   static const _ua =
       'NavBridge/1.0 (Android; BLE portable navigation; offline data update)';
 
-  /// True when a remote server is configured ([dataUpdateBaseUrl] non-empty).
-  bool get enabled => dataUpdateBaseUrl.isNotEmpty;
+  /// True when a remote server is configured ([effectiveDataUpdateUrl] non-empty).
+  bool get enabled => effectiveDataUpdateUrl.isNotEmpty;
 
   bool _busy = false;
 
@@ -135,7 +135,7 @@ class OfflineDataUpdater {
   /// server doesn't publish one — then each file is always (re)downloaded).
   Future<Map<String, String>> _fetchRemoteVersions() async {
     try {
-      final url = '$dataUpdateBaseUrl/version.json';
+      final url = '$effectiveDataUpdateUrl/version.json';
       final res = await http
           .get(Uri.parse(url), headers: {'User-Agent': _ua})
           .timeout(const Duration(seconds: 12));
@@ -151,7 +151,7 @@ class OfflineDataUpdater {
   /// `<support>/offline_data/`. Returns true when the file was written.
   Future<bool> _downloadOne(String name, String version) async {
     try {
-      final url = '$dataUpdateBaseUrl/$name';
+      final url = '$effectiveDataUpdateUrl/$name';
       final res = await http
           .get(Uri.parse(url), headers: {'User-Agent': _ua})
           .timeout(const Duration(seconds: 30));

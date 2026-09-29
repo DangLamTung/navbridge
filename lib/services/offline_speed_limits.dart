@@ -15,7 +15,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/foundation.dart' show compute, debugPrint;
 import 'package:latlong2/latlong.dart';
 
 import 'offline_loader.dart';
@@ -179,12 +179,51 @@ int _cellKey(double lon, double lat) {
 /// value already displayed therefore wins while it is within [keepBandM]
 /// metres of the best candidate. Measured offline over that drive: 27
 /// same-road value changes become 3 with a 6 m band, and 1 with 8 m.
-Future<int?> speedLimitAt(
+/// One speed-limit answer, with everything needed to explain it — the source
+/// layer, the street it came from and the segment id when the per-segment
+/// layer answered — returned ATOMICALLY, so a caller can never pair one
+/// lookup's limit with another lookup's street.
+class SpeedLimitResult {
+  const SpeedLimitResult({
+    required this.limit,
+    required this.source,
+    this.streetName,
+    this.segmentId,
+    this.aligned = false,
+  });
+
+  final int limit;
+
+  /// 'segment' | 'waze' | 'vietmap'.
+  final String source;
+
+  /// Street of the winning segment; null when the point layers answered.
+  final String? streetName;
+
+  /// Winning segment id, or null when the point layers answered.
+  final int? segmentId;
+
+  /// True when the winning segment is the road the car is RIDING — within
+  /// [_maxAlignedDeg] of its heading — rather than one running across it.
+  ///
+  /// The segment layers name 62% of their records, and every name rule we have
+  /// (`expectStreet`, the veto in `layerLimitMatchesNames`) exists to stop a
+  /// CROSSING street's value being posted for our road. Being aligned is what
+  /// actually distinguishes the road under the car from the one crossing it, so
+  /// a caller may read `aligned` as "this record describes our road" — see
+  /// `layerLimitMatchesNames`.
+  final bool aligned;
+}
+
+/// The cascade, as an atomic result: Waze per-segment → Waze points →
+/// VietMap points → null (the caller then keeps the graph/statutory value).
+Future<SpeedLimitResult?> lookupSpeedLimit(
   LatLng p, {
   double maxDistM = 25,
   double? headingDeg,
   int? keepKmh,
   double keepBandM = 6,
+  String? expectStreet,
 }) async {
   await loadOfflineSpeedLimits();
   final segs = _segs;
@@ -195,33 +234,62 @@ Future<int?> speedLimitAt(
   final lon = p.longitude, lat = p.latitude;
   final cosLat = math.cos(lat * math.pi / 180.0);
 
-  // 1) Waze per-SEGMENT limits.
   if (segs != null) {
-    final r = _querySegIndex(segs, lat, lon, cosLat, maxDistM, headingDeg,
-        keepKmh: keepKmh, keepBandM: keepBandM);
-    if (r != null) {
-      _lastLayer = 'segment';
-      return r;
+    final hit = _querySegIndex(segs, lat, lon, cosLat, maxDistM, headingDeg,
+        keepKmh: keepKmh, keepBandM: keepBandM, expectStreet: expectStreet);
+    if (hit != null) {
+      return SpeedLimitResult(
+        limit: hit.limit,
+        source: 'segment',
+        streetName: segs.streetName(hit.segmentId),
+        segmentId: hit.segmentId,
+        aligned: hit.aligned,
+      );
     }
   }
-  // 2) Waze point layer — the driver trusts Waze's real posted limits.
   if (waze != null) {
     final r = _queryPointIndex(waze, lat, lon, cosLat, maxDistM);
     if (r != null) {
-      _lastLayer = 'waze';
-      return r;
+      return SpeedLimitResult(limit: r, source: 'waze');
     }
   }
-  // 3) VietMap E-DOG official posted limits.
   if (vm != null) {
     final r = _queryPointIndex(vm, lat, lon, cosLat, maxDistM);
     if (r != null) {
-      _lastLayer = 'vietmap';
-      return r;
+      return SpeedLimitResult(limit: r, source: 'vietmap');
     }
   }
-  _lastLayer = null;
   return null;
+}
+
+/// Limit only, for callers that do not need the street or the source.
+///
+/// Compatibility wrapper: it mirrors the result into the module globals that
+/// [lastLimitLayer], [lastWazeStreetName] and [lastWazeSegmentId] expose, so a
+/// caller that needs the pair must still read them immediately. Prefer
+/// [lookupSpeedLimit] — it cannot be mispaired.
+Future<int?> speedLimitAt(
+  LatLng p, {
+  double maxDistM = 25,
+  double? headingDeg,
+  int? keepKmh,
+  double keepBandM = 6,
+  String? expectStreet,
+}) async {
+  final res = await lookupSpeedLimit(
+    p,
+    maxDistM: maxDistM,
+    headingDeg: headingDeg,
+    keepKmh: keepKmh,
+    keepBandM: keepBandM,
+    expectStreet: expectStreet,
+  );
+  _lastLayer = res?.source;
+  // -1, not "leave the previous segment": a point-layer answer must not keep
+  // reporting the street of an older segment lookup (the segment layer can
+  // also be absent entirely, in which case nothing else would reset it).
+  _lastSegS = res?.segmentId ?? -1;
+  return res?.limit;
 }
 
 // ---------------------------------------------------------------------------
@@ -312,28 +380,76 @@ class _SegIndex {
   }
 }
 
-// Varint decode scratch — the loader and the query path are single-threaded,
-// so a pair of module-level slots avoids allocating per coordinate.
-int _viVal = 0;
-int _viNext = 0;
+/// Decodes one segment's point list. One instance per OPERATION (a query, a
+/// bounds sweep, the index build) reused across segments: the varint cursor and
+/// the point buffer are the decoder's own state, so two lookups can no longer
+/// share — and corrupt — one module-level scratchpad.
+class _SegDecoder {
+  _SegDecoder(this.idx);
 
-void _readVarint(Uint8List b, int i) {
-  var shift = 0;
-  var raw = 0;
-  while (true) {
-    final byte = b[i++];
-    raw |= (byte & 0x7F) << shift;
-    if (byte < 0x80) break;
-    shift += 7;
+  final _SegIndex idx;
+
+  /// Interleaved lat_e5/lng_e5 of the segment decoded last. Starts at the old
+  /// fixed capacity (512 points) and grows past it on demand.
+  Int32List pts = Int32List(2 * 512);
+
+  /// Points in [pts] for the last [decode].
+  int count = 0;
+
+  /// Reports the first segment longer than the old 512-point cap, once per
+  /// operation: the shipped asset tops out at 490, so this means the asset was
+  /// re-exported with denser geometry and the tail would previously have been
+  /// dropped silently.
+  bool _growReported = false;
+
+  /// Decode segment [s]; returns its point count. A segment longer than the
+  /// buffer GROWS it — the old fixed 512-point buffer silently dropped the tail
+  /// of anything longer (the WZSG coords are varint deltas, so a segment can be
+  /// arbitrarily long), which would quietly shorten the road's geometry.
+  int decode(int s) {
+    final a = idx.coordBase + idx.offsets[s];
+    final z = idx.coordBase + idx.offsets[s + 1];
+    final b = idx.blob;
+    var i = a;
+    var n = 0;
+    var lat = 0, lng = 0;
+    while (i < z) {
+      if (n * 2 + 2 > pts.length) {
+        if (!_growReported) {
+          _growReported = true;
+          debugPrint('WAZE: segment $s exceeds ${pts.length ~/ 2} points');
+        }
+        final bigger = Int32List(pts.length * 2);
+        bigger.setRange(0, n * 2, pts);
+        pts = bigger;
+      }
+      var shift = 0, raw = 0;
+      while (true) {
+        final byte = b[i++];
+        raw |= (byte & 0x7F) << shift;
+        if (byte < 0x80) break;
+        shift += 7;
+      }
+      final dLat = (raw >> 1) ^ -(raw & 1); // zigzag
+      shift = 0;
+      raw = 0;
+      while (true) {
+        final byte = b[i++];
+        raw |= (byte & 0x7F) << shift;
+        if (byte < 0x80) break;
+        shift += 7;
+      }
+      final dLng = (raw >> 1) ^ -(raw & 1);
+      lat = n == 0 ? dLat : lat + dLat;
+      lng = n == 0 ? dLng : lng + dLng;
+      pts[n * 2] = lat;
+      pts[n * 2 + 1] = lng;
+      n++;
+    }
+    count = n;
+    return n;
   }
-  _viVal = (raw >> 1) ^ -(raw & 1); // zigzag
-  _viNext = i;
 }
-
-/// Decoded points of one segment, as lat_e5, lng_e5 pairs. Reused between
-/// calls — never hold on to it.
-Int32List _segPts = Int32List(2 * 64);
-
 /// Segment that produced the most recent [_querySegIndex] hit, so callers can
 /// read its street name ([lastWazeStreetName]) from the SAME record that gave
 /// the limit — the whole point of the v3 street table. -1 when nothing hit.
@@ -360,31 +476,100 @@ String? lastWazeStreetName() {
   return idx.streetName(s);
 }
 
-/// Decode segment [s] into [_segPts]. Returns the point count.
-int _decodeSeg(_SegIndex idx, int s) {
-  final a = idx.coordBase + idx.offsets[s];
-  final z = idx.coordBase + idx.offsets[s + 1];
-  final b = idx.blob;
-  if (_segPts.length < 2 * 512) _segPts = Int32List(2 * 512);
-  var i = a;
-  var n = 0;
-  var lat = 0, lng = 0;
-  while (i < z && n < 511) {
-    _readVarint(b, i);
-    final dLat = _viVal;
-    i = _viNext;
-    _readVarint(b, i);
-    final dLng = _viVal;
-    i = _viNext;
-    lat = n == 0 ? dLat : lat + dLat;
-    lng = n == 0 ? dLng : lng + dLng;
-    _segPts[n * 2] = lat;
-    _segPts[n * 2 + 1] = lng;
-    n++;
+int lastWazeSegmentId() => _lastSegS;
+
+class WazeSegment {
+  const WazeSegment({
+    required this.id,
+    required this.points,
+    required this.fwdKmh,
+    required this.revKmh,
+    required this.street,
+  });
+
+  final int id;
+  final List<LatLng> points;
+
+  final int fwdKmh;
+  final int revKmh;
+
+  final String street;
+
+  int get limit => fwdKmh >= revKmh ? fwdKmh : revKmh;
+
+  double get lengthMeters {
+    var total = 0.0;
+    for (var i = 1; i < points.length; i++) {
+      total += const Distance().as(LengthUnit.Meter, points[i - 1], points[i]);
+    }
+    return total;
   }
-  return n;
 }
 
+List<WazeSegment> wazeSegmentsInBounds({
+  double? south,
+  double? west,
+  double? north,
+  double? east,
+  int max = 3000,
+}) {
+  final idx = _segs;
+  if (idx == null) return const [];
+  final ids = <int>{};
+  for (final entry in idx.grid.entries) {
+    final cx = ((entry.key >> 16) & 0xFFFF).toSigned(16);
+    final cy = (entry.key & 0xFFFF).toSigned(16);
+    final lat = (cy + 0.5) * _segCellDeg;
+    final lon = (cx + 0.5) * _segCellDeg;
+    if (south != null && lat < south - _segCellDeg) continue;
+    if (north != null && lat > north + _segCellDeg) continue;
+    if (west != null && lon < west - _segCellDeg) continue;
+    if (east != null && lon > east + _segCellDeg) continue;
+    for (final s in entry.value) {
+      ids.add(s);
+    }
+  }
+  final out = <WazeSegment>[];
+  final dec = _SegDecoder(idx);
+  for (final s in ids) {
+    if (out.length >= max) break;
+    final n = dec.decode(s);
+    if (n < 2) continue;
+    final pts = <LatLng>[];
+    var inBox = south == null && west == null && north == null && east == null;
+    for (var i = 0; i < n; i++) {
+      final lat = dec.pts[i * 2] / 1e5;
+      final lng = dec.pts[i * 2 + 1] / 1e5;
+      if (!inBox &&
+          south != null &&
+          west != null &&
+          north != null &&
+          east != null &&
+          lat >= south &&
+          lat <= north &&
+          lng >= west &&
+          lng <= east) {
+        inBox = true;
+      }
+      pts.add(LatLng(lat, lng));
+    }
+    if (!inBox) continue;
+    out.add(
+      WazeSegment(
+        id: s,
+        points: pts,
+        fwdKmh: idx.fwd[s],
+        revKmh: idx.rev[s],
+        street: idx.streetName(s) ?? '',
+      ),
+    );
+  }
+  return out;
+}
+
+bool get wazeSegmentsLoaded => _segs != null;
+
+/// Decode segment [s] into [_segPts]. Returns the point count.
 _SegIndex _buildSegIndex(Uint8List raw) {
   // Copy first: rootBundle's ByteData can sit at a non-4-byte offset, and the
   // typed views below require an aligned buffer.
@@ -445,15 +630,16 @@ _SegIndex _buildSegIndex(Uint8List raw) {
   // query never misses a segment that crosses a cell border.
   const cellE5 = 500; // 0.005 deg in 1e-5 deg units
   final grid = <int, List<int>>{};
+  final dec = _SegDecoder(idx);
   for (var s = 0; s < nSegs; s++) {
-    final n = _decodeSeg(idx, s);
+    final n = dec.decode(s);
     if (n < 2) continue;
     var minLat = 1 << 30,
         maxLat = -(1 << 30),
         minLng = 1 << 30,
         maxLng = -(1 << 30);
     for (var k = 0; k < n; k++) {
-      final la = _segPts[k * 2], ln = _segPts[k * 2 + 1];
+      final la = dec.pts[k * 2], ln = dec.pts[k * 2 + 1];
       if (la < minLat) minLat = la;
       if (la > maxLat) maxLat = la;
       if (ln < minLng) minLng = ln;
@@ -500,20 +686,20 @@ double _bearingDeg(double lat1, double lng1, double lat2, double lng2) {
 /// not reached its start yet) — it is near the segment, but NOT on it, which is
 /// the difference between "the nearest segment" and "the segment I am driving".
 (double, double, double) _segDistBearing(
-  _SegIndex idx,
+  _SegDecoder dec,
   int s,
   double lat,
   double lon,
   double cosLat,
 ) {
-  final n = _decodeSeg(idx, s);
+  final n = dec.decode(s);
   var best = double.infinity;
   var bearing = 0.0;
   var overshoot = 0.0;
   for (var k = 0; k < n - 1; k++) {
-    final alat = _segPts[k * 2] / 1e5, alng = _segPts[k * 2 + 1] / 1e5;
-    final blat = _segPts[k * 2 + 2] / 1e5;
-    final blng = _segPts[k * 2 + 3] / 1e5;
+    final alat = dec.pts[k * 2] / 1e5, alng = dec.pts[k * 2 + 1] / 1e5;
+    final blat = dec.pts[k * 2 + 2] / 1e5;
+    final blng = dec.pts[k * 2 + 3] / 1e5;
     final ax = (alng - lon) * _mPerDeg * cosLat;
     final ay = (alat - lat) * _mPerDeg;
     final bx = (blng - lon) * _mPerDeg * cosLat;
@@ -548,14 +734,97 @@ double segmentLineAngle(double? headingDeg, double bearingDeg) {
   return d;
 }
 
+bool streetNameMatches(String? road, String? segment) {
+  if (road == null || segment == null) return false;
+  final a = _streetTokens(road);
+  final b = _streetTokens(segment);
+  if (a.isEmpty || b.isEmpty) return false;
+  // A name matches ITSELF, however short its token: 'QL1' == 'QL1' is the road
+  // the entire 1,686 km Hà Nội → Sài Gòn drive runs on, and the short-token
+  // rule below (min 4 chars) refused it — so as soon as the screen showed "QL1"
+  // and the page passed it as `expectStreet`, EVERY posted limit on the route
+  // was dropped and the dial read '-' for a thousand kilometres
+  // (measured 2026-09-27). Token-joined comparison also makes 'QL1' match
+  // 'QL 1', the way the two sources spell the same highway.
+  //
+  // Except when the name says nothing at all: 'Đường' is the word "street" and
+  // '30' is a number — identical or not, neither identifies a road
+  // (test/speed_limit_result_test.dart pins that).
+  if (a.join() == b.join() && !_isUninformativeName(a)) return true;
+  if (a.any(_isAlleyToken) != b.any(_isAlleyToken)) return false;
+  final shared = [for (final t in a) if (b.contains(t)) t];
+  if (shared.isEmpty) return false;
+  if (shared.length != a.length && shared.length != b.length) return false;
+  if (shared.length >= 2) return true;
+  final only = shared.single;
+  return only.length >= 4 && !_genericStreetTokens.contains(only);
+}
+
+const Set<String> _genericStreetTokens = {
+  'đường',
+  'phố',
+  'đại',
+  'tỉnh',
+  'quốc',
+  'huyện',
+  'xã',
+  'phường',
+  'khu',
+  'ấp',
+  'tổ',
+};
+
+bool _isAlleyToken(String t) =>
+    const {'hẻm', 'kiệt', 'ngõ', 'ngách', 'hẻmnhánh'}.contains(t);
+
+/// True when the name carries no identity: every token is a generic road word
+/// ("Đường", "Tỉnh", "Quốc"…) or a bare number ("30"). Such a name cannot say
+/// WHICH road it is, so even two identical ones are not evidence of a match.
+bool _isUninformativeName(List<String> tokens) =>
+    tokens.isEmpty ||
+    tokens.every(
+      (t) => _genericStreetTokens.contains(t) || int.tryParse(t) != null,
+    );
+
+List<String> _streetTokens(String s) {
+  final out = <String>[];
+  final buf = StringBuffer();
+  for (final r in s.toLowerCase().runes) {
+    final isDigit = r >= 0x30 && r <= 0x39;
+    final isAsciiLetter = r >= 0x61 && r <= 0x7A;
+    final isUniLetter =
+        (r >= 0x00C0 && r <= 0x024F) || (r >= 0x1EA0 && r <= 0x1EFF);
+    if (isDigit || isAsciiLetter || isUniLetter) {
+      buf.writeCharCode(r);
+    } else if (buf.isNotEmpty) {
+      out.add(buf.toString());
+      buf.clear();
+    }
+  }
+  if (buf.isNotEmpty) out.add(buf.toString());
+  return out;
+}
+
+const double _nameBandM = 60;
+
+/// Angle (deg) past which a segment is treated as running ACROSS the car rather
+/// than under it.  Used by [segmentScore] and [_pickWithContinuity].
+const double _maxAlignedDeg = 45.0;
+
+/// Metres a candidate's nearest sub-segment may lie BEYOND the car before the
+/// car counts as having driven off that segment's end.  Used by [segmentScore].
+const double _maxOvershootM = 10.0;
+
+
+
 /// Candidate score for the segment lookup: distance, penalised when the segment
 /// runs ACROSS the car's path.
 ///
 /// Nearest-wins is not enough at a junction: the crossing street's segment can be
 /// a metre closer than the road under the car, and with 15-20 m GPS accuracy
 /// which one wins flips fix by fix. Measured on the 2026-09-21 drive, the street
-/// name alternated 'Lũy Bán Bích' ↔ 'Đường 30 Tháng 4' at 10.78822,106.63575 for
-/// 17 s while the car drove straight north up Đường 30 Tháng 4 — and because the
+/// name alternated 'Lũy Bán Bích' ↔ 'Đường 30 Tháng 4' for 17 s at one junction
+/// while the car drove straight north up Đường 30 Tháng 4 — and because the
 /// name AND the limit come from the same segment record, the driver heard the
 /// crossing street's name paired with the other road's limit (user: "the limit
 /// said Lũy Bán Bích · residential when I had entered Đường 30 Tháng 4").
@@ -570,19 +839,16 @@ double segmentScore(
   double maxDistM, {
   double overshootM = 0,
 }) {
-  const maxAlignedDeg = 45.0;
-  const maxOvershootM = 10.0;
   var score = distanceM;
   if (headingDeg != null &&
-      segmentLineAngle(headingDeg, bearingDeg) > maxAlignedDeg) {
+      segmentLineAngle(headingDeg, bearingDeg) > _maxAlignedDeg) {
     score += maxDistM + 1;
   }
   // "The car is IN the segment": a projection that lands past either end is
   // not on it (the car has driven off the end, or has not reached the start).
-  if (overshootM > maxOvershootM) score += maxDistM + 1;
+  if (overshootM > _maxOvershootM) score += maxDistM + 1;
   return score;
 }
-
 /// Index of the candidate to trust among (segment, distance m, bearing,
 /// overshoot m) tuples, or -1 when nothing is within [maxDistM]. On-segment and
 /// aligned candidates first, then distance — see [segmentScore] for why.
@@ -611,6 +877,72 @@ int pickSegmentCandidate(
   return bestI;
 }
 
+/// How many segments of the pack lie within [radiusM] of [p].
+///
+/// The built-up ("khu đông dân cư") signal for `urban_area.dart`. The POI pack
+/// (17 029 points) cannot answer that question: 698 of the country's 1 375 OSM
+/// towns have NO POI within 2 km, so even a threshold of one POI detects only
+/// 49 % of them.
+///
+/// ⚠️ COUNT EACH SEGMENT ONCE. The loader registers a segment in every grid
+/// cell its BOUNDING BOX covers (`_buildSegIndex`), so summing `ids.length`
+/// counted a segment once per cell — i.e. it measured bounding-box area, not
+/// road density. Measured 2026-09-28: an empty rice field in Hà Nam 2 km from
+/// a highway scored **657** and was called a town, and every one of nine probe
+/// points (three of them open country) came out "urban", so the built-up rule
+/// was effectively always true and the app used the town limit in the
+/// countryside. Deduping by segment id is what makes the number mean "roads
+/// near here": the same field then scores ~0-25 and towns keep their hundreds.
+///
+/// Returns 0 when the pack is unavailable, which callers read as "not built-up"
+/// (the conservative direction: the rural table is the lower limit in town).
+Future<int> segmentDensity(LatLng p, {double radiusM = 2000}) async {
+  await loadOfflineSpeedLimits();
+  final idx = _segs;
+  if (idx == null) return 0;
+  final cosLat = math.cos(p.latitude * math.pi / 180.0);
+  final cx = (p.longitude / _segCellDeg).floor();
+  final cy = (p.latitude / _segCellDeg).floor();
+  final span = (radiusM / (_segCellDeg * 111320.0)).ceil();
+  // Generation-stamped "seen" array: O(1) per id, no Set allocated per call
+  // (this probe runs every 150 m during navigation).
+  var seen = _densitySeen;
+  if (seen == null || seen.length != idx.fwd.length) {
+    seen = Uint32List(idx.fwd.length);
+    _densitySeen = seen;
+    _densityGen = 0;
+  }
+  if (_densityGen >= 0xFFFFFFF0) {
+    seen.fillRange(0, seen.length, 0);
+    _densityGen = 0;
+  }
+  final gen = ++_densityGen;
+  var n = 0;
+  for (var dx = -span; dx <= span; dx++) {
+    for (var dy = -span; dy <= span; dy++) {
+      // Cell CENTRE inside the radius: counting the whole square would inflate
+      // the corners by ~40 % area.
+      final lat = (cy + dy + 0.5) * _segCellDeg;
+      final lon = (cx + dx + 0.5) * _segCellDeg;
+      final dLat = (lat - p.latitude) * 111320.0;
+      final dLon = (lon - p.longitude) * 111320.0 * cosLat;
+      if (dLat * dLat + dLon * dLon > radiusM * radiusM) continue;
+      final ids = idx.grid[(((cx + dx) & 0xFFFF) << 16) | ((cy + dy) & 0xFFFF)];
+      if (ids == null) continue;
+      for (final id in ids) {
+        if (seen[id] == gen) continue;
+        seen[id] = gen;
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
+/// Reusable dedupe stamps for [segmentDensity] (see its doc for why).
+Uint32List? _densitySeen;
+int _densityGen = 0;
+
 /// Posted limit (km/h) of the segment the car is on within [maxDistM] of
 /// (lat, lon), or null.
 ///
@@ -618,7 +950,7 @@ int pickSegmentCandidate(
 /// ambiguity band: between two parallel records of one road, the one carrying
 /// the value already on screen wins while it is within [keepBandM] metres of
 /// the best candidate. Without it the value alternates with GPS noise.
-int? _querySegIndex(
+({int limit, int segmentId, bool aligned})? _querySegIndex(
   _SegIndex idx,
   double lat,
   double lon,
@@ -627,6 +959,7 @@ int? _querySegIndex(
   double? headingDeg, {
   int? keepKmh,
   double keepBandM = 6,
+  String? expectStreet,
 }) {
   final cx = (lon / _segCellDeg).floor();
   final cy = (lat / _segCellDeg).floor();
@@ -635,6 +968,7 @@ int? _querySegIndex(
   // "prefer the aligned one", which is why a junction could rename the road.
   final cands =
       <(int, double, double, double)>[]; // (segment, dist, bearing, overshoot)
+  final dec = _SegDecoder(idx);
   for (var dx = -1; dx <= 1; dx++) {
     for (var dy = -1; dy <= 1; dy++) {
       final key = (((cx + dx) & 0xFFFF) << 16) | ((cy + dy) & 0xFFFF);
@@ -642,74 +976,194 @@ int? _querySegIndex(
       if (ids == null) continue;
       for (var k = 0; k < ids.length; k++) {
         final s = ids[k];
-        final (d, brg, over) = _segDistBearing(idx, s, lat, lon, cosLat);
+        final (d, brg, over) = _segDistBearing(dec, s, lat, lon, cosLat);
         cands.add((s, d, brg, over));
       }
     }
   }
-  final win = _pickWithContinuity(
-      idx, cands, headingDeg, maxDistM, keepKmh, keepBandM);
-  // No winner ⇒ nothing usable here: forget the segment, so
-  // [lastWazeStreetName] cannot name the road from a segment that gave us no
-  // limit — the caller adopts that name verbatim, even when the limit is null.
-  if (win < 0) {
-    _lastSegS = -1;
-    return null;
+  final pick = _pickWithContinuity(
+      idx, cands, headingDeg, maxDistM, keepKmh, keepBandM,
+      expectStreet: expectStreet);
+  // No winner ⇒ nothing usable here: no limit, and no segment to name the road
+  // from either (the caller adopts the street verbatim, even on a null limit).
+  if (pick.win < 0) return null;
+  final s = cands[pick.win].$1;
+  final brg = cands[pick.win].$3;
+  // If expectStreet was given, only accept candidates matching that street name
+  // unless chosen by geometry override (car is demonstrably riding this road).
+  if (!pick.byGeometry &&
+      expectStreet != null &&
+      expectStreet.trim().isNotEmpty) {
+    final street = idx.streetName(s);
+    if (street != null &&
+        street.trim().isNotEmpty &&
+        !streetNameMatches(expectStreet, street)) {
+      return null;
+    }
   }
-  final s = cands[win].$1;
-  final brg = cands[win].$3;
-  // Only remember the segment when it actually posts a limit. The caller
-  // (nav_gps `_correctSpeedFromWazeInner`) adopts the name returned by
-  // [lastWazeStreetName] even on a null limit, so a segment that gave us
-  // nothing must not name the road. Zero segments in the current asset carry
-  // 0/0, but an OTA asset may — the guard is what the comment above claims.
-  if (idx.fwd[s] == 0 && idx.rev[s] == 0) {
-    _lastSegS = -1;
-    return null;
-  }
-  _lastSegS = s; // which segment won, for [lastWazeStreetName]
-  return _segmentValue(idx, s, brg, headingDeg);
+  // Only answer when the segment actually posts a limit: zero segments in the
+  // current asset carry 0/0, but an OTA asset may, and a 0 km/h answer would
+  // otherwise override the graph/statutory value.
+  if (idx.fwd[s] == 0 && idx.rev[s] == 0) return null;
+  // `aligned`: is the car RIDING this segment (rather than crossing it)? A
+  // ridden segment is evidence about the road under the car whatever name we
+  // happen to hold — see `layerLimitMatchesNames`'s `ridden`.
+  //
+  // ⚠ An UNKNOWN heading is NOT "riding it". `headingDeg` is null whenever the
+  // fix carries no course — the first seconds of every drive, because the page
+  // passes `_heading == 0 ? null : _heading` — and `ridden: true` switches the
+  // name veto OFF in `layerLimitMatchesNames`. `segmentScore` is blind at the
+  // same moment, since its across-the-car penalty also needs a heading, so
+  // answering "ridden" there would adopt a crossing street's value AND name with
+  // nothing checking either. "Cannot tell" must read as the conservative side.
+  final aligned = headingDeg != null &&
+      segmentLineAngle(headingDeg, brg) <= _maxAlignedDeg;
+  return (
+    limit: _segmentValue(idx, s, brg, headingDeg),
+    segmentId: s,
+    aligned: aligned,
+  );
 }
 
 /// The value a segment would answer for [headingDeg]: its own `fwd`/`rev` pair
 /// resolved against the bearing of the sub-segment nearest the car.
 int _segmentValue(_SegIndex idx, int s, double brg, double? headingDeg) {
   final f = idx.fwd[s], r = idx.rev[s];
-  if (f == r || f == 0) return r;
-  if (r == 0) return f;
-  if (headingDeg == null) return f > r ? f : r;
-  // Pick the direction the car is actually travelling: within 90 deg of the
-  // segment's stored node order means it is riding the `fwd` direction.
-  var delta = (headingDeg - brg).abs() % 360.0;
-  if (delta > 180) delta = 360 - delta;
-  return delta <= 90 ? f : r;
+  int val;
+  if (f == r || f == 0) {
+    val = r;
+  } else if (r == 0) {
+    val = f;
+  } else if (headingDeg == null) {
+    val = f > r ? f : r;
+  } else {
+    // Pick the direction the car is actually travelling: within 90 deg of the
+    // segment's stored node order means it is riding the `fwd` direction.
+    var delta = (headingDeg - brg).abs() % 360.0;
+    if (delta > 180) delta = 360 - delta;
+    val = delta <= 90 ? f : r;
+  }
+
+  // Statutory ceiling: in Vietnam, speeds > 90 km/h (100-120 km/h) are legal
+  // EXCLUSIVELY on expressways (Freeway rt=3 or streetName indicating CT/Cao tốc).
+  if (val > 90) {
+    final (rt, div) = idx.segClassOf(s);
+    if (rt != 3) {
+      final name = idx.streetName(s) ?? '';
+      final isExp = name.startsWith('CT') ||
+          name.contains('Cao tốc') ||
+          name.contains('Expressway');
+      if (!isExp) {
+        val = div ? 90 : 80;
+      }
+    }
+  }
+
+  return val;
 }
 
 /// Winner among [cands], holding [keepKmh] when it is still plausible.
 ///
-/// The ambiguity this resolves is geometric, not semantic: two records of one
-/// road, a few metres apart, with values 60 and 50 — after diacritic folding
-/// their names are the same string, so no name rule can prefer one. Whichever
-/// is nearest flips with the GPS noise and the driver sees 60/50/60/50. Among
-/// candidates that carry the value already displayed, the nearest one therefore
-/// wins as long as it is no more than [keepBandM] metres worse than the overall
-/// best candidate.
-int _pickWithContinuity(
+/// Returns the index AND how it was chosen: `byGeometry` is true when the winner
+/// was picked over the name we were given because the geometry winner is clearly
+/// better AND aligned with the car heading.  The caller must not then veto it on
+/// Winner among [cands], holding [keepKmh] when it is still plausible.
+///
+/// Returns the winning index and whether it was chosen by geometry override
+/// (`byGeometry: true`), which bypasses the name veto when the car is demonstrably
+/// riding a different road (e.g. turning onto a primary road while the road matcher
+/// still holds the crossing tertiary name).
+({int win, bool byGeometry}) _pickWithContinuity(
   _SegIndex idx,
   List<(int, double, double, double)> cands,
   double? headingDeg,
   double maxDistM,
   int? keepKmh,
-  double keepBandM,
-) {
-  final win = pickSegmentCandidate(cands, headingDeg, maxDistM);
-  if (win < 0 || keepKmh == null || keepKmh <= 0) return win;
+  double keepBandM, {
+  String? expectStreet,
+}) {
+  if (cands.isEmpty) return (win: -1, byGeometry: false);
+
+  var ids = <int>[for (var i = 0; i < cands.length; i++) i];
+  var radius = maxDistM;
+  if (expectStreet != null && expectStreet.trim().isNotEmpty) {
+    final inside = <int>[
+      for (final i in ids)
+        if (cands[i].$2 <= maxDistM &&
+            streetNameMatches(expectStreet, idx.streetName(cands[i].$1)))
+          i,
+    ];
+    final band = inside.isNotEmpty
+        ? inside
+        : <int>[
+            for (final i in ids)
+              if (cands[i].$2 <= _nameBandM &&
+                  streetNameMatches(expectStreet, idx.streetName(cands[i].$1)))
+                i,
+          ];
+    if (band.isNotEmpty) {
+      ids = band;
+      radius = inside.isNotEmpty ? maxDistM : _nameBandM;
+    }
+  }
+  final pool = [for (final i in ids) cands[i]];
+  final winPool = pickSegmentCandidate(pool, headingDeg, radius);
+  if (winPool < 0) return (win: -1, byGeometry: false);
+  var win = ids[winPool];
+
+  // Geometry rescue: a segment the car is demonstrably RIDING must not be
+  // excluded by a stale expectStreet.
+  //
+  // Strict criteria to prevent false overrides at cross-street junctions
+  // (such as the Tân Thành pinned case):
+  // 1. Heading must be known.
+  // 2. Full-pool geometry winner must be directly under the car (<= 15m),
+  //    projected directly onto the segment (overshoot <= 5m), and tightly
+  //    aligned with the car's direction of travel (line angle <= 25°).
+  // 3. The name candidate must have positive evidence of NOT being the road
+  //    driven: overshoot > 10m (car has driven past its end) AND angle > 60°
+  //    (runs across the car's path).
+  // 4. They must be different streets with a substantial score gap.
+  if (expectStreet != null &&
+      expectStreet.trim().isNotEmpty &&
+      headingDeg != null) {
+    final fullWin = pickSegmentCandidate(cands, headingDeg, maxDistM);
+    if (fullWin >= 0 && fullWin != win) {
+      final geoCand = cands[fullWin];
+      final nameCand = cands[win];
+      final geoAngle = segmentLineAngle(headingDeg, geoCand.$3);
+      final nameAngle = segmentLineAngle(headingDeg, nameCand.$3);
+
+      final geoIsRidden =
+          geoCand.$2 <= 15.0 && geoCand.$4 <= 5.0 && geoAngle <= 25.0;
+      final nameIsOffRoad =
+          nameCand.$4 > _maxOvershootM && nameAngle > 60.0;
+
+      if (geoIsRidden &&
+          nameIsOffRoad &&
+          !streetNameMatches(
+              idx.streetName(nameCand.$1), idx.streetName(geoCand.$1))) {
+        final geoScore = segmentScore(
+            geoCand.$2, geoCand.$3, headingDeg, maxDistM,
+            overshootM: geoCand.$4);
+        final nameScore = segmentScore(
+            nameCand.$2, nameCand.$3, headingDeg, radius,
+            overshootM: nameCand.$4);
+        if (nameScore - geoScore > 20.0) {
+          return (win: fullWin, byGeometry: true);
+        }
+      }
+    }
+  }
+
+  // keepKmh continuity tiebreaker (prevents GPS-noise toggling)
+  if (keepKmh == null || keepKmh <= 0) return (win: win, byGeometry: false);
   final bestD = cands[win].$2;
   var stickyI = -1;
   var stickyD = double.infinity;
-  for (var i = 0; i < cands.length; i++) {
+  for (final i in ids) {
     final (s, d, brg, _) = cands[i];
-    if (d > maxDistM) continue;
+    if (d > radius) continue;
     if (d > bestD + keepBandM) continue;
     if (_segmentValue(idx, s, brg, headingDeg) != keepKmh) continue;
     if (d < stickyD) {
@@ -717,7 +1171,7 @@ int _pickWithContinuity(
       stickyI = i;
     }
   }
-  return stickyI >= 0 ? stickyI : win;
+  return (win: stickyI >= 0 ? stickyI : win, byGeometry: false);
 }
 
 /// Nearest point limit (km/h) in a [`_WazeIndex`] (Waze or VietMap E-DOG)

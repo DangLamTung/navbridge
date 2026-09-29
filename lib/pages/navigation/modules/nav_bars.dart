@@ -407,7 +407,7 @@ extension _NavBars on _NavigationPageState {
               onProfile: _setRouteProfile,
               onStart: _startNavigation,
               onClear: _exitNavigation,
-              onSimulate: _startSimulation,
+              onSimulate: kIsWeb ? _startSimulation : null,
               onExportGpx: _exportRouteGpx,
               onExportKml: _exportRouteKmlKmz,
               onDownloadMap: _downloadRouteMap,
@@ -450,6 +450,19 @@ extension _NavBars on _NavigationPageState {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (_navigating) _poiArea(),
+        // Offered only where nothing else is: navigation is off and no route is
+        // on screen, so the space is free and the offer cannot be confused
+        // with a live route.
+        if (!_navigating && _route == null && _resumeTrip != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+            child: ResumeTripBar(
+              label: _resumeTrip!.label,
+              busy: _building,
+              onContinue: _continueTrip,
+              onDismiss: () => setNavState(() => _resumeTrip = null),
+            ),
+          ),
         const OsmAttribution(),
         if (card != null)
           Padding(
