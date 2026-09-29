@@ -1,0 +1,592 @@
+/// Tests for the turn-by-turn engine (`nav_engine.dart`).
+library;
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:navbridge/services/nav_engine.dart';
+import 'package:navbridge/core/nav_protocol.dart';
+import 'package:navbridge/services/osrm.dart';
+
+/// A straight ~1.1 km eastbound route with 101 geometry points (~11 m apart)
+/// and two steps: depart + arrive.
+OsrmRoute _straightRoute() {
+  const lat = 10.8231;
+  const lng = 106.6297;
+  final geometry = <LatLng>[
+    for (var i = 0; i <= 100; i++) LatLng(lat, lng + i * 0.0001),
+  ];
+  return OsrmRoute(
+    distance: 1110,
+    duration: 80,
+    geometry: geometry,
+    steps: [
+      OsrmStep(
+        name: 'Đường A',
+        distance: 1110,
+        duration: 80,
+        type: 'depart',
+        modifier: null,
+        maneuver: geometry.first,
+      ),
+      OsrmStep(
+        name: 'Bến Thành',
+        distance: 0,
+        duration: 0,
+        type: 'arrive',
+        modifier: null,
+        maneuver: geometry.last,
+      ),
+    ],
+    stopCumulative: const [1110],
+  );
+}
+
+void main() {
+  group('TurnByTurnEngine', () {
+
+    test('23 cases', () {
+    // ---- case: positionAtDistance clamps to the polyline ends ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        final route = _straightRoute();
+        expect(engine.positionAtDistance(-10), route.geometry.first);
+        expect(engine.positionAtDistance(1e9), route.geometry.last);
+
+    })();
+
+
+    // ---- case: positionAtDistance interpolates along the route ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        final mid = engine.positionAtDistance(500);
+        expect(mid.latitude, closeTo(10.8231, 1e-6));
+        expect(mid.longitude, greaterThan(106.6297));
+        expect(mid.longitude, lessThan(106.72));
+
+    })();
+
+
+    // ---- case: update returns the first step near the start ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        final nav = engine.update(_straightRoute().geometry.first);
+        expect(nav.iconCode, iconStraight);
+        expect(nav.meter, greaterThan(0));
+        expect(nav.progress, lessThan(0.05));
+        expect(nav.totalStops, 1);
+        expect(nav.stopIndex, 0);
+        expect(nav.stopName, '');
+
+    })();
+
+
+    // ---- case: update advances to arrive at the route end ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        final route = _straightRoute();
+        engine.update(route.geometry.first);
+        final nav = engine.update(route.geometry.last);
+        expect(nav.iconCode, iconArrive);
+        expect(nav.meter, 0);
+        expect(nav.progress, greaterThan(0.9));
+
+    })();
+
+
+    // ---- case: currentCumulative advances along the route ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        final route = _straightRoute();
+        engine.update(route.geometry.first);
+        final startCum = engine.currentCumulative;
+        engine.update(engine.positionAtDistance(400));
+        expect(engine.currentCumulative, greaterThan(startCum));
+
+    })();
+
+
+    // ---- case: offRouteDistance detects points far from the route ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        final route = _straightRoute();
+        expect(engine.offRouteDistance(route.geometry.first), lessThan(20));
+        // ~1.1 km north of the route.
+        final far = LatLng(10.8231 + 0.01, 106.6297);
+        expect(engine.offRouteDistance(far), greaterThan(900));
+
+    })();
+
+
+    // ---- case: offRouteDistance calculates perpendicular segment distance (not vertex distance) ----
+    (() {
+          // 2 vertices spaced ~400m apart
+          final longRoute = OsrmRoute(
+            distance: 400,
+            duration: 30,
+            geometry: const [
+              LatLng(10.8000, 106.6000),
+              LatLng(10.8000, 106.6036), // ~393m east
+            ],
+            steps: [
+              OsrmStep(
+                name: 'Đường Dài',
+                distance: 400,
+                duration: 30,
+                type: 'depart',
+                modifier: null,
+                maneuver: const LatLng(10.8000, 106.6000),
+              ),
+            ],
+          );
+          final engine = TurnByTurnEngine(longRoute);
+          // Midpoint directly on the road (~200m from both vertices)
+          final midOnRoad = const LatLng(10.8000, 106.6018);
+          expect(
+            engine.offRouteDistance(midOnRoad),
+            lessThan(2),
+          ); // ~0m, NOT ~200m
+
+          // Point 25m north of the midpoint
+          final off25m = LatLng(10.8000 + 25 / 111320.0, 106.6018);
+          expect(engine.offRouteDistance(off25m), closeTo(25, 2));
+
+          // Point 70m north (off-route)
+          final off70m = LatLng(10.8000 + 70 / 111320.0, 106.6018);
+          expect(engine.offRouteDistance(off70m), closeTo(70, 3));
+
+    })();
+
+
+    // ---- case: currentStopIndex reports active stop correctly ----
+    (() {
+        final base = _straightRoute();
+        final route = OsrmRoute(
+          distance: base.distance,
+          duration: base.duration,
+          geometry: base.geometry,
+          steps: base.steps,
+          stopCumulative: const [300, 600, 1110],
+        );
+        final engine = TurnByTurnEngine(route, stopNames: const ['A', 'B', 'C']);
+        engine.update(base.geometry.first);
+        expect(engine.currentStopIndex, 0);
+
+        engine.update(engine.positionAtDistance(400));
+        expect(engine.currentStopIndex, 1);
+
+        engine.update(engine.positionAtDistance(700));
+        expect(engine.currentStopIndex, 2);
+
+    })();
+
+
+    // ---- case: multi-stop routes report the approaching stop ----
+    (() {
+        final base = _straightRoute();
+        final route = OsrmRoute(
+          distance: base.distance,
+          duration: base.duration,
+          geometry: base.geometry,
+          steps: base.steps,
+          stopCumulative: const [300, 600, 1110],
+        );
+        final engine = TurnByTurnEngine(route, stopNames: const ['A', 'B', 'C']);
+        engine.update(base.geometry.first);
+        // ~400 m in → approaching stop #2.
+        final nav = engine.update(engine.positionAtDistance(400));
+        expect(nav.totalStops, 3);
+        expect(nav.stopIndex, 1);
+        expect(nav.stopName, 'B');
+        // At the very end → last stop.
+        final end = engine.update(route.geometry.last);
+        expect(end.stopIndex, 2);
+        expect(end.stopName, 'C');
+
+    })();
+
+
+    // ---- case: snapToRoute projects a fix beside the road onto the route ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        // Raw GPS fix ~30 m north of the road, beside the middle of it.
+        final off = LatLng(10.8231 + 0.00027, 106.6350);
+        final snapped = engine.snapToRoute(off);
+        // The projection lands back on the road line (lat ≈ road lat).
+        expect(snapped.latitude, closeTo(10.8231, 1e-6));
+        // And it's ~30 m from the raw fix → back on the polyline.
+        expect(distanceMeters(off, snapped), closeTo(30, 5));
+        expect(engine.offRouteDistance(snapped), lessThan(15));
+
+    })();
+
+
+    // ---- case: snapToRoute picks the nearest segment, not the nearest vertex ----
+    (() {
+        // L-shaped route: east then south.
+        final geometry = [
+          const LatLng(10.82, 106.62),
+          const LatLng(10.82, 106.64),
+          const LatLng(10.80, 106.64),
+        ];
+        final engine = TurnByTurnEngine(
+          OsrmRoute(
+            distance: 4000,
+            duration: 300,
+            geometry: geometry,
+            steps: const [],
+          ),
+        );
+        // Fix north of the east-west leg → snaps onto that leg, before the bend.
+        final off = LatLng(10.8202, 106.63);
+        final snapped = engine.snapToRoute(off);
+        expect(snapped.latitude, closeTo(10.82, 1e-6));
+        expect(snapped.longitude, closeTo(106.63, 1e-5));
+        // Fix west of the north-south leg → snaps onto that leg, after the bend.
+        final off2 = LatLng(10.81, 106.6402);
+        final snapped2 = engine.snapToRoute(off2);
+        expect(snapped2.longitude, closeTo(106.64, 1e-6));
+        expect(snapped2.latitude, closeTo(10.81, 1e-5));
+
+    })();
+
+
+    // ---- case: adaptive ETA scales with actual speed after warm-up ----
+    (() {
+        // _straightRoute: 1110 m / 80 s → ~13.9 m/s (~50 km/h) profile speed.
+        OsrmRoute route() => _straightRoute();
+
+        // Not engaged before enough moving fixes.
+        final engine = TurnByTurnEngine(route());
+        expect(engine.etaFactor, 1.0);
+
+        // Slow driver (~21.6 km/h) for 30 fixes → EMA converges toward 6 m/s,
+        // factor = 13.9/6 ≈ 2.3 → ETA lengthens.
+        for (var i = 0; i < 30; i++) {
+          engine.update(route().geometry.first, speedMps: 6.0);
+        }
+        engine.update(engine.positionAtDistance(400), speedMps: 6.0);
+        expect(engine.etaFactor, greaterThan(2.0));
+        expect(engine.etaFactor, lessThan(2.8));
+
+        // Fast driver (~72 km/h) → factor < 1 → ETA shortens (clamped ≥ 0.5).
+        final fast = TurnByTurnEngine(route());
+        for (var i = 0; i < 30; i++) {
+          fast.update(route().geometry.first, speedMps: 20.0);
+        }
+        fast.update(fast.positionAtDistance(400), speedMps: 20.0);
+        expect(fast.etaFactor, greaterThan(0.5));
+        expect(fast.etaFactor, lessThan(0.9));
+
+    })();
+
+
+    // ---- case: adaptive ETA caps assumed pace at the vehicle legal max ----
+    (() {
+        // _straightRoute: 1110 m / 80 s → ~13.9 m/s (~50 km/h) profile speed.
+        OsrmRoute route() => _straightRoute();
+
+        // Motorbike legal max = 80 km/h ≈ 22.2 m/s. Driver bursts at 33 m/s
+        // (~119 km/h, above the law) for many fixes: the EMA would suggest
+        // factor = 13.9/33 ≈ 0.42 → an absurdly early ETA. The cap must clamp
+        // the assumed pace to 22.2 → factor ≈ 13.9/22.2 ≈ 0.63, never below.
+        final bike = TurnByTurnEngine(route(), maxSpeedMps: 80 / 3.6);
+        for (var i = 0; i < 30; i++) {
+          bike.update(route().geometry.first, speedMps: 33.0);
+        }
+        bike.update(bike.positionAtDistance(400), speedMps: 33.0);
+        // Capped factor (≈0.63) is HIGHER than the uncapped one (≈0.42) —
+        // i.e. the ETA is less optimistic than the raw-speed math would be.
+        expect(bike.etaFactor, greaterThan(0.58));
+        expect(bike.etaFactor, lessThan(0.70));
+
+    })();
+
+
+    // ---- case: nextMeter is the distance to the second maneuver ----
+    (() {
+        final base = _straightRoute(); // depart leg 1110 → arrive
+        // Insert a turn at ~500 m so there are two maneuvers ahead.
+        final route = OsrmRoute(
+          distance: 1110,
+          duration: 80,
+          geometry: base.geometry,
+          steps: [
+            OsrmStep(
+              name: 'Đường A',
+              distance: 500,
+              duration: 40,
+              type: 'depart',
+              modifier: null,
+              maneuver: base.geometry.first,
+            ),
+            OsrmStep(
+              name: 'Đường B',
+              distance: 610,
+              duration: 40,
+              type: 'turn',
+              modifier: 'left',
+              maneuver: base.geometry[45], // ~500 m along the route
+            ),
+            OsrmStep(
+              name: 'Bến Thành',
+              distance: 0,
+              duration: 0,
+              type: 'arrive',
+              modifier: null,
+              maneuver: base.geometry.last,
+            ),
+          ],
+          stopCumulative: const [1110],
+        );
+        final engine = TurnByTurnEngine(route);
+        engine.update(route.geometry.first);
+        final nav = engine.update(engine.positionAtDistance(100));
+        expect(nav.nextIconCode, isNot(0)); // there IS a second maneuver
+        // Upcoming maneuver = the turn; the SECOND one = arrive.
+        expect(nav.nextText, 'Đường B');
+        expect(nav.nextNextText, 'Bến Thành');
+        // Distance from ~100 m to the second maneuver (arrive at ~1110 m).
+        expect(nav.nextMeter, closeTo(1010, 25));
+
+    })();
+
+
+    // ---- case: announces the UPCOMING maneuver (not the one just passed) ----
+    (() {
+        // Route: go east 500 m (road A), turn LEFT north 200 m (road B), then
+        // turn RIGHT east 200 m (road C, arrive). The engine must say "left"
+        // while approaching the left turn and "right" while approaching the
+        // right turn — a regression test for the off-by-one that made the
+        // spoken direction lag one maneuver behind ("left/right reversed").
+        //
+        // Dense geometry (a vertex every ~100 m) so the engine's nearest-vertex
+        // snap lands on the true position instead of jumping at a turn vertex.
+        final geometry = <LatLng>[
+          // Road A: east 500 m (5 × 100 m).
+          for (var k = 0; k <= 5; k++) LatLng(10.82, 106.62 + k * 0.0009146),
+          // Road B: north 200 m (4 × 50 m).
+          for (var k = 1; k <= 4; k++) LatLng(10.82 + k * 0.0004492, 106.624573),
+          // Road C: east 200 m (4 × 50 m).
+          for (var k = 1; k <= 4; k++)
+            LatLng(10.821797, 106.624573 + k * 0.0004571),
+        ];
+        final route = OsrmRoute(
+          distance: 900,
+          duration: 80,
+          geometry: geometry,
+          steps: [
+            OsrmStep(
+              name: 'Đường A',
+              distance: 500,
+              duration: 40,
+              type: 'depart',
+              modifier: null,
+              maneuver: geometry[5], // left-turn point
+            ),
+            OsrmStep(
+              name: 'Đường B',
+              distance: 200,
+              duration: 20,
+              type: 'turn',
+              modifier: 'left',
+              maneuver: geometry[5], // left-turn point
+            ),
+            OsrmStep(
+              name: 'Đường C',
+              distance: 200,
+              duration: 20,
+              type: 'turn',
+              modifier: 'right',
+              maneuver: geometry[9], // right-turn point
+            ),
+            OsrmStep(
+              name: 'Bến đến',
+              distance: 0,
+              duration: 0,
+              type: 'arrive',
+              modifier: null,
+              maneuver: geometry.last,
+            ),
+          ],
+          stopCumulative: const [900],
+        );
+        final engine = TurnByTurnEngine(route);
+        // On road A, approaching the left turn at cum 500.
+        final onA = engine.update(engine.positionAtDistance(100));
+        expect(onA.iconCode, iconTurnLeft);
+        expect(onA.nextText, 'Đường B');
+        // On road B (cum 500–700), approaching the right turn at cum 700.
+        final onB = engine.update(engine.positionAtDistance(600));
+        expect(onB.iconCode, iconTurnRight);
+        expect(onB.nextText, 'Đường C');
+        // Near the end → arrive.
+        final end = engine.update(engine.positionAtDistance(880));
+        expect(end.iconCode, iconArrive);
+
+    })();
+
+
+    // ---- case: snapToRoute clamps beyond the ends to the route ends ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        final route = _straightRoute();
+        // Far past the destination → clamps to the last polyline point.
+        final past = LatLng(10.8231, 106.75);
+        expect(engine.snapToRoute(past), route.geometry.last);
+        // Far before the origin → clamps to the first point.
+        final before = LatLng(10.8231, 106.55);
+        expect(engine.snapToRoute(before), route.geometry.first);
+
+    })();
+
+
+    // ---- case: update text is the current road and nextText is the incoming road ----
+    (() {
+          final route = _straightRoute();
+          final engine = TurnByTurnEngine(route);
+          final nav = engine.update(engine.positionAtDistance(100));
+          // On 'Đường A', the upcoming step's road (the street you turn into)
+          // is the destination 'Bến Thành'.
+          expect(nav.text, 'Đường A');
+          expect(nav.nextText, 'Bến Thành');
+
+    })();
+
+
+    // ---- case: snapToRoute advances snappedSegmentIndex as the route is consumed ----
+    (() {
+          final engine = TurnByTurnEngine(_straightRoute());
+          expect(engine.snappedSegmentIndex, 0);
+          // Near the start (~10 m in, ~1 vertex).
+          engine.snapToRoute(engine.positionAtDistance(10));
+          final startSeg = engine.snappedSegmentIndex;
+          expect(startSeg, lessThan(5));
+          // Mid-route (~600 m in, ~55 vertices of ~11 m).
+          final mid = engine.snapToRoute(engine.positionAtDistance(600));
+          final midSeg = engine.snappedSegmentIndex;
+          expect(midSeg, greaterThan(40));
+          expect(midSeg, lessThan(70));
+          // The drawn route start must stay on the road line.
+          expect(mid.latitude, closeTo(10.8231, 1e-6));
+          // Further on, more of the route has been consumed.
+          engine.snapToRoute(engine.positionAtDistance(900));
+          expect(engine.snappedSegmentIndex, greaterThan(midSeg));
+
+    })();
+
+
+    // ---- case: route consumption is monotonic even with noisy GPS fixes ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        var prev = 0;
+        // Drive along with random ±20 m noise; the consumed index must never
+        // go backward (otherwise the drawn route would visibly grow back).
+        for (var d = 0.0; d < 1000; d += 25) {
+          final on = engine.positionAtDistance(d);
+          final noisy = LatLng(
+            on.latitude + (d * 0.000031) % 0.00018 - 0.00009, // ±10 m lat wobble
+            on.longitude + 0.00005, // fixed +5 m lng offset
+          );
+          engine.snapToRoute(noisy);
+          expect(
+            engine.snappedSegmentIndex,
+            greaterThanOrEqualTo(prev),
+            reason: 'consumed start must never move backward (at ${d}m)',
+          );
+          prev = engine.snappedSegmentIndex;
+        }
+
+    })();
+
+
+    // ---- case: lateralOffset moves a point perpendicular to the route ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        final on = engine.positionAtDistance(300);
+        // The straight test route is EASTBOUND (lat constant); the right-hand
+        // side of an eastbound road points south (bearing 90° + 90° = 180°).
+        final side = engine.lateralOffset(on, 10);
+        expect(side.latitude, lessThan(on.latitude)); // south = smaller latitude
+        // ~10 m away from the route.
+        expect(distanceMeters(on, side), closeTo(10, 1.5));
+        // And snapping the offset point pulls it straight back onto the route.
+        final back = engine.snapToRoute(side);
+        expect(distanceMeters(back, on), lessThan(3));
+
+    })();
+
+
+    // ---- case: routeBearing points along the road ahead (eastbound) ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        // Anywhere along the straight eastbound road the ahead-bearing is 90°.
+        for (final d in [100.0, 400.0, 700.0]) {
+          engine.snapToRoute(engine.positionAtDistance(d));
+          engine.update(engine.positionAtDistance(d));
+          expect(engine.routeBearing(), closeTo(90, 6));
+        }
+
+    })();
+
+
+    // ---- case: routeBearing is stable under repeated noisy fixes ----
+    (() {
+        final engine = TurnByTurnEngine(_straightRoute());
+        var prev = -1.0;
+        // Repeated calls must not make the bearing jump around (the old
+        // nearest-segment scan flipped between segments at vertices).
+        for (var d = 0.0; d < 900; d += 25) {
+          final on = engine.positionAtDistance(d);
+          final noisy = LatLng(
+            on.latitude + (d * 0.000031) % 0.00018 - 0.00009,
+            on.longitude + 0.00005,
+          );
+          engine.snapToRoute(noisy);
+          engine.update(noisy);
+          final b = engine.routeBearing();
+          expect(b, closeTo(90, 12)); // always ~east, never flipping to west
+          if (prev >= 0) {
+            expect((b - prev).abs(), lessThan(6)); // no per-fix jumps
+          }
+          prev = b;
+        }
+
+    })();
+
+
+    // ---- case: routeBearing follows the road through a bend ----
+    (() {
+        // East then south.
+        final geometry = [
+          const LatLng(10.82, 106.62),
+          const LatLng(10.82, 106.64),
+          const LatLng(10.80, 106.64),
+        ];
+        final engine = TurnByTurnEngine(
+          OsrmRoute(
+            distance: 5000,
+            duration: 400,
+            geometry: geometry,
+            steps: const [],
+          ),
+        );
+        // On the east-west leg → east (≈90°).
+        engine.snapToRoute(const LatLng(10.82, 106.63));
+        expect(engine.routeBearing(), closeTo(90, 10));
+        // Southbound straight road → south (≈180°).
+        final south = TurnByTurnEngine(
+          OsrmRoute(
+            distance: 2500,
+            duration: 200,
+            geometry: [const LatLng(10.82, 106.64), const LatLng(10.80, 106.64)],
+            steps: const [],
+          ),
+        );
+        south.snapToRoute(const LatLng(10.81, 106.6401));
+        expect(south.routeBearing(), closeTo(180, 10));
+
+    })();
+    });
+
+  });
+}

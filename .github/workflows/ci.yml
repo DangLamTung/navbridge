@@ -31,8 +31,9 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Analyze
-        run: flutter analyze
-
-      - name: Test
-        run: flutter test
+      # ONE definition of the gate: `tool/check.sh` runs the analyzer and then
+      # the two test lines separately — FUNCTION (test/func: trip, long trip,
+      # in/out resident, signs, packs) and UNIT (test/unit). A bare
+      # `flutter test` would run both in one blob and hide which line failed.
+      - name: Analyze + function tests + unit tests
+        run: ./tool/check.sh
