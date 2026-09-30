@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
@@ -21,17 +22,25 @@ void main() {
     return true;
   }
 
+  /// The trip to drive, from the COMMITTED fixture.
+  ///
+  /// `test/data/trips/<id>.json` holds ROUTE geometry (`geometry[]`) — the shape
+  /// the Dart tests drive. The app's replay reads a RECORDED trip
+  /// (`locations[]`), and `tool/trips_to_sim.py` converts one into the other for
+  /// the browser harness, writing into `build/web/trips/`. That directory is a
+  /// build artifact: it does not exist in CI, so a test that prefers it passes
+  /// only on a machine where someone has already run the converter, and fails in
+  /// CI on an empty `locations[]`. So the fix list is derived here, with the
+  /// converter's own arithmetic, and the fixture is the only input.
   Map<String, dynamic> loadReplayTrip(String id) {
-    // Check both served web replay path and test data path
-    final servedPath = 'build/web/trips/$id.json';
-    if (File(servedPath).existsSync()) {
-      return jsonDecode(File(servedPath).readAsStringSync()) as Map<String, dynamic>;
+    final fixture = File('test/data/trips/$id.json');
+    if (!fixture.existsSync()) {
+      throw StateError('Trip $id not found in test/data/trips');
     }
-    final fixturePath = 'test/data/trips/$id.json';
-    if (File(fixturePath).existsSync()) {
-      return jsonDecode(File(fixturePath).readAsStringSync()) as Map<String, dynamic>;
-    }
-    throw StateError('Trip $id not found in build/web/trips or test/data/trips');
+    final trip = jsonDecode(fixture.readAsStringSync()) as Map<String, dynamic>;
+    final recorded = (trip['locations'] as List<dynamic>?) ?? const <dynamic>[];
+    if (recorded.isNotEmpty) return trip; // already a recording
+    return {'id': id, 'locations': _deriveLocations(trip)};
   }
 
   group('40km+ simulator trip limit & Waze segment validation', () {
@@ -298,4 +307,57 @@ void main() {
       print('  Corrupt / invalid segments: $corruptSegments');
     });
   });
+}
+
+// --- route fixture → recorded trip ------------------------------------------
+//
+// Mirrors `tool/trips_to_sim.py#to_takeout` exactly, so the fixes driven here
+// are the fixes the browser harness drives for the same trip. Flat-earth
+// metres: the converter's own constants, kept identical on purpose.
+
+const int _t0Ms = 1759000000000;
+
+List<Map<String, dynamic>> _deriveLocations(Map<String, dynamic> trip) {
+  final geom = (trip['geometry'] as List<dynamic>?) ?? const <dynamic>[];
+  final pace = ((trip['pace_mps'] as num?) ?? 21.3).toDouble();
+  final out = <Map<String, dynamic>>[];
+  var along = 0.0;
+  double? prevLat;
+  double? prevLng;
+  for (final raw in geom) {
+    final p = raw as List<dynamic>;
+    final lat = (p[0] as num).toDouble();
+    final lng = (p[1] as num).toDouble();
+    var hd = 0.0;
+    if (prevLat != null && prevLng != null) {
+      along += _flatMeters(prevLat, prevLng, lat, lng);
+      hd = _bearingDeg(prevLat, prevLng, lat, lng);
+    }
+    out.add(<String, dynamic>{
+      'timestampMs': '${(_t0Ms + along / pace * 1000).round()}',
+      'latitudeE7': (lat * 1e7).round(),
+      'longitudeE7': (lng * 1e7).round(),
+      'accuracy': 8,
+      'velocity': pace.round(),
+      'heading': hd.round(),
+      'source': 'GPS',
+    });
+    prevLat = lat;
+    prevLng = lng;
+  }
+  return out;
+}
+
+double _flatMeters(double aLat, double aLng, double bLat, double bLng) {
+  final dy = (bLat - aLat) * 110574.0;
+  final dx =
+      (bLng - aLng) * 111320.0 * math.cos((aLat + bLat) / 2 * math.pi / 180);
+  return math.sqrt(dx * dx + dy * dy);
+}
+
+double _bearingDeg(double aLat, double aLng, double bLat, double bLng) {
+  final dy = (bLat - aLat) * 110574.0;
+  final dx =
+      (bLng - aLng) * 111320.0 * math.cos((aLat + bLat) / 2 * math.pi / 180);
+  return (math.atan2(dx, dy) * 180 / math.pi + 360) % 360;
 }

@@ -38,9 +38,21 @@ void main() {
       if (!await ready()) return;
 
       final tripFile = findTripFile();
-      expect(tripFile, isNotNull, reason: 'Trip 083715 file not found in docs/trips');
+      if (tripFile == null) {
+        // `docs/trips/` is gitignored on purpose: it holds the driver's own
+        // recorded drives, which are not redistributed. CI therefore has no
+        // recording to replay, and failing here would say "the code is broken"
+        // about a file that was never meant to ship. The trips that must run
+        // everywhere live in test/data/trips and are driven by the long-trip
+        // suite next door.
+        markTestSkipped(
+          'no 2026-09-29 08:37 recording on this machine (docs/trips is '
+          'gitignored — it is the driver\'s own trace)',
+        );
+        return;
+      }
 
-      final content = jsonDecode(tripFile!.readAsStringSync()) as Map<String, dynamic>;
+      final content = jsonDecode(tripFile.readAsStringSync()) as Map<String, dynamic>;
       final rawLocations = content['locations'] as List<dynamic>;
       expect(rawLocations, isNotEmpty);
 
