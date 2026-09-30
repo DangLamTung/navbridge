@@ -49,6 +49,32 @@ Also in this release:
   two steps. A test file outside those two directories is an error, so the split
   cannot silently stop covering something.
 
+Build and release:
+
+- **`release.yml` builds again.** Two things had to be committed or switched off
+  first: `tool/signs_app_filter.py`, which the sign-placement gate imports (the
+  module existed only in a working tree, so the release job died on the import in
+  1m40s), and then the gate itself — it compares the sign asset against a
+  41,373-row baseline, and `assets/offline_map/vietnam_signs.json` is a 13-byte
+  stub in git, so it answered "every kind is gone from the asset" for an
+  environment that never had the pack. `release.yml` now sets
+  `SKIP_SIGN_GATE=1`, the switch `tool/build.sh` already carried; the gate still
+  runs locally, where the real pack is checked out.
+- **The data packs are local-only, and five of them are stubs in git**
+  (`vietnam_signs.json` 13 B, `vietnam_cameras.json` 15 B,
+  `waze_speed_limits.json` / `vietmap_speed_limits.json` 26 B,
+  `vietnam_speed_limits.geojson` 43 B) — only the Waze segment pack
+  (`waze_segments.bin`, 28 MB) ships in the repo. CI stubs whatever is missing
+  and the data-driven tests skip themselves; the real packs arrive over the air.
+- **Tests no longer fail on the absence of those packs.** Five did: three
+  `long_*` cases preferred `build/web/trips/<id>.json` (a build artifact the
+  browser harness generates) over their own fixture, so they passed only where
+  the converter had been run and died on `expect(locs, isNotEmpty)` in CI; one
+  replayed the driver's own recording out of the gitignored `docs/trips/`; one
+  counted sampled points from the stub Waze/VietMap point files. The fixtures are
+  now the only input, the recording case skips, and an empty pack is a skip
+  rather than a failure.
+
 Known in this release, not fixed:
 
 - When the held name's own segment runs *along* the car, its value still wins:
@@ -56,10 +82,9 @@ Known in this release, not fixed:
   overshoots its end.
 - On Trường Chinh the motorbike ceiling can still clamp the layer's 60 to 50
   (`effectiveLimit`); the dial has not been re-checked on the road yet.
-- The local camera DB has no "Nam Định" rows and carries "VietMap" in the
-  `district` field for 21.7k of its 27.3k rows. The committed DB is the 15-byte
-  stub, so CI skips the camera data tests; the real DB is served by the update
-  server.
+- The camera DB tags 21,724 of its 27,361 rows with "VietMap" in the `district`
+  field, where a province or city belongs. The app does not read that field for
+  these rows, but the spot-check tests count provinces by it.
 
 ## 1.1.2 — 2026-09-21 (build 4007)
 
