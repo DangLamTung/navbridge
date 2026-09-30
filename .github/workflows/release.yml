@@ -98,6 +98,14 @@ jobs:
           fi
 
       - name: Build release APK
+        env:
+          # The sign-placement gate compares the sign asset against a 41,373-row
+          # baseline, and assets/offline_map/vietnam_signs.json is a 13-byte stub
+          # in git (the real pack is local-only and served over the air), so the
+          # gate answers "every kind is gone from the asset — DO NOT SHIP" and
+          # kills the job in 1m40s. It cannot mean anything here; it runs locally,
+          # where the real pack is checked out, before the tag is pushed.
+          SKIP_SIGN_GATE: '1'
         run: |
           chmod +x tool/build.sh
           ./tool/build.sh --release
