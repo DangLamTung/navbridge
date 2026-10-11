@@ -20,23 +20,21 @@ void main() {
   });
 
   group('order', () {
-    test(
-      'default OSM source: car may use the offline graph, others go online',
-      () {
-        expect(resolveRouteChain(RouteProfile.car), [
-          RouteProvider.graphhopper,
-          RouteProvider.osrm,
-        ]);
-        // The on-device graph is car-only, so every other profile is online OSRM.
-        for (final p in [
-          RouteProfile.motorbike,
-          RouteProfile.bicycle,
-          RouteProfile.walking,
-        ]) {
-          expect(resolveRouteChain(p), [RouteProvider.osrm]);
-        }
-      },
-    );
+    test('default OSM source: car and motorbike may use the offline graph', () {
+      expect(resolveRouteChain(RouteProfile.car), [
+        RouteProvider.graphhopper,
+        RouteProvider.osrm,
+      ]);
+      // A motorbike is routed on the CAR graph: the archive carries no
+      // motorcycle encodings. Bicycle/walking have no graph at all.
+      expect(resolveRouteChain(RouteProfile.motorbike), [
+        RouteProvider.graphhopper,
+        RouteProvider.osrm,
+      ]);
+      for (final p in [RouteProfile.bicycle, RouteProfile.walking]) {
+        expect(resolveRouteChain(p), [RouteProvider.osrm]);
+      }
+    });
 
     test('Google source is tried first, then offline graph, then OSRM', () {
       dataSource = 'google';
@@ -45,9 +43,10 @@ void main() {
         RouteProvider.graphhopper,
         RouteProvider.osrm,
       ]);
-      // No offline graph for a motorbike → Google, then OSRM.
+      // Motorbike now falls back to the offline graph before OSRM too.
       expect(resolveRouteChain(RouteProfile.motorbike), [
         RouteProvider.google,
+        RouteProvider.graphhopper,
         RouteProvider.osrm,
       ]);
     });
@@ -56,6 +55,7 @@ void main() {
       dataSource = 'vietmap';
       expect(resolveRouteChain(RouteProfile.motorbike), [
         RouteProvider.vietmap,
+        RouteProvider.graphhopper,
         RouteProvider.osrm,
       ]);
       expect(resolveRouteChain(RouteProfile.car), [
@@ -74,7 +74,12 @@ void main() {
         expect(resolveRouteChain(RouteProfile.car), [
           RouteProvider.graphhopper,
         ]);
-        expect(resolveRouteChain(RouteProfile.motorbike), isEmpty);
+        // Fully offline, the motorbike rides the car graph rather than failing.
+        expect(resolveRouteChain(RouteProfile.motorbike), [
+          RouteProvider.graphhopper,
+        ]);
+        // …but a mode with no graph has nothing left.
+        expect(resolveRouteChain(RouteProfile.bicycle), isEmpty);
         dataSource = 'google';
         expect(resolveRouteChain(RouteProfile.car), [
           RouteProvider.graphhopper,
@@ -89,7 +94,9 @@ void main() {
     test('pinning the engine to graphhopper removes OSRM (and vice versa)', () {
       routingEngine = 'graphhopper';
       expect(resolveRouteChain(RouteProfile.car), [RouteProvider.graphhopper]);
-      expect(resolveRouteChain(RouteProfile.motorbike), isEmpty);
+      expect(resolveRouteChain(RouteProfile.motorbike), [
+        RouteProvider.graphhopper,
+      ]);
 
       routingEngine = 'osrm';
       expect(resolveRouteChain(RouteProfile.car), [RouteProvider.osrm]);
@@ -98,10 +105,13 @@ void main() {
     test('describeRouteChain spells the order out for the UI', () {
       expect(describeRouteChain(RouteProfile.car), 'GraphHopper → OSRM');
       dataSource = 'google';
-      expect(describeRouteChain(RouteProfile.motorbike), 'Google → OSRM');
-      forceOffline = true;
       expect(
         describeRouteChain(RouteProfile.motorbike),
+        'Google → GraphHopper → OSRM',
+      );
+      forceOffline = true;
+      expect(
+        describeRouteChain(RouteProfile.bicycle),
         'Không có nguồn nào cho loại xe này',
       );
     });
@@ -148,13 +158,18 @@ void main() {
       expect(RouteProvider.osrm.canAvoidFerry(RouteProfile.motorbike), isTrue);
     });
 
-    test('the offline graph is car-only', () {
+    test('the offline graph serves car and motorbike', () {
       expect(
         RouteProvider.graphhopper.canAvoidHighway(RouteProfile.car),
         isTrue,
       );
+      // A motorbike rides the SAME car graph, so it inherits its behaviour.
       expect(
         RouteProvider.graphhopper.canAvoidHighway(RouteProfile.motorbike),
+        isTrue,
+      );
+      expect(
+        RouteProvider.graphhopper.canAvoidHighway(RouteProfile.bicycle),
         isFalse,
       );
     });

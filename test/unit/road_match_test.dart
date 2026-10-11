@@ -388,4 +388,94 @@ void main() {
       );
     });
   });
+
+  group('RoadNameHysteresis as a VALUE gate', () {
+    // The same class gates the road's class/limit on an unchanged name, with an
+    // EXACT signature comparator — see `_gateValue` in nav_gps.dart and the
+    // 2026-10-11 report "when in intersection we have speed jumping".
+    bool Function(String, String) exact() => (a, b) => a == b;
+
+    test('3 cases', () {
+      // ---- case: a one-fix class flip is never published ----
+      (() {
+        final h = RoadNameHysteresis(confirmFixes: 2, confirmMeters: 15);
+        // fix 77: the road briefly resolves as the crossing trunk road.
+        expect(
+          h.accept(
+            current: '50|unclassified|true|class',
+            candidate: '60|trunk|false|city',
+            movedM: 13,
+            at: DateTime(2026, 10, 9, 0, 1, 17),
+            same: exact(),
+          ),
+          isFalse,
+        );
+        // fix 78: straight back to the road we are actually on.
+        expect(
+          h.accept(
+            current: '50|unclassified|true|class',
+            candidate: '50|unclassified|true|class',
+            movedM: 13,
+            at: DateTime(2026, 10, 9, 0, 1, 18),
+            same: exact(),
+          ),
+          isFalse,
+        );
+        expect(h.pending, isNull, reason: 'the flip-flop left nothing pending');
+      })();
+
+      // ---- case: a change that persists IS published ----
+      (() {
+        final h = RoadNameHysteresis(confirmFixes: 2, confirmMeters: 15);
+        expect(
+          h.accept(
+            current: '50|unclassified|true|class',
+            candidate: '60|trunk|false|city',
+            movedM: 13,
+            at: DateTime(2026, 10, 9, 0, 1, 17),
+            same: exact(),
+          ),
+          isFalse,
+        );
+        expect(
+          h.accept(
+            current: '50|unclassified|true|class',
+            candidate: '60|trunk|false|city',
+            movedM: 13,
+            at: DateTime(2026, 10, 9, 0, 1, 18),
+            same: exact(),
+          ),
+          isTrue,
+        );
+      })();
+
+      // ---- case: the exact comparator does NOT fold, unlike the name rule ----
+      (() {
+        // The name rule treats 'Cộng Hòa' and 'Cộng Hoà' as one road; the value
+        // signature must not, or a spelling-only publish would silently clear a
+        // pending value change.
+        final h = RoadNameHysteresis();
+        expect(
+          h.accept(
+            current: 'Cộng Hòa',
+            candidate: 'Cộng Hoà',
+            movedM: 5,
+          ),
+          isFalse,
+          reason: 'default comparator folds them',
+        );
+        final v = RoadNameHysteresis();
+        expect(
+          v.accept(
+            current: '60|secondary|true|segment',
+            candidate: '60|secondary|false|segment',
+            movedM: 5,
+            same: exact(),
+          ),
+          isFalse,
+        );
+        expect(v.confirmations, 1, reason: 'exact comparator saw a change');
+      })();
+    });
+  });
 }

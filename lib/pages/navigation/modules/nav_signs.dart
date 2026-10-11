@@ -28,8 +28,17 @@ const Set<RoadSignKind> announcedSignKinds = {
   RoadSignKind.onlyLeft,
   RoadSignKind.onlyRight,
   RoadSignKind.endProhibitions,
-  RoadSignKind.oneWay,
+  // ⛔ `oneWay` is deliberately MAP-ONLY (user, 2026-10-11: "no need anounce,
+  // just show the sign"). The pack now carries ~17.8k I.407a rows generated
+  // from the segment layer's one-way data, one at each end of every one-way run
+  // ≥85 m — announcing each one would fire on nearly every block of a district
+  // like Quận 1, where ~1,700 segments are one-way. The SIGN is the information;
+  // the callout is noise.
   RoadSignKind.reservedLane,
+  RoadSignKind.tollBooth,
+  RoadSignKind.railwayCrossing,
+  RoadSignKind.tunnel,
+  RoadSignKind.slowDown,
   // Khu đông dân cư boundaries: entering / leaving a built-up area is
   // the one "sign" that applies to the next few kilometres of road, so
   // it is announced like a prohibition (user: "say Bắt đầu khu dân cư /
@@ -54,6 +63,10 @@ int signAnnounceTier(RoadSignKind kind) => switch (kind) {
       RoadSignKind.giveWay ||
       RoadSignKind.noPassing ||
       RoadSignKind.noPassingEnd ||
+      RoadSignKind.tollBooth ||
+      RoadSignKind.railwayCrossing ||
+      RoadSignKind.tunnel ||
+      RoadSignKind.slowDown ||
       RoadSignKind.signal =>
         1,
       _ => 2,
@@ -81,11 +94,16 @@ extension _NavSigns on _NavigationPageState {
       snapped,
       geometry,
       maxAheadMeters: kSignWarnM,
+      lateralMeters: 60.0,
     );
     if (!mounted) return;
+    // The display bar is fed FIRST — before the `if (!_voiceOn) return` gate
+    // below — so "biển báo phía trước" works with the voice off.
+    _setSignsAhead(ahead);
     // 1. Process signs reached within [kSignReachedM] (50 m):
     final reachedSigns = ahead.where((a) => a.routeMeters <= kSignReachedM).toList();
     var reachedTownBoundary = false;
+    var stateChanged = false;
 
     // Macro-regulatory and zone transitions:
     for (final a in reachedSigns) {
@@ -97,7 +115,7 @@ extension _NavSigns on _NavigationPageState {
           _signSpeedLimit = null;
           _signSpeedLimitRoad = null;
           _signAheadM = 0;
-          if (mounted) setNavState(() {});
+          stateChanged = true;
         }
       } else if (k == RoadSignKind.populated) {
         // Sign R.420: Bắt đầu khu đông dân cư
@@ -106,7 +124,7 @@ extension _NavSigns on _NavigationPageState {
           _inTown = true;
           _inTownBySign = true;
           _updateRoadForTownChange(true, at: snapped);
-          if (mounted) setNavState(() {});
+          stateChanged = true;
         }
       } else if (k == RoadSignKind.populatedEnd) {
         // Sign R.421: Hết khu đông dân cư
@@ -115,7 +133,7 @@ extension _NavSigns on _NavigationPageState {
           _inTown = false;
           _inTownBySign = true;
           _updateRoadForTownChange(false, at: snapped);
-          if (mounted) setNavState(() {});
+          stateChanged = true;
         }
       }
     }
@@ -130,7 +148,7 @@ extension _NavSigns on _NavigationPageState {
         _signSpeedLimit = reachedSpeed.sign.value;
         _signSpeedLimitRoad = _roadInfo?.name;
         _signAheadM = 0;
-        if (mounted) setNavState(() {});
+        stateChanged = true;
       }
     } else if (reachedTownBoundary) {
       // Crossing a built-up boundary without an explicit speed sign posted at
@@ -140,7 +158,7 @@ extension _NavSigns on _NavigationPageState {
         _signSpeedLimit = null;
         _signSpeedLimitRoad = null;
         _signAheadM = 0;
-        if (mounted) setNavState(() {});
+        stateChanged = true;
       }
     }
 
@@ -157,7 +175,7 @@ extension _NavSigns on _NavigationPageState {
         _signSpeedLimit = null;
         _signSpeedLimitRoad = null;
         _signAheadM = 0;
-        if (mounted) setNavState(() {});
+        stateChanged = true;
       } else if (_signSpeedLimitRoad == null || _signSpeedLimitRoad!.isEmpty) {
         // Bind road name as soon as it becomes known.
         if (curRoad != null && curRoad.isNotEmpty) {
@@ -165,6 +183,8 @@ extension _NavSigns on _NavigationPageState {
         }
       }
     }
+
+    if (stateChanged && mounted) setNavState(() {});
 
     // ADVANCE warning: a LOWER speed limit is coming up ([kSignReachedM]..
     // [kSignWarnM]) — say it once per sign so the driver can slow down BEFORE
@@ -286,6 +306,25 @@ extension _NavSigns on _NavigationPageState {
     if (mounted) setNavState(() {});
   }
 
+  /// Record the signs ahead for the "sắp tới" alert bar, nearest first.
+  ///
+  /// Rebuilds only when the nearest sign changes or its distance moves a whole
+  /// metre, so a 1 Hz scan does not repaint the nav screen every second.
+  void _setSignsAhead(List<SignAhead> ahead) {
+    final sorted = [...ahead]..sort((a, b) => a.routeMeters.compareTo(b.routeMeters));
+    final unchanged =
+        sorted.length == _aheadSigns.length &&
+        List.generate(sorted.length, (i) => i).every(
+          (i) =>
+              identical(sorted[i].sign, _aheadSigns[i].sign) &&
+              sorted[i].routeMeters.round() ==
+                  _aheadSigns[i].routeMeters.round(),
+        );
+    if (unchanged) return;
+    _aheadSigns = sorted;
+    if (mounted) setNavState(() {});
+  }
+
   /// Is the upcoming camera alert the SAME junction as a traffic light
   /// [signMeters] ahead? Only a red-light camera counts: at those the camera
   /// alert and the light callout describe one hazard, and the camera one is the
@@ -297,6 +336,20 @@ extension _NavSigns on _NavigationPageState {
     if (c.focus != 'red_light' && c.type != 'red_light') return false;
     return (cam.routeMeters - signMeters).abs() <= 150;
   }
+}
+
+/// Short name for a sign, for the alert bar's long-press tooltip.
+///
+/// [RoadSignKind.label] is written for the catalogue and carries the QCVN code
+/// ("P.123 Cấm rẽ trái"), which is noise on a tooltip for an icon whose whole
+/// point is that the picture identifies it; this strips the code. The two
+/// symbols every rider knows by name are shortened further.
+///
+/// Pure, so the bar's wording can be pinned by a test.
+String signShortLabel(RoadSignKind kind) {
+  if (kind == RoadSignKind.stop) return 'STOP';
+  if (kind == RoadSignKind.giveWay) return 'Nhường đường';
+  return kind.label.replaceFirst(RegExp(r'^[A-Z]+\.\d+[a-z]?\s+'), '').trim();
 }
 
 /// The spoken callout for a road sign, or for a khu đông dân cư boundary.

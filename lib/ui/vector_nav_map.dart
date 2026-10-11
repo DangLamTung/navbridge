@@ -37,6 +37,7 @@ import 'package:navbridge/core/car_filter.dart';
 import 'package:navbridge/core/route_snap.dart';
 import 'package:navbridge/core/trip_plan.dart';
 import 'package:navbridge/services/nav_map_info.dart';
+import 'package:navbridge/services/offline_loader.dart' show readOfflineText;
 import 'package:navbridge/ui/marker_density.dart';
 
 /// Approx. bounds of the BUNDLED nav-map vector tiles (`saigon_z16.pmtiles`,
@@ -149,6 +150,7 @@ class VectorNavMap extends StatefulWidget {
     this.showSatellite = false,
     this.satelliteUrl,
     this.smoothCamera = true,
+    this.carAnchor = 0.0,
     this.controller,
     this.showCompass = true,
     this.defaultZoom = 16,
@@ -279,6 +281,13 @@ class VectorNavMap extends StatefulWidget {
   /// jump per 1 Hz GPS fix (that jump + freeze is what made the map stutter).
   /// Off → the legacy per-fix jump.
   final bool smoothCamera;
+
+  /// Where the car arrow sits vertically on screen: a fraction of the viewport
+  /// height the follow camera looks PAST the car. 0 = dead centre (the
+  /// historical framing), ~0.10 = the car rides on the lower-third line so most
+  /// of the screen shows the road ahead (Google-Maps framing), ~0.22 = near the
+  /// bottom edge. Set from Settings → "Vị trí mũi tên" ([carScreenAnchor]).
+  final double carAnchor;
 
   /// Camera-follow controller for the auto-center button (rendered by the
   /// page so it sits above the platform view).
@@ -593,9 +602,9 @@ class _VectorNavMapState extends State<VectorNavMap>
       }
 
       // --- build the style with absolute file:// paths ------------------
-      final styleRaw = await rootBundle.loadString(
-        'assets/offline_map/nav_style.json',
-      );
+      // Prefers a downloaded copy over the bundled asset (offline_loader), so
+      // the map style can be corrected without shipping a new APK.
+      final styleRaw = await readOfflineText('nav_style.json');
       final style = jsonDecode(styleRaw) as Map<String, dynamic>;
       final src = style['sources'] as Map<String, dynamic>;
       src['openmaptiles']['url'] = 'pmtiles://file://${pmtilesFile.path}';
@@ -750,10 +759,15 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// The style JSON string with (or without) 3D terrain, depending on
   /// [widget.terrain3D] and whether offline DEM data exists.
   String _buildStyleString() {
-    // When the user has chosen a specific basemap type (osm, esri, topo, carto, etc.),
-    // render the raster basemap style so the chosen basemap is 100% visible.
-    // The bundled PMTiles vector style is used only when widget.tileSource == 'vector'.
-    if (_baseStyle == null || widget.tileSource != 'vector') {
+    // The on-device vector archive is the map for the OFFLINE source and for the
+    // explicit 'vector' choice. Every named raster source (osm/esri/topo/carto…)
+    // renders raster-only, so the driver sees exactly the layer they picked.
+    //
+    // Gating this on 'vector' alone is what made an 'offline' selection render a
+    // raster-only style with no templates — i.e. an empty map.
+    final wantsVector =
+        widget.tileSource == 'vector' || widget.tileSource == 'offline';
+    if (_baseStyle == null || !wantsVector) {
       return _rasterFallbackStyle();
     }
     final style = applyTerrainToStyle(
@@ -775,13 +789,8 @@ class _VectorNavMapState extends State<VectorNavMap>
     // background. Vector tiles paint over it where they exist; at low zoom /
     // outside coverage the basemap fills the view — no more white.
     final src = style['sources'] as Map<String, dynamic>;
-    src['basemap'] = <String, dynamic>{
-      'type': 'raster',
-      'tiles': _basemapTiles(),
-      'tileSize': 256,
-      'attribution': '© OpenStreetMap contributors © CARTO',
-    };
     final layers = style['layers'] as List<dynamic>;
+    final basemapTiles = _basemapTiles();
     // Insert right after the background layer so it's the bottom-most visible
     // layer (everything else renders above it).
     var insertAt = 0;
@@ -791,12 +800,28 @@ class _VectorNavMapState extends State<VectorNavMap>
         break;
       }
     }
-    layers.insert(insertAt, <String, dynamic>{
-      'id': 'basemap',
-      'type': 'raster',
-      'source': 'basemap',
-      'paint': <String, dynamic>{'raster-opacity': 1.0},
-    });
+    // An empty `tiles` array is not valid MapLibre input, and for the offline
+    // source it is the NORMAL case (nothing downloaded, nothing to fetch). Skip
+    // only the basemap — everything below still gets built, so the vector
+    // archive and the lane markings are unaffected.
+    if (basemapTiles.isEmpty) {
+      debugPrint(
+        'VECTORMAP: no basemap tiles for "${widget.tileSource}" — vector only',
+      );
+    } else {
+      src['basemap'] = <String, dynamic>{
+        'type': 'raster',
+        'tiles': basemapTiles,
+        'tileSize': 256,
+        'attribution': '© OpenStreetMap contributors © CARTO',
+      };
+      layers.insert(insertAt, <String, dynamic>{
+        'id': 'basemap',
+        'type': 'raster',
+        'source': 'basemap',
+        'paint': <String, dynamic>{'raster-opacity': 1.0},
+      });
+    }
     // Lane markings on multi-lane roads: a thin dashed white line down the
     // centre of classified roads, so a wide motorway/highway reads as a real
     // multi-lane road (not one solid grey band). Drawn on top of the road
@@ -917,14 +942,7 @@ class _VectorNavMapState extends State<VectorNavMap>
   String _rasterFallbackStyle() {
     final dark = widget.nightMode;
     final tiles = _basemapTiles();
-    final sources = <String, dynamic>{
-      'basemap': <String, dynamic>{
-        'type': 'raster',
-        'tiles': tiles,
-        'tileSize': 256,
-        'attribution': '© OpenStreetMap contributors © CARTO',
-      },
-    };
+    final sources = <String, dynamic>{};
     final layers = <dynamic>[
       <String, dynamic>{
         'id': 'bg',
@@ -933,13 +951,31 @@ class _VectorNavMapState extends State<VectorNavMap>
           'background-color': dark ? '#16181d' : '#f2efe9',
         },
       },
+    ];
+    // Offline with nothing downloaded: a plain background beats an invalid
+    // raster source with an empty tile list.
+    if (tiles.isEmpty) {
+      debugPrint('VECTORMAP: raster fallback has no tiles (offline) — background only');
+      return jsonEncode(<String, dynamic>{
+        'version': 8,
+        'sources': sources,
+        'layers': layers,
+      });
+    }
+    sources['basemap'] = <String, dynamic>{
+      'type': 'raster',
+      'tiles': tiles,
+      'tileSize': 256,
+      'attribution': '© OpenStreetMap contributors © CARTO',
+    };
+    layers.add(
       <String, dynamic>{
         'id': 'basemap',
         'type': 'raster',
         'source': 'basemap',
         'paint': <String, dynamic>{'raster-opacity': 1.0},
       },
-    ];
+    );
 
     if (widget.showRadar && widget.radarUrl != null) {
       sources['radar'] = <String, dynamic>{
@@ -1023,6 +1059,9 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// leaving a blank map. So CARTO subdomains are expanded to all four hosts.
   List<String> _fallbackTiles([String? sourceOverride]) {
     final src = sourceOverride ?? widget.tileSource;
+    // The offline source has NO online templates by definition — it draws the
+    // on-device archive and downloaded tiles only.
+    if (src == 'offline') return const [];
     if (src == 'vietmap' && VietmapConfig.hasKeys) {
       return [VietmapConfig.mapTiles];
     }
@@ -1898,7 +1937,10 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// 3D perspective angle — Vietmap SimpleCamera.DEFAULT_TILT (50).
   static const double _tilt = 50;
 
-  static const double _carAnchor = 0.0;
+  /// Logical height of the map viewport — refreshed in [build]. Used by
+  /// [_followTarget] to turn [carAnchor] into ground metres (and kept in a
+  /// field because the ~30 fps follow ticker must not touch MediaQuery).
+  double _viewportH = 800;
 
   void _followPosition() {
     final ctrl = _controller;
@@ -2164,20 +2206,26 @@ class _VectorNavMapState extends State<VectorNavMap>
     );
   }
 
-  /// Camera target for [car]: the car itself when [_carAnchor] is 0 (centered)
-  /// or shifted ahead of the travel direction by [_carAnchor]×visible so the
-  /// car sits lower on screen (more road ahead, classic Google framing).
+  /// Camera target for [car]: the car itself when [carAnchor] is 0 (centered)
+  /// or shifted ahead of the travel direction so the car sits lower on screen
+  /// (more road ahead — the classic Google-Maps framing). [carAnchor] is the
+  /// fraction of a SCREEN HEIGHT the car sits below the middle: 0.17 ≈ the car
+  /// rides on the lower third line, 0.32 ≈ near the bottom edge.
   ll.LatLng _followTarget(ll.LatLng car, double bearingDeg, double zoom) {
+    final anchor = widget.carAnchor;
+    if (anchor <= 0) return car; // dead-center follow (the default framing)
     // Approx ground meters per pixel at this zoom (Web Mercator).
     final mpp =
         156543.03392 *
         math.cos(car.latitude * math.pi / 180) /
         math.pow(2, zoom);
-    // Visible vertical ground extent: viewport px × m/px × 3D-tilt extension
-    // (tilted camera looks further ahead).
-    final visible = 1100.0 * mpp * 1.8;
-    final offset = _carAnchor * visible;
-    if (offset <= 0) return car; // dead-center follow
+    // The car must appear [anchor]×viewport below the middle, so the camera has
+    // to look that many screen-heights of ground PAST the car. A tilted camera
+    // fits more ground into the same screen height, so it needs a longer
+    // look-ahead for the same on-screen shift (approximated with a flat
+    // factor — the projection is not linear under tilt).
+    final tiltBoost = widget.tilt3D ? 1.6 : 1.0;
+    final offset = anchor * _viewportH * mpp * tiltBoost;
     final rad = bearingDeg * math.pi / 180;
     final dLat = offset * math.cos(rad) / 111320.0;
     final dLng =
@@ -2422,6 +2470,8 @@ class _VectorNavMapState extends State<VectorNavMap>
     final style = (_styleString == null || _styleString!.isEmpty)
         ? _rasterFallbackStyle()
         : _styleString!;
+    // Cache the viewport height for the follow camera (see [_followTarget]).
+    _viewportH = MediaQuery.sizeOf(context).height;
     final c = widget.current;
     final start = c ?? widget.initialCenter;
     // No pointer wrapper around MapLibreMap — an ancestor Listener interferes

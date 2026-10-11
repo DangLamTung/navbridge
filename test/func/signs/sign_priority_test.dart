@@ -14,7 +14,8 @@ import 'package:navbridge/pages/navigation/navigation_page.dart'
     show
         announcedSignKinds,
         signAnnounceTier,
-        signCalloutSig;
+        signCalloutSig,
+        signShortLabel;
 import 'package:navbridge/services/offline_road_signs.dart';
 
 /// The kinds the whole design rests on. If a refactor drops one of these the
@@ -28,7 +29,7 @@ const _mustAnnounce = <RoadSignKind>[
   RoadSignKind.noPassing,
   RoadSignKind.noUTurn,
   RoadSignKind.noLeftTurn,
-  RoadSignKind.oneWay,
+  // NOT oneWay: it is MAP-ONLY by decision (see the guard below).
 ];
 
 void main() {
@@ -44,6 +45,17 @@ void main() {
       // The limit is spoken by the limit path, with the vehicle cap applied.
       // A second "Giới hạn X" from here would speak an uncapped number.
       expect(announcedSignKinds.contains(RoadSignKind.speed), isFalse);
+    });
+
+    test('never announces a ONE-WAY sign — map-only by decision', () {
+      // The pack now carries ~17.8k I.407a rows generated from the segment
+      // layer's one-way data, one at each end of every one-way run >= 85 m
+      // (tools/signs/build_oneway_signs.py). Announcing each one would fire on
+      // nearly every block of a district where ~1,700 segments are one-way, so
+      // the user asked for the SIGN only (2026-10-11: "no need anounce, just
+      // show the sign"). It must still be VISIBLE, hence the second half.
+      expect(announcedSignKinds.contains(RoadSignKind.oneWay), isFalse);
+      expect(RoadSignKind.oneWay.isImportant, isFalse);
     });
 
     test('a zone boundary is announced', () {
@@ -130,6 +142,37 @@ void main() {
       final s = at(20.85792, 106.65123, RoadSignKind.populated);
       expect(signCalloutSig(s, near: false),
           signCalloutSig(s, near: false));
+    });
+  });
+
+  group('signShortLabel — the alert bar tooltip', () {
+    test('drops the QCVN code from the catalogue label', () {
+      expect(signShortLabel(RoadSignKind.noLeftTurn), 'Cấm rẽ trái');
+      expect(signShortLabel(RoadSignKind.noUTurn), 'Cấm quay đầu');
+      expect(signShortLabel(RoadSignKind.onlyLeft), 'Chỉ được rẽ trái');
+      expect(signShortLabel(RoadSignKind.oneWay), 'Đường một chiều');
+      expect(signShortLabel(RoadSignKind.railwayCrossing),
+          'Đường ngang giao với đường sắt');
+    });
+
+    test('shortens the two signs riders name by the symbol alone', () {
+      expect(signShortLabel(RoadSignKind.stop), 'STOP');
+      expect(signShortLabel(RoadSignKind.giveWay), 'Nhường đường');
+    });
+
+    test('leaves a label that carries no code alone', () {
+      expect(signShortLabel(RoadSignKind.signal), 'Đèn giao thông');
+      expect(signShortLabel(RoadSignKind.slowDown), 'Giảm tốc độ');
+      expect(signShortLabel(RoadSignKind.tunnel), 'Hầm đường bộ');
+    });
+
+    test('no kind renders empty or still shows its code', () {
+      for (final k in RoadSignKind.values) {
+        final s = signShortLabel(k);
+        expect(s, isNotEmpty, reason: '$k has no label for the bar');
+        expect(RegExp(r'^[A-Z]+\.\d').hasMatch(s), isFalse,
+            reason: '$k still shows its QCVN code: "$s"');
+      }
     });
   });
 }

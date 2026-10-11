@@ -396,8 +396,16 @@ Future<List<RoadSign>> signsNearRoute(
 /// as native icon overlays (crushing the low-end phone at large zoom), so the
 /// driving layer is bounded to near-car signs, refreshed every few seconds.
 /// Cheap bbox pre-filter over the ~11k DB (not a route-wide isolate scan).
-/// Most important signs first (cấm vượt / cấm rẽ / quay đầu → STOP /
-/// nhường đường → traffic lights), then distance; deduped + capped at [max].
+///
+/// ⭐ NEAREST FIRST, and only then by importance. This used to sort by
+/// (priority, distance) and cap, which filled the cap with the far edge of the
+/// circle: measured in HCMC centre 2026-10-03, 786 signs sit within 6 km, the
+/// priority-ordered 120 had a MEDIAN distance of 3,433 m (max 5,289 m), 100 of
+/// them beyond 2 km, and only 1 of the 17 signs within 500 m survived — so the
+/// map was covered in icons for signs kilometres away while the ones at the
+/// rider's elbow were dropped (user: "why so too many sign far away"). The tier
+/// order now only breaks ties at equal distance, and it still decides the
+/// DISPLAY order of what the cap keeps.
 Future<List<RoadSign>> signsNearPoint(
   LatLng pos, {
   double maxDistM = 4000,
@@ -422,9 +430,9 @@ Future<List<RoadSign>> signsNearPoint(
     if (m <= maxDistM) out.add((s, m));
   }
   out.sort((a, b) {
-    final pa = _signPriority(a.$1.kind);
-    final pb = _signPriority(b.$1.kind);
-    return pa != pb ? pa.compareTo(pb) : a.$2.compareTo(b.$2);
+    final c = a.$2.compareTo(b.$2);
+    if (c != 0) return c;
+    return _signPriority(a.$1.kind).compareTo(_signPriority(b.$1.kind));
   });
   // Collapse the SAME physical sign recorded at a few-metre offset (Waze /
   // VietMap / DATMAP overlap) so a single posted limit never shows as a stack

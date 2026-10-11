@@ -6,7 +6,7 @@ import 'package:navbridge/pages/settings/settings_save.dart'
     show saveAllSettings;
 import 'package:navbridge/services/offline_tiles.dart' show voiceVolume;
 import 'package:navbridge/services/voice_guide.dart'
-    show VoiceGuide, effectiveSpeechRate;
+    show VoiceGuide, effectiveSpeechRate, setVoiceMuted, voiceMuted;
 
 /// Speaker speed + volume, in one control.
 ///
@@ -51,18 +51,47 @@ class _SpeechControlsState extends State<SpeechControls> {
     final title = widget.dense ? 12.0 : 13.0;
     final pct = (_rate * 100).round();
     final effective = effectiveSpeechRate();
+    // Read the flag on every build rather than caching it in state: the same
+    // mute can be flipped from the nav screen's rail, a voice command
+    // ("tắt tiếng") or this button, and a cached copy would disagree.
+    final muted = voiceMuted;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            const Icon(Icons.record_voice_over, color: kSpeechBlue, size: 20),
+            Icon(
+              muted ? Icons.volume_off : Icons.record_voice_over,
+              color: muted ? Colors.red[400] : kSpeechBlue,
+              size: 20,
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Giọng nói',
-                style: TextStyle(fontSize: title, fontWeight: FontWeight.w700),
+                muted ? 'Giọng nói — ĐANG TẮT TIẾNG' : 'Giọng nói',
+                style: TextStyle(
+                  fontSize: title,
+                  fontWeight: FontWeight.w700,
+                  color: muted ? Colors.red[400] : null,
+                ),
               ),
+            ),
+            // MUTE — audio only. The guidance keeps running and every sentence
+            // still reaches the announcement log, so a run can be watched in
+            // silence and audited afterwards (user, 2026-10-08: "add a mute
+            // button"). Not the same as the nav rail's `_voiceOn`, which turns
+            // the guidance itself off BEFORE it logs.
+            IconButton(
+              tooltip: muted ? 'Bật tiếng' : 'Tắt tiếng',
+              icon: Icon(muted ? Icons.volume_off : Icons.volume_up, size: 18),
+              color: muted ? Colors.red[400] : kSpeechBlue,
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 30, minHeight: 28),
+              onPressed: () async {
+                await setVoiceMuted(!muted);
+                if (mounted) setState(() {});
+              },
             ),
             Text(
               '${effective.toStringAsFixed(2)}x',

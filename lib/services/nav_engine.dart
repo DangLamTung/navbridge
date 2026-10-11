@@ -12,6 +12,14 @@ import 'package:navbridge/services/osrm.dart';
 
 const String kContinuePlaceholder = 'Tiến lên';
 
+/// A step shorter than this is treated as a CONNECTOR (a slip/link leg between
+/// two streets), not a street in its own right: `NavProgress.nextText` looks
+/// past it to name the street the driver actually turns onto. OSRM emits an
+/// unnamed 39 m turn step between Trường Chinh and Lý Thường Kiệt (verified
+/// 2026-10-07); naming THAT left the callout streetless and let the next-next
+/// name leak in.
+const double kConnectorStepM = 60.0;
+
 /// Everything needed to build a nav frame for the clock.
 class NavProgress {
   final int meter; // distance to the next maneuver
@@ -453,6 +461,27 @@ class TurnByTurnEngine {
     final nextIdx = upIdx + 1;
     final next = nextIdx < route.steps.length ? route.steps[nextIdx] : null;
 
+    // The road you turn INTO, looking PAST a short unnamed connector.
+    //
+    // OSRM emits one step per maneuver, and the leg right after a turn is often
+    // a SHORT unnamed link between two streets — verified against
+    // router.project-osrm.org (2026-10-07): a 38.8 m step with name='' and
+    // type=turn sits between Trường Chinh and Lý Thường Kiệt. Its `name` is
+    // empty while the street the driver is really turning onto is the NEXT
+    // step's name, so the callout read "rẽ phải, sau đó rẽ phải vào Lý Thường
+    // Kiệt" instead of "rẽ phải vào Lý Thường Kiệt" (user: "why next of next
+    // have name but not next"). Skip such connectors — but ONLY while the
+    // unnamed leg is short, so a genuinely LONG unnamed road (a hẻm) is still
+    // not mis-named as the street after it.
+    var intoText = upcoming.name;
+    for (var j = upIdx;
+        intoText.trim().isEmpty &&
+            j < route.steps.length - 1 &&
+            route.steps[j].distance <= kConnectorStepM;
+        j++) {
+      intoText = route.steps[j + 1].name;
+    }
+
     // Distance to the destination itself. The steps' cumulative sum is what
     // the "next manoeuvre" meter is measured on, but a step list whose
     // distances under-count the route (a replay track, a router response)
@@ -539,8 +568,9 @@ class TurnByTurnEngine {
               nearIndex: _vertexHint(nextIdx, next.maneuver),
             ),
       // The road you turn INTO for the upcoming maneuver (used by the voice
-      // announcement "turn left onto X" and the "then" chip).
-      nextText: upcoming.name,
+      // announcement "turn left onto X" and the "then" chip). Short unnamed
+      // connector legs are looked past — see [kConnectorStepM].
+      nextText: intoText,
       nextNextText: next == null ? '' : next.name,
       nextMeter: next == null
           ? 0

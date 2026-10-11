@@ -228,7 +228,7 @@ class SpeedDialChip extends StatelessWidget {
     this.limitOverride,
     this.limitSrc,
     this.fromEsp = false,
-    this.dialSize = 72,
+    this.dialSize = 88,
   });
 
   final RoadInfo? info;

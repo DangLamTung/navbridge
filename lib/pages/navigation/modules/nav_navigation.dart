@@ -14,6 +14,13 @@ extension _NavNavigation on _NavigationPageState {
     final geo = _route?.geometry ?? const <LatLng>[];
     if (geo.length < 3) return geo;
     final i = _routeStartIndex.clamp(0, geo.length - 1);
+    if (backM == 1000 &&
+        aheadM == 6000 &&
+        identical(_route, _lastCachedWindowRoute) &&
+        i == _lastWindowStartIndex &&
+        _cachedRouteWindow.isNotEmpty) {
+      return _cachedRouteWindow;
+    }
     var back = i;
     var d = 0.0;
     while (back > 0 && d < backM) {
@@ -26,7 +33,13 @@ extension _NavNavigation on _NavigationPageState {
       d += fastDistanceMeters(geo[fwd], geo[fwd + 1]);
       fwd++;
     }
-    return geo.sublist(back, fwd + 1);
+    final res = geo.sublist(back, fwd + 1);
+    if (backM == 1000 && aheadM == 6000) {
+      _lastCachedWindowRoute = _route;
+      _lastWindowStartIndex = i;
+      _cachedRouteWindow = res;
+    }
+    return res;
   }
 
   /// Shared by real GPS: snap the fix to the route, update the nav card,
@@ -38,10 +51,8 @@ extension _NavNavigation on _NavigationPageState {
     // longer reset the 5 s timer, so a real deviation still reroutes.
     // Stationary (<~5 km/h) never reroutes — a bad fix at a red light
     // shouldn't yank the route.
-    // PROBE (temporary): per-fix cost breakdown on a long route.
-    final tOff = Stopwatch()..start();
+    final now = DateTime.now();
     final off = _engine!.offRouteDistance(pos);
-    tOff.stop();
     final spd = speedMps.isNaN ? 0.0 : speedMps;
 
     // Detect if driver is moving in a new direction divergent from route (>65°).
@@ -63,10 +74,9 @@ extension _NavNavigation on _NavigationPageState {
         _netOnRoute &&
         !isNewDirection &&
         _lastNetMatch != null &&
-        DateTime.now().difference(_lastNetMatch!) < const Duration(seconds: 2);
+        now.difference(_lastNetMatch!) < const Duration(seconds: 2);
     if (!netOnRoute) {
       if (spd > 1.4) {
-        final now = DateTime.now();
         final since = _offRouteSince ??= now;
         final elapsed = now.difference(since);
 
@@ -109,13 +119,9 @@ extension _NavNavigation on _NavigationPageState {
     // the puck, the camera bearing and the turn meter all stay stable even
     // when the real GPS fix wanders a few meters off the road (this is what
     // kept the arrow flickering — the raw fix fed the nearest-vertex bearing).
-    final tSnap = Stopwatch()..start();
     final snapped = _engine!.snapToRoute(pos);
-    tSnap.stop();
     _current = snapped; // keep the vector map + POI search on the route
-    final tUpd = Stopwatch()..start();
     final nav = _engine!.update(snapped, speedMps: speedMps);
-    tUpd.stop();
     _progress = nav;
     // Consume the driven part of the route (the map only draws from here on).
     _routeStartIndex = _engine!.snappedSegmentIndex;
@@ -125,29 +131,22 @@ extension _NavNavigation on _NavigationPageState {
     _maybeSpeakManeuver(nav);
     _maybeSpeakOverspeed(spd);
     final window = _routeWindowAhead();
-    final tCam = Stopwatch()..start();
     _checkCameraAhead(snapped, window);
-    tCam.stop();
     // Road signs: announce the next STOP / give-way sign ahead (traffic
     // lights are map-only). Offline index, ~1 Hz throttle inside.
-    final tSign = Stopwatch()..start();
     _checkSignAhead(snapped, window);
-    tSign.stop();
     // Keep the nav-map camera/sign layer near the car (~1 s, same cadence as
     // the GPS fix) so it stays a handful of markers instead of a whole route's
     // worth, AND updates as the car moves past a sign/camera (the old 5 s lag
     // made markers pop in late; the user: "run update near by on route nearby
     // camera + sign", then "2s still too long, can we update 1s"). The isolate
     // query + 30-item cap keep it cheap on the low-end phone.
-    final nlNow = DateTime.now();
     if (_lastNearbyLayers == null ||
-        nlNow.difference(_lastNearbyLayers!) >= const Duration(seconds: 1)) {
-      _lastNearbyLayers = nlNow;
+        now.difference(_lastNearbyLayers!) >= const Duration(seconds: 1)) {
+      _lastNearbyLayers = now;
       unawaited(_refreshRouteCameras());
     }
-    final tRoad = Stopwatch()..start();
     _refreshRoad(pos, snapped: snapped);
-    tRoad.stop();
     // The tick's NavProgress carries the ROUTE's own street names for where the
     // car is; the road-info publish uses them to veto an off-route match
     // (see core/road_match.dart).
@@ -173,7 +172,6 @@ extension _NavNavigation on _NavigationPageState {
     // ESP display: refresh the near path-ahead as the car advances (the board
     // only shows ~1.5 km at zoom 15, so we keep the drawn lane just ahead of
     // the car instead of one static whole-route frame).
-    final now = DateTime.now();
     if (_mapClock.isConnected &&
         (_lastMapRouteSend == null ||
             now.difference(_lastMapRouteSend!) >= const Duration(seconds: 4))) {
@@ -219,14 +217,28 @@ extension _NavNavigation on _NavigationPageState {
       return;
     }
 
+    // ⭐ Flush the PREVIOUS route's voice BEFORE the new route is fetched.
+    // The fetch can take seconds (the online attempts are capped at 5 s, then
+    // the on-device graph / OSRM takes over), and `_handleNav` keeps running on
+    // the OLD engine for the whole wait — so anything still queued, and
+    // anything the old route says during the wait, is about a route that is
+    // being thrown away. Cancelling only AFTER the fetch left that window open:
+    // user, 2026-10-08, "when reroute [it does] not delete the before road".
+    // The call after the fetch stays — it drops whatever the old engine queued
+    // while the new route was being computed.
+    await _cancelStaleRouteVoice();
     // Throttle reroute speech to at most once every 12 seconds to prevent audio nag.
     if (_lastRerouteSpeech == null ||
         now.difference(_lastRerouteSpeech!) >= const Duration(seconds: 12)) {
       _lastRerouteSpeech = now;
-      _voice.speak(
-        'Đang tính lại lộ trình.',
-        priority: VoiceGuide.priorityHigh,
-      );
+      const recalcTxt = 'Đang tính lại lộ trình.';
+      // Logged as its own KIND so a recorded drive shows WHERE the route
+      // changed. Without it a reroute is invisible in the trip file, and two
+      // contradictory callouts seconds apart cannot be told apart from a driver
+      // who simply took the wrong turn — which is what made the 2026-10-08
+      // reports unauditable.
+      _logAnnouncement(recalcTxt, kind: 'reroute');
+      _voice.speak(recalcTxt, priority: VoiceGuide.priorityHigh);
     }
     final sw = Stopwatch()..start();
     try {
@@ -290,6 +302,9 @@ extension _NavNavigation on _NavigationPageState {
         _spokenFinal = false;
         _arrivedSpoken = false;
       });
+      // The route just changed: drop the PREVIOUS route's voice before the new
+      // next-road callout (`_handleNav` below) is spoken.
+      await _cancelStaleRouteVoice();
       // Snap straight into the new route using the latest position.
       _isRerouting = false;
       final latestPos = _lastFixPos ?? _current ?? from;
@@ -659,7 +674,21 @@ extension _NavNavigation on _NavigationPageState {
   /// ~58 km/h via [TurnByTurnEngine.positionAtDistance], feeding the same
   /// `_handleNav` pipeline as real GPS so maneuvers / voice / camera checks
   /// all fire. Real fixes are ignored while [_simulating].
-  Future<void> _startSimulation() async {
+  ///
+  /// ⭐ [track] switches the FEED, not the pipeline: instead of walking the
+  /// geometry, the given fixes are pushed through `_onGpsFix` — the real
+  /// receiver path, with the outlier gate, the strict heading filter and the
+  /// road lookup on it. That is what makes a simulated drive exercise the
+  /// algorithm rather than only the announcement logic: the clean walk feeds
+  /// `_handleNav` a position that is exactly on the route, so the gate and the
+  /// filter never see anything to decide. `tool/sim_track.py` supplies a track
+  /// synthesised from the route's own geometry plus a phone's error structure
+  /// (lib/services/gps_track_sim.dart).
+  Future<void> _startSimulation({
+    List<ReplayFix>? track,
+    double trackSpeed = 1,
+    VoidCallback? onFinished,
+  }) async {
     if (_navigating || _simulating) return; // never start the sim twice
     final engine = _engine;
     if (engine == null || _route == null) return;
@@ -692,8 +721,40 @@ extension _NavNavigation on _NavigationPageState {
     unawaited(NavForegroundService.instance.start());
     unawaited(PipService.instance.setAspect(pipAspect));
     debugPrint(
-      'SIM: simulation START (route ${engine.route.distance.round()}m)',
+      'SIM: simulation START (route ${engine.route.distance.round()}m'
+      '${track == null ? '' : ', fed ${track.length} synthesised GPS fixes '
+          'through _onGpsFix'})',
     );
+    if (track != null && track.isNotEmpty) {
+      // The synthesised feed: the SAME entry point a phone's receiver uses, so
+      // the outlier gate, the heading filter, the road lookup and the voice all
+      // see the errors a real drive has.
+      //
+      // ⭐ [trackSpeed] is the WALL-CLOCK rate, not a property of the drive: the
+      // fixes carry the drive's own 1 Hz timestamps, so feeding them at 1× takes
+      // the full drive time (a 3-minute route needs 3 minutes, which is how a
+      // headless run first timed out with no trip and no error). The drive
+      // itself is always the same drive — only how fast it is played differs.
+      debugPrint('SIM: feeding ${track.length} GPS fixes at $trackSpeed× '
+          '(drive time ${replayTripDuration(track).inSeconds}s)');
+      // ⭐ The DRIVE clock, so every cadence (and the trip log's own thinning)
+      // runs on fix time instead of wall time — the same reason the replay does
+      // it. Without it a run played at 8× records one fix per wall second, i.e.
+      // 1 fix per 8 s of driving, and the trip is not the drive.
+      setNavClock(() => _lastGpsFixTime ?? track.first.at);
+      await _trackSimSub?.cancel();
+      _trackSimSub = replayPositionStream(track, speed: trackSpeed).listen(
+        (Position p) => _onGpsFix(p, fromSim: true),
+        onError: (Object e) => debugPrint('SIM: track feed error: $e'),
+        onDone: () {
+          debugPrint('SIM: track feed finished');
+          _stopSimulation();
+          onFinished?.call();
+        },
+      );
+      if (mounted) setNavState(() {});
+      return;
+    }
     // Kalman noise demo: run a synthetic noisy GPS trace (movement + position
     // noise + speed noise) through a dedicated LocationKalman and log how much
     // the filter cuts the jitter. Proves the smoothing on-device — logcat
@@ -753,6 +814,14 @@ extension _NavNavigation on _NavigationPageState {
   void _stopSimulation() {
     _simTimer?.cancel();
     _simTimer = null;
+    unawaited(_trackSimSub?.cancel());
+    _trackSimSub = null;
+    // ⭐ The track sim points the drive clock at its fix stream
+    // (`setNavClock`, below), and the trip log now writes that clock's time
+    // (`_logFix`). Leaving it set would stamp every fix of a LATER live drive
+    // with the simulation's last timestamp — the same class of silent
+    // corruption as the stale-file clobbers. Mirrors `_stopReplaySession`.
+    if (_trackSimRunning) resetNavClock();
     if (!_simulating) return;
     setNavState(() => _simulating = false);
     debugPrint('SIM: simulation stopped');
@@ -799,6 +868,8 @@ extension _NavNavigation on _NavigationPageState {
         _spokenFinal = false;
         _arrivedSpoken = false;
       });
+      // The route was replaced: silence the one we left.
+      await _cancelStaleRouteVoice();
       unawaited(_refreshRouteCameras());
       return engine;
     } catch (_) {

@@ -228,7 +228,16 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "navbridge/routing")
+        val routingChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, "navbridge/routing"
+        )
+        // Context for MediaStore export + the progress sink for in-app .ghz builds.
+        routing.attach(applicationContext) { done, total ->
+            routingChannel.invokeMethod(
+                "buildProgress", mapOf("done" to done, "total" to total)
+            )
+        }
+        routingChannel
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "load" -> {
@@ -237,6 +246,19 @@ class MainActivity : FlutterActivity() {
                     }
                     "unload" -> {
                         routing.unload(result)
+                    }
+                    "buildArchive" -> {
+                        routing.buildArchive(
+                            call.argument<String>("dir") ?: "",
+                            call.argument<String>("out") ?: "",
+                            result,
+                        )
+                    }
+                    "exportArchive" -> {
+                        routing.exportArchive(
+                            call.argument<String>("src") ?: "",
+                            result,
+                        )
                     }
                     "route" -> {
                         val flat = call.argument<List<Double>>("points") ?: emptyList()

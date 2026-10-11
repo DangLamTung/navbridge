@@ -871,7 +871,16 @@ extension _NavPoi on _NavigationPageState {
         _poiType = null;
         _selectedPoi = null;
       });
+      // New route → the previous route's queued callouts are wrong; and the
+      // maneuver must be re-announced for the road we now take (the sig would
+      // otherwise suppress it if the first turn happens to be the same).
+      _lastManeuverSig = null;
+      _spokenFar = false;
+      _spokenNear = false;
+      _spokenFinal = false;
+      await _cancelStaleRouteVoice();
       unawaited(_loadElevation(route));
+      if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(

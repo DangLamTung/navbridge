@@ -376,5 +376,89 @@ void simClearEditorWaypoints() {
   simTick.value++;
 }
 
+// ---------------------------------------------------------------------------
+// Simulation request (console → page)
+// ---------------------------------------------------------------------------
 
+/// ⭐ A one-shot request from the console: plan a route for these endpoints and
+/// drive it as a SIMULATION — synthesised GPS fixes through `_onGpsFix`.
+///
+/// The console cannot call the page's `_runTrackSim` (it is a `part` of the page
+/// but holds no reference to its State), and the page cannot know which button
+/// was pressed. `simTick` is the existing channel between them: the console sets
+/// the request, the page's listener takes it and clears it. Same shape as
+/// `TripReplay`'s own start/stop, which the panel also drives from here.
+List<LatLng>? simTrackSimRequest;
 
+/// The trip the last simulated drive wrote (`toTakeoutJson()`), kept so the
+/// console can hand the OUTPUT back — download it, or copy it — without a
+/// server having to be in the loop.
+String simLastTripJson = '';
+String simLastTripName = '';
+
+void simRequestTrackSim(List<LatLng> endpoints) {
+  simTrackSimRequest = List<LatLng>.of(endpoints);
+  simTick.value++;
+}
+
+/// Take the pending request, if any. Returns null when there is nothing to run
+/// — and clears it, so a request is never run twice.
+List<LatLng>? simTakeTrackSimRequest() {
+  final r = simTrackSimRequest;
+  simTrackSimRequest = null;
+  return r;
+}
+
+void simSetLastTrip({required String json, required String name}) {
+  simLastTripJson = json;
+  simLastTripName = name;
+  simTick.value++;
+}
+
+/// The SIMULATION's own settings, set on the console instead of in the URL.
+///
+/// ⭐ Until now these could only come from `?pace=` / `?tspeed=`, which meant a
+/// simulation could only be started from `tool/sim_track.py` — the app could not
+/// do it on its own. The panel writes these; `_runTrackSim` reads them unless the
+/// URL supplies its own value (a headless run must stay reproducible).
+///
+/// [simDriveKmh] is the GROUND speed the synthesised drive is driven at (the
+/// question "how fast is the car going"), [simFeedSpeed] is how fast that drive
+/// is pushed through the pipeline in wall-clock terms (the question "how long
+/// do I wait"). They are different knobs and conflating them was a real bug
+/// source: a fast FEED must not change the reported speeds in the trip.
+double simDriveKmh = 50;
+double simFeedSpeed = 6;
+
+void simSetDriveKmh(double kmh) {
+  simDriveKmh = kmh.clamp(5.0, 130.0);
+  simTick.value++;
+}
+
+void simSetFeedSpeed(double x) {
+  simFeedSpeed = x <= 0 ? 60 : x.clamp(1.0, 60.0);
+  simTick.value++;
+}
+
+/// ⭐ A GPS-FILE simulation request: drive THESE fixes and nothing else.
+///
+/// The distinction that matters. A request named after a route (
+/// [simRequestTrackSim]) hands the app a plan and asks it to follow the plan;
+/// a request named after a file hands it a GPS TRACE and asks it to work out
+/// everything else — which road, which limit, which signs, which town — from
+/// the map data. Only the second one is a test of the algorithm: in the first,
+/// the app already knows where it is going, so the interesting decisions are
+/// made for it.
+String? simGpsSimRequest;
+
+void simRequestGpsSim(String ref) {
+  simGpsSimRequest = ref.trim();
+  simTick.value++;
+}
+
+/// Take the pending GPS-file request, if any (cleared, so it never runs twice).
+String? simTakeGpsSimRequest() {
+  final r = simGpsSimRequest;
+  simGpsSimRequest = null;
+  return (r == null || r.isEmpty) ? null : r;
+}

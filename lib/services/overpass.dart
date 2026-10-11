@@ -149,13 +149,13 @@ const String _ua = 'navbridge/1.0 (BLE portable navigation; road info)';
   'tertiary_link' => ('Đường huyện', 50),
   'unclassified' => ('Đường làng', 50),
   'residential' => ('Đường dân sinh', 50),
-  'living_street' => ('', 20), // không phải đường cho xe cơ giới — bỏ nhãn
-  'service' => ('', 30), // đường nội bộ — không phải đường chính, bỏ nhãn
-  'pedestrian' => ('', 10), // phố đi bộ — không phải đường xe, bỏ nhãn
-  'footway' => ('', 10), // lối đi bộ/vỉa hè — bỏ nhãn
-  'cycleway' => ('', 20), // đường xe đạp — bỏ nhãn
-  'path' => ('', 10),
-  'track' => ('Đường đất', 30),
+  'living_street' => ('', 50),
+  'service' => ('', 50),
+  'pedestrian' => ('', 50),
+  'footway' => ('', 50),
+  'cycleway' => ('', 50),
+  'path' => ('', 50),
+  'track' => ('Đường đất', 50),
   _ => ('Đường', 50),
 };
 
@@ -189,11 +189,11 @@ int statutoryLimit(
     // [urbanLimit] once oneway/lanes are known.
     'unclassified': 50,
     'residential': 50,
-    'living_street': 20,
-    'service': 30,
-    'pedestrian': 10,
-    'footway': 10,
-    'cycleway': 20,
+    'living_street': 50,
+    'service': 50,
+    'pedestrian': 50,
+    'footway': 50,
+    'cycleway': 50,
   };
   // Xe mô tô (2/3 bánh) — Thông tư 38/2024/TT-BGTVT (hiệu lực 01/01/2025):
   //   ngoài khu đông dân cư: 60 km/h (đường hai chiều không dải phân cách —
@@ -214,11 +214,11 @@ int statutoryLimit(
     'tertiary_link': 50,
     'unclassified': 50,
     'residential': 50,
-    'living_street': 20,
-    'service': 30,
-    'pedestrian': 10,
-    'footway': 10,
-    'cycleway': 20,
+    'living_street': 50,
+    'service': 50,
+    'pedestrian': 50,
+    'footway': 50,
+    'cycleway': 50,
   };
   const truck = {
     'motorway': 80,
@@ -233,11 +233,11 @@ int statutoryLimit(
     'tertiary_link': 40,
     'unclassified': 40,
     'residential': 40,
-    'living_street': 20,
-    'service': 30,
-    'pedestrian': 10,
-    'footway': 10,
-    'cycleway': 20,
+    'living_street': 40,
+    'service': 40,
+    'pedestrian': 40,
+    'footway': 40,
+    'cycleway': 40,
   };
   final table = switch (vehicle) {
     'motorbike' => motorbike,
@@ -256,11 +256,6 @@ int statutoryLimit(
     switch (highway) {
       case 'motorway':
       case 'motorway_link':
-      case 'living_street':
-      case 'service':
-      case 'pedestrian':
-      case 'footway':
-      case 'cycleway':
         return base;
     }
     // …and the built-up rule may only ever TIGHTEN, never raise: a ramp
@@ -355,8 +350,13 @@ int effectiveLimit(
     return math.min(statutory, taggedKmh);
   }
   final ceiling = formKnown
-      ? vehicleCeiling(vehicle,
-          urban: urban, divided: divided, oneway: oneway, lanes: lanes)
+      ? vehicleCeiling(
+          vehicle,
+          urban: urban,
+          divided: divided,
+          oneway: oneway,
+          lanes: lanes,
+        )
       : vehicleZoneCeiling(vehicle, urban: urban);
   return math.min(ceiling, taggedKmh);
 }
@@ -384,8 +384,18 @@ int vehicleZoneCeiling(String vehicle, {bool urban = false}) {
 /// cách; OSM carries no median tag in VN, so the usable signals are [divided]
 /// (an opposite-way carriageway of the same street sits alongside) and a
 /// one-way way that itself carries ≥2 motor lanes ([oneway] + [lanes]).
-bool dividedForm({bool divided = false, bool? oneway, int? lanes}) =>
-    divided || (oneway == true && (lanes ?? 2) >= 2);
+///
+/// A DIRECT one-way 1-lane tag OUTRANKS the [divided] inference. TT38/2024
+/// names "đường một chiều một làn" as its own 50 case, and [divided] is only
+/// INFERRED (an opposite way of the same street runs alongside), so it fires
+/// falsely on parallel streets — and a mid-street flip of an inference must
+/// never outvote a tag. Recorded on Đường Tôn Thất Hiệp: fixes 165-182 read
+/// two-way / 2 lanes and showed 50, then fixes 183-206 flipped to
+/// oneway + 1 lane + divided and jumped to 60 on the SAME street.
+bool dividedForm({bool divided = false, bool? oneway, int? lanes}) {
+  if (oneway == true && lanes == 1) return false;
+  return divided || (oneway == true && (lanes ?? 2) >= 2);
+}
 
 /// The vehicle's legal MAXIMUM speed given WHERE it is and WHAT the road is —
 /// Thông tư 38/2024/TT-BGTVT (hiệu lực 01/01/2025):
@@ -513,6 +523,7 @@ RoadInfo applyPostedLayer(
   required String vehicle,
   required String layerSrc,
   String? name,
+
   /// Is the CAR in a built-up area (see [builtUpRuleApplies])? The vehicle
   /// ceiling needs that, but [RoadInfo.urban] cannot answer it: it is false by
   /// definition whenever the way carries an OSM `maxspeed` tag — even in the
@@ -521,7 +532,8 @@ RoadInfo applyPostedLayer(
   bool? inTown,
 }) {
   final hasName = name != null && name.trim().isNotEmpty;
-  final sameRoad = !hasName ||
+  final sameRoad =
+      !hasName ||
       road.name.trim().isEmpty ||
       streetNameMatches(road.name, name);
 
@@ -546,10 +558,7 @@ RoadInfo applyPostedLayer(
     // use the vehicle zone ceiling (60 in town, 70 rural for motorbikes)
     // so valid divided-road posted limits (60 on Lũy Bán Bích, Trường Chinh)
     // are not clamped by a two-way assumption.
-    ceiling = vehicleZoneCeiling(
-      vehicle,
-      urban: inTown ?? road.urban,
-    );
+    ceiling = vehicleZoneCeiling(vehicle, urban: inTown ?? road.urban);
   }
 
   final effective = vehicle == 'car'

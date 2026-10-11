@@ -108,6 +108,11 @@ jobs:
           SKIP_SIGN_GATE: '1'
         run: |
           chmod +x tool/build.sh
+          # The voice packs are local-only (.gitignore: assets/audio/voice_vn_*/),
+          # so a clean checkout has stubs and the APK would ship a SILENT
+          # speed-limit voice. Fetch the real pack from the release asset first.
+          chmod +x tool/fetch_assets.sh
+          ./tool/fetch_assets.sh
           ./tool/build.sh --release
 
       - name: Upload APK artifact

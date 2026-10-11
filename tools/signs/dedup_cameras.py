@@ -81,9 +81,11 @@ def main():
             dup = False
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
-                    for (x, y) in kept_pts[(focus, gx + dx, gy + dy)]:
+                    for (x, y, kept_c) in kept_pts[(focus, gx + dx, gy + dy)]:
                         if hav(x, y, c["lat"], c["lng"]) < RADIUS_M:
                             dup = True
+                            if kept_c.get("district") in (None, "", "VietMap") and c.get("district") not in (None, "", "VietMap"):
+                                kept_c["district"] = c["district"]
                             break
                     if dup:
                         break
@@ -92,7 +94,7 @@ def main():
             if dup:
                 continue
             keep.append(c)
-            kept_pts[(focus, gx, gy)].append((c["lat"], c["lng"]))
+            kept_pts[(focus, gx, gy)].append((c["lat"], c["lng"], c))
 
     doc["cameras"] = keep
     # backup

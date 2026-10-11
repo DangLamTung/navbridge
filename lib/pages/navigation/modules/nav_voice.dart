@@ -395,6 +395,16 @@ extension _NavVoice on _NavigationPageState {
     }
     final m = nav.meter;
     final speed = nav.speedMps.isFinite ? nav.speedMps : 0.0;
+    // A reroute is IN FLIGHT: `_engine` is still the OLD one, so any callout
+    // resolved now describes a route that is about to be thrown away. Say
+    // nothing about it, or the driver hears two contradictory turns seconds
+    // apart (2026-10-08: "rẽ trái vào Lũy Bán Bích" then "rẽ phải vào Âu Cơ")
+    // and cannot tell a reroute from their own mistake. `_reRoute` clears this
+    // flag just before it calls `_handleNav` on the new route, so the new
+    // route's first callout still fires immediately. Arrival above is NOT
+    // gated: reaching the destination while a reroute is pending is the one
+    // thing worth saying either way.
+    if (_isRerouting) return;
     // THREE heads-ups, at the distances the driver asked for (user, 2026-09-24:
     // "before a turn should announce 400m - 300m - 100m"): a first at 400 m, a
     // reminder at 300 m, and the short "rẽ trái vào X" at 100 m.
@@ -467,65 +477,116 @@ extension _NavVoice on _NavigationPageState {
   // The four fields live on the page state (`navigation_page.dart`) because this
   // file is an extension and extensions cannot declare instance fields.
 
-  /// Resolve (once per maneuver) the limit of the road the driver turns INTO —
-  /// the value the callout quotes. The callout names the next street, so quoting
-  /// the street under the car was simply wrong (user, 2026-09-24: "when
-  /// announcement, the next street speed is not correct, still taken from old
-  /// street"). The 30 m sample past the turn is [pointPast] in `offline_geo.dart`.
+  /// Resolve (once per maneuver) the street the driver turns INTO and its
+  /// limit — the two facts the callout carries.
+  ///
+  /// The engine's step name ([NavProgress.nextText]) is EMPTY on most VN
+  /// segments, so the callout used to name no street at the turn and lean on
+  /// the "sau đó … vào …" next-next clause instead — the driver heard a street
+  /// that is NOT the one being entered (user, 2026-10-07: "should say the name
+  /// of the street we about to turn into … it often says the next of next
+  /// street which is not useful"). The name now falls back to the
+  /// posted-limit LAYER 30 m past the maneuver ([pointPast]), the same source
+  /// the limit comes from — accepted only when it names a DIFFERENT road than
+  /// the one under the car.
   Future<void> _ensureNextStreetLimit(NavProgress nav) {
     final mv = nav.maneuver;
-    final target = nav.nextText;
-    if (mv == null || target.isEmpty) {
+    final engineName = nav.nextText;
+    if (mv == null) {
       _nextStreetLimit = 0;
       _nextStreetLimitKey = null;
       _nextStreetLimitName = '';
+      _nextStreetName = '';
       return Future<void>.value();
     }
-    if (_nextStreetLimitKey == mv && _nextStreetLimitName == target) {
+    if (_nextStreetLimitKey == mv && _nextStreetLimitName == engineName) {
       return _nextStreetLimitJob ?? Future<void>.value();
     }
     _nextStreetLimitKey = mv;
-    _nextStreetLimitName = target;
+    _nextStreetLimitName = engineName;
     _nextStreetLimit = 0;
-    final job = _resolveNextStreetLimit(mv, target);
+    _nextStreetName = engineName;
+    final job = _resolveNextStreetLimit(mv, engineName);
     _nextStreetLimitJob = job;
     return job;
   }
 
-  Future<void> _resolveNextStreetLimit(LatLng mv, String target) async {
+  Future<void> _resolveNextStreetLimit(LatLng mv, String engineName) async {
     try {
       final geo = _route?.geometry ?? const <LatLng>[];
-      // Sample ~30 m PAST the maneuver: that is the new street, and querying it
-      // with the outgoing bearing picks the right carriageway when a road posts
-      // a different limit per direction.
-      final p = pointPast(mv, geo, 30) ?? mv;
-      final brg = _bearingDeg(mv, p);
-      final raw = await speedLimitAt(
-        p,
-        maxDistM: 30,
-        headingDeg: brg == 0 ? null : brg,
-        expectStreet: target.isEmpty ? null : target,
-      );
-      if (raw == null || raw <= 0) {
+      final cur = _roadInfo?.name ?? '';
+      // Sample PAST the maneuver: that is the new street, and the outgoing
+      // bearing picks the right carriageway when a road posts a different limit
+      // per direction. TWO distances, because the engine's step name may have
+      // looked through a SHORT UNNAMED CONNECTOR (`kConnectorStepM` in
+      // `nav_engine.dart`), and the samples are RANKED (see
+      // [nextStreetSampleRank]): a NAMED record matching the street we name
+      // beats a nearer UNNAMED one, which at a junction usually belongs to the
+      // road being left (the "50 while turning into 60 Lũy Bán Bích" bug).
+      var bestRank = 0;
+      var raw = 0;
+      var p = mv;
+      String? layerName;
+      for (final back in const <double>[30, 120]) {
+        final q = pointPast(mv, geo, back) ?? mv;
+        final brg = _bearingDeg(mv, q);
+        final r = await speedLimitAt(
+          q,
+          maxDistM: 30,
+          headingDeg: brg == 0 ? null : brg,
+          expectStreet: engineName.isEmpty ? null : engineName,
+        );
+        if (r == null || r <= 0) continue;
+        final ln = lastWazeStreetName();
+        final rank = nextStreetSampleRank(
+          layerName: ln,
+          engineName: engineName,
+          currentRoad: cur,
+        );
+        if (rank == 0) continue; // another street's record — never ours
+        if (rank > bestRank) {
+          bestRank = rank;
+          raw = r;
+          layerName = ln;
+          p = q;
+          if (rank == 2 && engineName.isEmpty) _nextStreetName = ln!;
+        }
+        if (rank == 2) break; // named match — nothing better to find
+      }
+      final target = _nextStreetName;
+      if (raw <= 0 || target.isEmpty) {
+        // No street established for the turn → do not claim its limit (the
+        // number would be the current street's, heard as the new street's).
         _nextStreetLimit = 0;
         return;
       }
       // The record that supplied the value must be the street we are entering —
-      final layerName = lastWazeStreetName();
-      if (layerName != null && layerName.isNotEmpty && target.isNotEmpty) {
-        if (!streetNameMatches(target, layerName)) {
-          _nextStreetLimit = 0;
-          // debugPrint, NOT _logAnnouncement: this line is diagnostics, and a
-          // logged announcement shows up in the trip file as if it were spoken
-          // (it did — tool/announce_speed_audit.py counted these as limit
-          // callouts on the 2026-09-24 replay).
-          debugPrint('NEXT-LIMIT: skipped, layer "$layerName" != target '
-              '"$target"');
-          return;
-        }
+      if (layerName != null &&
+          layerName.isNotEmpty &&
+          !streetNameMatches(target, layerName)) {
+        _nextStreetLimit = 0;
+        // debugPrint, NOT _logAnnouncement: this line is diagnostics, and a
+        // logged announcement shows up in the trip file as if it were spoken
+        // (it did — tool/announce_speed_audit.py counted these as limit
+        // callouts on the 2026-09-24 replay).
+        debugPrint('NEXT-LIMIT: skipped, layer "$layerName" != target '
+            '"$target"');
+        return;
       }
-      // The posted value, capped for the vehicle (urban matters for the
-      // motorbike ceiling).
+      // The posted value, capped for the vehicle.
+      //
+      // ⭐ `formKnown: false`: the road FORM of the street being entered is not
+      // known here — we only have the layer's posted number, with no OSM/graph
+      // way to ask about lanes/oneway/median. Passing the default `true` made
+      // `dividedForm` read that silence as "two-way", which caps a mô tô at 50
+      // in town — so the callout said 50 for Lũy Bán Bích while the CHIP (which
+      // goes through `applyPostedLayer` and its `vehicleZoneCeiling` branch for
+      // exactly this case) showed the street's own 60. Two numbers for one
+      // street, minutes apart: user, 2026-10-08, "next street still 50 km/h
+      // even when about to turn to 60 km/h street". Off by the same rule as the
+      // road under the car, the zone ceiling (60 in town / 70 rural for a mô
+      // tô) still keeps a divided-road 60 from being clamped by a two-way
+      // assumption while a genuinely posted 50 stays 50.
       final capped = effectiveLimit(
         // No graph road here: the layer value IS the authority and only the
         // vehicle's own legal ceiling caps it (see effectiveLimit).
@@ -534,6 +595,7 @@ extension _NavVoice on _NavigationPageState {
         taggedKmh: raw,
         urban: await _townAt(p),
         postedSrc: srcSegment,
+        formKnown: false,
       );
       _nextStreetLimit = capped > 0 ? capped : 0;
     } catch (_) {
@@ -576,21 +638,29 @@ extension _NavVoice on _NavigationPageState {
     final cur = liveRoad.isNotEmpty
         ? liveRoad
         : (engineName.isNotEmpty ? engineName : '');
-    final target = nav.nextText.isNotEmpty ? nav.nextText : '';
+    // The street we turn INTO: the engine's step name, or the one resolved
+    // from the posted-limit layer when the engine step is unnamed (see
+    // `_ensureNextStreetLimit`) — so the callout always names the road the
+    // driver is actually about to enter, not the one after it.
+    final target = nav.nextText.isNotEmpty ? nav.nextText : _nextStreetName;
     final onRoad = cur.isNotEmpty ? ' trên $cur' : '';
     // Emphasize the road you turn INTO — that's the part the driver needs.
     final into = target.isNotEmpty ? ' vào $target' : '';
-    // Next-NEXT maneuver (priority 2): when there is one coming up, say it so
-    // the driver can plan two moves ahead — "rẽ trái vào X, sau đó rẽ phải
-    // vào Y". The board's nav2 packet already shows it; the voice now says it.
+    // Next-NEXT maneuver (priority 2): "rẽ trái vào X, sau đó rẽ phải vào Y".
+    // ⭐ Only when the IMMEDIATE turn is NAMED and the second move is a
+    // DIFFERENT street, close enough to plan for (< 600 m). Without the first
+    // condition the driver heard a street that is not the one they are turning
+    // into — the "next of next" leaked in while the immediate street was
+    // unnamed (user, 2026-10-07).
     String nextNext = '';
-    if (nav.nextIconCode != 0 && nav.nextNextText.isNotEmpty) {
+    if (nav.nextIconCode != 0 &&
+        nav.nextNextText.isNotEmpty &&
+        target.isNotEmpty &&
+        !sameRoad(nav.nextNextText, target) &&
+        nav.nextMeter > 0 &&
+        nav.nextMeter <= 600) {
       final v2 = maneuverVerb(nav.nextIconCode);
-      // Only when the 2nd move is reasonably near (it's the turn after the
-      // upcoming one; beyond ~2 km it's noise on a long straight).
-      if (nav.nextMeter <= 0 || nav.nextMeter <= 2000) {
-        nextNext = ', sau đó $v2 vào ${nav.nextNextText}';
-      }
+      nextNext = ', sau đó $v2 vào ${nav.nextNextText}';
     }
     // ⭐ The limit spoken with a maneuver is the limit of the road YOU TURN
     // INTO (`_nextStreetLimit`, resolved from the layer ~30 m past the turn and
@@ -608,13 +678,20 @@ extension _NavVoice on _NavigationPageState {
     // ONE number, ONE phrase, and never a number that RISES: see
     // [manoeuvreLimitToSpeak]. A next-street limit ABOVE the road under the car
     // is silence — the change announcer says it when the car gets there.
-    final limit = manoeuvreLimitToSpeak(
-      nextStreetLimit: _nextStreetLimit,
-      currentLimit: _effectiveSpeedLimit,
-      namesNextStreet: target.isNotEmpty,
-    );
-    final limitTxt = limit > 0 ? ' Tốc độ tối đa $limit km/h.' : '';
-    if (limit > 0) _noteLimitSpoken(limit);
+    // A NAMELESS turn gets NO number: otherwise the sentence quotes the street
+    // under the car while the driver is expecting the one being entered (user,
+    // 2026-10-07: "the voice say speed limit is not correct").
+    final ({int kmh, bool isNext}) lim = target.isEmpty
+        ? (kmh: 0, isNext: false)
+        : manoeuvreLimitToSpeak(
+            nextStreetLimit: _nextStreetLimit,
+            currentLimit: _effectiveSpeedLimit,
+            namesNextStreet: true,
+          );
+    // A number that is not in force yet is said as the NEXT one — "Tốc độ tiếp
+    // theo là X km/h" — so it cannot be heard as this road's limit.
+    final limitTxt = manoeuvreLimitPhrase(lim);
+    if (lim.kmh > 0) _noteLimitSpoken(lim.kmh);
     if (now) {
       return '$verb$into$nextNext.$limitTxt';
     }
@@ -683,9 +760,24 @@ extension _NavVoice on _NavigationPageState {
     // Every guard — the ~2 s stability window, the ~4 s cooldown, "already
     // said with the turn callout" — lives in the announcer (see
     // lib/core/limit_change.dart, and its test for the timing contract).
-    final limit =
-        _limitAnnouncer.announce(_effectiveSpeedLimit, navNow());
+    final eff = _effectiveLimit;
+    final limit = _limitAnnouncer.announce(eff.limit, navNow());
     if (limit == null) return;
+    // ⭐ A change while the car stays on the SAME road is almost always two
+    // parallel Waze records of one street disagreeing (Cộng Hòa 60 / Cộng Hoà
+    // 50, 3 m apart — user, 2026-10-07: "the voice say speed limit is not
+    // correct"). The street's own layer value flapping is not a real change,
+    // so it is voiced only when a posted SIGN set either this value or the last
+    // one (a genuine zone change: a P.127 sign adopted, or released at its end).
+    final road = _roadInfo?.name ?? '';
+    final sameStreet = road.isNotEmpty && sameRoad(road, _limitRoadName);
+    if (sameStreet && eff.source != 'sign' && _limitAnnouncedSrc != 'sign') {
+      // Remember the value so the guard cannot re-fire for it, but stay silent.
+      _noteLimitSpoken(limit);
+      return;
+    }
+    _limitRoadName = road;
+    _limitAnnouncedSrc = eff.source;
     // The pre-recorded clip says "Tốc độ giới hạn HIỆN TẠI là N", which is what
     // this value now is — a sign only counts once the car is at it
     // (signLimitInForce), so there is no early-adopted sign left to phrase as
@@ -705,10 +797,16 @@ extension _NavVoice on _NavigationPageState {
   /// Warn by voice when GPS quality is poor (reported accuracy ≥ 30 m) so the
   /// driver knows the fix may wander off the road. Announces once per degraded
   /// episode, then at most every 60 s while still bad; resets when the fix
-  /// recovers under ~15 m (hysteresis). Only during navigation.
+  /// recovers under ~15 m (hysteresis).
+  ///
+  /// ⭐ It also fires BEFORE navigation. A cold start now accepts the fused
+  /// provider's coarse network fix (up to 500 m) so the map can centre
+  /// immediately — the driver must be told why the position, and anything
+  /// spoken from it, may still be off until the satellite fix lands (user,
+  /// 2026-10-08: "start is slow to catch gps … have an announcement of low
+  /// quality gps fix").
   void _maybeSpeakGpsWeak(double accuracyM) {
     if (!_voiceOn || !_voiceReady) return;
-    if (!_navigating && !_simulating) return;
     if (!accuracyM.isFinite || accuracyM <= 0) return;
     if (accuracyM >= 30) {
       final now = navNow();
@@ -725,6 +823,21 @@ extension _NavVoice on _NavigationPageState {
     } else if (accuracyM < 15) {
       _gpsWeakSpoken = false;
     }
+  }
+
+  /// Cancel the voice of the route we are LEAVING.
+  ///
+  /// Replacing the route makes every queued announcement wrong: the sentence
+  /// still playing — and anything waiting in the queue — can name a turn that no
+  /// longer exists, or a sign/camera that belongs to the road we are no longer
+  /// taking. `VoiceGuide.stop()` clears the queue AND interrupts the current
+  /// item, so a stale callout cannot outlive the reroute. The caller then lets
+  /// the next `_handleNav` announce the NEW route's next road (it resets
+  /// `_lastManeuverSig`, so that callout fires immediately) — user, 2026-10-08:
+  /// "when reroute, tell the next road, cancel the voice of the previous route".
+  Future<void> _cancelStaleRouteVoice() async {
+    debugPrint('VOICE: route replaced — flushing the previous route\'s queue');
+    await _voice.stop();
   }
 
   /// Append a spoken announcement to the active trip log (with the car's

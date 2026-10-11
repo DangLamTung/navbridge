@@ -22,13 +22,20 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 
 import 'package:navbridge/services/offline_tiles.dart'
-    show fetchOnlineTileBytes, tileFile, isOnline, forceOffline;
+    show
+        fetchOnlineTileBytes,
+        tileFile,
+        isDefinitelyOffline,
+        forceOffline;
 import 'package:navbridge/services/vietmap_config.dart'
     show VietmapConfig, appendCartoApiKey;
 
 class NavTileServer {
   NavTileServer._();
   static final NavTileServer instance = NavTileServer._();
+
+  /// One-shot so the offline notice is not repeated per tile.
+  bool _loggedOfflineTiles = false;
 
   HttpServer? _server;
   int? _port;
@@ -48,6 +55,12 @@ class NavTileServer {
   /// Map a known tile source to its online raster templates.
   static List<String> templatesForSource(String source, {bool nightMode = false}) {
     switch (source) {
+      // No templates BY DESIGN: this source is the on-device data — the vector
+      // archive plus whatever raster tiles were downloaded. Without an explicit
+      // case it fell through to `default:` (CARTO) and fetched online tiles,
+      // which is the exact opposite of what "offline" promises.
+      case 'offline':
+        return const [];
       case 'osm':
         return const [
           'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -277,11 +290,17 @@ class NavTileServer {
       debugPrint('TILESRV: cache read error $z/$x/$y: $e');
     }
 
-    // 2. Online fetch when connected.
-    final online = !forceOffline && await isOnline();
+    // 2. Online fetch when connected — and NOT when the platform already says
+    //    there is no connection: `isOnline()` always returns true on purpose
+    //    (only a real HTTP result is trusted for routing), so asking it here
+    //    made every uncached tile wait for a fetch that could not succeed.
+    final online = !forceOffline && !await isDefinitelyOffline();
     if (online) {
       final fetched = await _fetchOnline(z, x, y, source: activeSource);
       if (fetched != null) return fetched;
+    } else if (!_loggedOfflineTiles) {
+      _loggedOfflineTiles = true;
+      debugPrint('TILESRV: offline — serving cached tiles only');
     }
 
     // 3. Transparent fallback (keeps MapLibre from erroring out).

@@ -14,14 +14,10 @@ official VietMap crash-warning layer:
            4 = traffic camera, 5 = no-passing, 6 = end no-passing,
            7 = slow-down, 8 = toll booth, 9 = tunnel, 10 = speed camera
   * Speed = posted km/h (0 when n/a)
-
-This MERGES into the existing assets (it does NOT rebuild from scratch), so the
-Waze-crawled data that rebuild_waze_assets.py adds is preserved. Run it AFTER
-rebuild_waze_assets.py in the monthly flow.
+  * Direction = heading angle (0-359 deg)
 
 Usage:
     python3 tools/signs/build_vietmap.py [edog_data.txt]
-    # default: newest local edog_data.txt under Decode_Waze
 """
 import json
 import os
@@ -32,7 +28,7 @@ from pathlib import Path
 ASSET = Path(__file__).resolve().parent.parent.parent / "assets" / "offline_map"
 CAM = ASSET / "vietnam_cameras.json"
 SIGN = ASSET / "vietnam_signs.json"
-SPD = ASSET / "waze_speed_limits.json"
+SPD = ASSET / "vietmap_speed_limits.json"
 
 # EDOG type -> camera (focus, name, type)
 EDOG_CAM = {
@@ -41,6 +37,7 @@ EDOG_CAM = {
 }
 # EDOG type -> sign kind
 EDOG_SIGN = {
+    1: "speed",
     2: "populated",
     3: "populated_end",
     5: "no_passing",
@@ -50,6 +47,7 @@ EDOG_SIGN = {
     9: "tunnel",
 }
 SIGN_NAMES = {
+    "speed": "Hạn chế tốc độ",
     "populated": "Khu đông dân cư",
     "populated_end": "Hết khu đông dân cư",
     "no_passing": "Cấm vượt",
@@ -84,7 +82,7 @@ def find_edog(path: str) -> Path:
 
 def parse_edog(path: Path):
     rows = []
-    with open(path) as f:
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
         for line in f:
             line = line.rstrip("\n")
             if not line or line.startswith("#") or line.startswith("POINT"):
@@ -93,7 +91,12 @@ def parse_edog(path: Path):
             if len(p) < 4:
                 continue
             try:
-                rows.append((int(p[0]) / 1e6, int(p[1]) / 1e6, int(p[2]), int(p[3])))
+                lng = int(p[0]) / 1e6
+                lat = int(p[1]) / 1e6
+                t = int(p[2])
+                spd = int(p[3])
+                direction = int(p[5]) if len(p) >= 6 else 0
+                rows.append((lng, lat, t, spd, direction))
             except ValueError:
                 continue
     return rows
@@ -103,45 +106,44 @@ def main():
     edog = sys.argv[1] if len(sys.argv) > 1 else None
     src = find_edog(edog)
     rows = parse_edog(src)
-    # self-dedup by ~100 m (3dp), keep highest speed per cell
+
+    # Dedup by (type, lat_5dp, lng_5dp) to preserve distinct features within the same cell
     seen = {}
-    for lng, lat, t, spd in rows:
-        k = (round(lat, 3), round(lng, 3))
+    for lng, lat, t, spd, direction in rows:
+        k = (t, round(lat, 5), round(lng, 5))
         if k not in seen or spd > seen[k][3]:
-            seen[k] = (lng, lat, t, spd)
+            seen[k] = (lng, lat, t, spd, direction)
 
-    print(f"[vietmap] edog: {src}  rows={len(rows)}  unique(~100m)={len(seen)}")
+    print(f"[vietmap] edog: {src}  rows={len(rows)}  unique(type+5dp)={len(seen)}")
 
-    # ---- 1. speed limits (type 1) -> waze_speed_limits.json ------------------
-    spd_doc = json.load(open(SPD))
-    spd_pts = spd_doc.setdefault("points", [])
-    existing = {(round(i["lat"], 5), round(i["lng"], 5)) for i in spd_pts}
-    added_speed = 0
-    # NOTE: iterate the VALUES — `seen` is keyed by a 0.001° cell (~100 m) and
-    # the value carries the REAL coordinates. Writing the key instead snapped
-    # every VietMap point onto a ~111 m grid (up to ~78 m off the road), which
-    # is exactly why the VietMap traffic cameras did not line up with the road.
-    for lng, lat, t, spd in seen.values():
-        if t != 1 or spd <= 0:
+    # ---- 1. speed limits (type 1) -> vietmap_speed_limits.json ---------------
+    spd_pts = []
+    existing_spd = set()
+    for lng, lat, t, spd, direction in seen.values():
+        if t != 1 or spd <= 0 or spd > 200:
             continue
         k = (round(lat, 5), round(lng, 5))
-        if k in existing:
+        if k in existing_spd:
             continue
-        existing.add(k)
-        spd_pts.append({"lat": round(lat, 6), "lng": round(lng, 6), "kmh": spd})
-        added_speed += 1
-    json.dump(spd_doc, open(SPD, "w"), ensure_ascii=False, separators=(",", ":"))
-    print(f"  speed limits: +{added_speed} VietMap type-1 -> {len(spd_pts)} total")
+        existing_spd.add(k)
+        pt = {"lat": round(lat, 6), "lng": round(lng, 6), "kmh": spd}
+        if direction > 0:
+            pt["heading"] = direction
+        spd_pts.append(pt)
+    spd_pts.sort(key=lambda p: (p["lat"], p["lng"]))
+    spd_doc = {"version": 1, "points": spd_pts}
+    json.dump(spd_doc, open(SPD, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
+    print(f"  speed limits: wrote {len(spd_pts)} VietMap type-1 to {SPD.name}")
 
-    # ---- 2. cameras (types 4,10) -> vietnam_cameras.json ----------------------
-    cam_doc = json.load(open(CAM))
-    cams = cam_doc.setdefault("cameras", [])
+    # ---- 2. cameras (types 4,10) -> vietnam_cameras.json ---------------------
+    cam_doc = json.load(open(CAM, encoding="utf-8"))
+    cams = [c for c in cam_doc.get("cameras", []) if c.get("source") != "vietmap"]
     cam_keys = {
         (round(c["lat"], 5), round(c["lng"], 5), c.get("focus")) for c in cams
     }
     added_cam = 0
     per_focus = Counter()
-    for lng, lat, t, spd in seen.values():
+    for lng, lat, t, spd, direction in seen.values():
         if t not in EDOG_CAM:
             continue
         focus, name, rtype = EDOG_CAM[t]
@@ -150,49 +152,72 @@ def main():
             continue
         cam_keys.add(k)
         e = {
-            "name": name, "lat": round(lat, 6), "lng": round(lng, 6),
-            "focus": focus, "type": rtype, "district": "VietMap",
+            "name": name,
+            "lat": round(lat, 6),
+            "lng": round(lng, 6),
+            "focus": focus,
+            "type": rtype,
+            "district": "VietMap",
             "source": "vietmap",
         }
         if spd > 0:
             e["speed_limit"] = spd
+        if direction > 0:
+            e["heading"] = direction
         cams.append(e)
         added_cam += 1
         per_focus[focus] += 1
-    json.dump(cam_doc, open(CAM, "w"), ensure_ascii=False, separators=(",", ":"))
+    cam_doc["cameras"] = cams
+    json.dump(cam_doc, open(CAM, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     print(f"  cameras: +{added_cam} VietMap cams -> {len(cams)} total")
     print("    by focus:", dict(per_focus.most_common()))
 
-    # ---- 3. signs (types 2,3,5,6,7,8,9) -> vietnam_signs.json -----------------
-    sign_doc = json.load(open(SIGN))
-    signs = sign_doc.setdefault("signs", [])
+    # ---- 3. signs (types 2,3,5,6,7,8,9) -> vietnam_signs.json ----------------
+    sign_doc = json.load(open(SIGN, encoding="utf-8"))
+    # Keep non-vietmap signs, and keep non-EDOG VietMap signs (e.g. turn signs)
+    edog_kinds = set(EDOG_SIGN.values())
+    signs = [
+        s for s in sign_doc.get("signs", [])
+        if not (s.get("source") == "vietmap" and s.get("kind") in edog_kinds)
+    ]
     sign_keys = {
         (s.get("kind"), round(s["lat"], 5), round(s["lng"], 5)) for s in signs
     }
     added_sign = 0
     per_kind = Counter()
-    for lng, lat, t, spd in seen.values():
+    for lng, lat, t, spd, direction in seen.values():
         if t not in EDOG_SIGN:
             continue
         kind = EDOG_SIGN[t]
+        if kind == "speed" and (spd <= 0 or spd > 200):
+            continue
         k = (kind, round(lat, 5), round(lng, 5))
         if k in sign_keys:
             continue
         sign_keys.add(k)
+        label = f"Hạn chế tốc độ {spd} km/h" if kind == "speed" else SIGN_NAMES.get(kind, kind)
         e = {
-            "name": SIGN_NAMES.get(kind, kind),
-            "lat": round(lat, 6), "lng": round(lng, 6), "kind": kind,
+            "name": label,
+            "lat": round(lat, 6),
+            "lng": round(lng, 6),
+            "kind": kind,
             "source": "vietmap",
         }
-        if kind == "populated":
+        if kind == "speed":
+            e["value"] = spd
+        elif kind == "populated":
             e["value"] = 40
+        if direction > 0:
+            e["heading"] = direction
         signs.append(e)
         added_sign += 1
         per_kind[kind] += 1
-    json.dump(sign_doc, open(SIGN, "w"), ensure_ascii=False, separators=(",", ":"))
+    sign_doc["signs"] = signs
+    json.dump(sign_doc, open(SIGN, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     print(f"  signs: +{added_sign} VietMap signs -> {len(signs)} total")
     print("    by kind:", dict(per_kind.most_common()))
 
 
 if __name__ == "__main__":
     main()
+

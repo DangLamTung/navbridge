@@ -42,7 +42,8 @@ import sys
 import unicodedata
 
 LIMIT_RX = re.compile(
-    r'(?:Gi[ớo]i h[ạa]n(?: t[ốo]c [đd][ộo])?|T[ốo]c [đd][ộo] t[ốo]i [đd]a) (\d+) km/h')
+    r'(?:Gi[ớo]i h[ạa]n(?: t[ốo]c [đd][ộo])?|T[ốo]c [đd][ộo] t[ốo]i [đd]a'
+    r'|T[ốo]c [đd][ộo] ti[ếe]p theo l[àa]) (\d+) km/h')
 ON_RX = re.compile(r'^Đi trên (.+?), sau ')
 MAX_RX = LIMIT_RX  # one phrase for every limit announcement since 2026-09-24
 
@@ -235,6 +236,34 @@ def fix_at(fixes, ms):
     return fixes[min(i, len(fixes) - 1)]
 
 
+# GPS fixes are ~1 Hz, so a callout fired AT an intersection gets compared
+# against a fix the car has already crossed past — the sentence and the next fix
+# straddle the turn. A name that matches the street at the fix BEFORE the
+# callout is therefore NOT a mismatch. Measured 2026-10-11 over 12 recent
+# drives: all 6 reported mismatches were exactly this artifact (the announced
+# name equalled the pre-callout street character for character) — see
+# tool/callout_lag_probe.py.
+#
+# Only the fix BEFORE is accepted. Accepting the fix AFTER as well would hide
+# the real defect this check exists to catch: the engine step name names the
+# road AHEAD, which was 172 of 559 callouts before the 2026-09-24 fix.
+LAG_MS = 3000
+
+
+def street_before(fixes, ms):
+    """Street under the car at the fix immediately before [ms], when that fix
+    is within [LAG_MS]. None when there is none."""
+    if not fixes:
+        return None
+    i = bisect.bisect_left([f['ms'] for f in fixes], ms)
+    for j in (i - 1, i - 2):
+        if 0 <= j < len(fixes):
+            f = fixes[j]
+            if f.get('street') and 0 <= ms - f['ms'] <= LAG_MS:
+                return f['street']
+    return None
+
+
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else 'docs/trips/device'
     paths = sorted(glob.glob(os.path.join(root, '*.json')))
@@ -273,12 +302,17 @@ def main():
                 m = ON_RX.search(text)
                 if m and f['street']:
                     said, actual = norm(m.group(1)), norm(f['street'])
+                    prev = norm(street_before(fixes, ms) or '')
                     if (
                         said
                         and actual
                         and said != actual
                         and said not in actual
                         and actual not in said
+                        and not (
+                            prev
+                            and (said == prev or said in prev or prev in said)
+                        )
                     ):
                         bad['street'].append(
                             (os.path.basename(path), m.group(1), f['street'])

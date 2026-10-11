@@ -42,7 +42,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SEGS = os.path.join(REPO, 'assets/offline_map/waze_segments.bin')
 
 SAU = re.compile(r'sau ([\d.,]+) (ki lô mét|km|mét)')
-SPOKEN = re.compile(r'(?:Tốc độ tối đa|Giới hạn tốc độ) (\d+) km/h')
+# THREE callout forms: the manoeuvre callout says "Tốc độ tối đa K km/h" when K is
+# in force, "Tốc độ tiếp theo là K km/h" when K only applies from the corner
+# onward (2026-10-08), and the change announcer says "Giới hạn tốc độ K km/h".
+SPOKEN = re.compile(
+    r'(?:Tốc độ tối đa|Giới hạn tốc độ|Tốc độ tiếp theo là) (\d+) km/h')
 ON = re.compile(r'Đi trên ([^,]+)')
 INTO = re.compile(r'vào ([^,.]+)')
 # words that follow "vào" without being a street name

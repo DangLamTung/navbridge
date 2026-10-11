@@ -80,15 +80,47 @@ CAM_FOCUS = {
 BOOTLEG = {"DUMMY"}  # fake/decoy cameras -> skip
 
 
+MAPCOMMENTS = f"{DECODE}/vn_mapcomments_notes.tsv"
+
+def classify_mapcomment(subject):
+    s = (subject or "").strip().lower()
+    if re.search(r"(cấm|cam).*(rẽ trái|rt|quẹo trái).*(quay|qd)", s) or re.search(r"(cấm|cam).*(quay|qd).*(rẽ trái|rt|quẹo trái)", s):
+        return ("no_left_uturn", "P.123a Cấm rẽ trái và quay đầu")
+    if re.search(r"(cấm|cam).*(rẽ phải|rp|quẹo phải).*(quay|qd)", s) or re.search(r"(cấm|cam).*(quay|qd).*(rẽ phải|rp|quẹo phải)", s):
+        return ("no_right_uturn", "P.124a Cấm rẽ phải và quay đầu")
+    if re.search(r"(cấm|cam).*(quay đầu|quay dau|\bqd\b|\bqp\b|\bqt\b)", s):
+        return ("no_u_turn", "P.125 Cấm quay đầu")
+    if re.search(r"(cấm|cam).*(rẽ trái|quẹo trái|\brt\b)", s):
+        return ("no_left_turn", "P.123 Cấm rẽ trái")
+    if re.search(r"(cấm|cam).*(rẽ phải|quẹo phải|\brp\b)", s):
+        return ("no_right_turn", "P.124 Cấm rẽ phải")
+    if re.search(r"(bắt buộc|hướng đi phải|chỉ được).*(rẽ trái|quẹo trái)", s):
+        return ("only_left", "R.412a Hướng phải rẽ trái")
+    if re.search(r"(bắt buộc|hướng đi phải|chỉ được).*(rẽ phải|quẹo phải)", s):
+        return ("only_right", "R.412 Hướng phải rẽ phải")
+    if re.search(r"(bắt buộc|hướng đi phải|chỉ được).*(đi thẳng)", s):
+        return ("only_straight", "R.411 Hướng phải đi thẳng")
+    if re.search(r"(cấm|cam).*(vượt|vuot)", s):
+        if "hết" in s or "het" in s:
+            return ("no_passing_end", "Hết cấm vượt")
+        return ("no_passing", "P.127 Cấm vượt")
+    if re.search(r"(cấm|cam).*(ô tô|oto|xe hơi)", s):
+        return ("no_auto", "Cấm ô tô")
+    if re.search(r"(hết|het).*(biển cấm|lệnh cấm|moi lenh cam)", s):
+        return ("end_prohibitions", "P.133 Hết mọi lệnh cấm")
+    return (None, None)
+
+
 def merge_signs():
     import json
-    doc = json.load(open(SIGN))
+    import os
+    with open(SIGN) as f:
+        doc = json.load(f)
     existing = doc.get("signs", [])
     keys = {(s["lat"], s["lng"], s.get("kind")) for s in existing}
 
     added = 0
     per_kind = Counter()
-    rows = []
     for line in open(V2):
         p = line.rstrip("\n").split("\t")
         if len(p) < 6 or p[1] == "type":
@@ -97,9 +129,7 @@ def merge_signs():
         lat, lng = float(p[2]), float(p[3])
         kmh = int(p[5]) if p[5] else None
         if code in SPEED_TYPES:
-            # A speed-limit sign needs a posted value to be useful — without it
-            # there's no number for the icon (and it produced null-value signs).
-            if not kmh:
+            if not kmh or not (40 <= kmh <= 120):
                 continue
             kind, label = "speed", f"Hạn chế tốc độ {kmh} km/h"
         else:
@@ -111,22 +141,50 @@ def merge_signs():
         if key in keys:
             continue
         keys.add(key)
-        e = {"name": label, "lat": round(lat, 5), "lng": round(lng, 5), "kind": kind}
+        e = {"name": label, "lat": round(lat, 5), "lng": round(lng, 5), "kind": kind, "source": "waze"}
         if kmh:
             e["value"] = kmh
         existing.append(e)
         added += 1
         per_kind[kind] += 1
 
+    if os.path.exists(MAPCOMMENTS):
+        for line in open(MAPCOMMENTS):
+            p = line.rstrip("\n").split("\t")
+            if len(p) >= 7 and p[5] != "lat":
+                subj = p[1]
+                kind, label = classify_mapcomment(subj)
+                if not kind:
+                    continue
+                try:
+                    lat, lng = float(p[5]), float(p[6])
+                except ValueError:
+                    continue
+                key = (round(lat, 5), round(lng, 5), kind)
+                if key in keys:
+                    continue
+                keys.add(key)
+                existing.append({
+                    "name": label,
+                    "lat": round(lat, 5),
+                    "lng": round(lng, 5),
+                    "kind": kind,
+                    "source": "waze",
+                })
+                added += 1
+                per_kind[kind] += 1
+
     doc["signs"] = existing
-    json.dump(doc, open(SIGN, "w"), ensure_ascii=False, separators=(",", ":"))
+    with open(SIGN, "w") as f:
+        json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
     print(f"[SIGNS] +{added} Waze signs -> {len(existing)} total")
     print("  by kind:", dict(per_kind.most_common()))
 
 
 def merge_speed():
     import json
-    doc = json.load(open(SPEED))
+    with open(SPEED) as f:
+        doc = json.load(f)
     pts = doc.setdefault("points", [])
     keys = {(round(p["lat"], 5), round(p["lng"], 5)) for p in pts}
     added = 0
@@ -138,6 +196,9 @@ def merge_speed():
         try:
             lat, lng = float(p[2]), float(p[3])
             kmh = int(p[5]) if p[5] else 0
+            # Speed limits in Vietnam range 40..120 km/h. Reject bogus 10, 20, 30 km/h
+            if not (40 <= kmh <= 120):
+                continue
         except ValueError:
             continue
         k = (round(lat, 5), round(lng, 5))
@@ -150,16 +211,28 @@ def merge_speed():
         pts.append({"lat": round(k[0], 5), "lng": round(k[1], 5), "kmh": kmh})
         added += 1
     doc["points"] = pts
-    json.dump(doc, open(SPEED, "w"), ensure_ascii=False, separators=(",", ":"))
+    with open(SPEED, "w") as f:
+        json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
     print(f"[SPEED] +{added} Waze speed limits -> {len(pts)} total")
 
 
 def fix_cameras():
     import json
-    doc = json.load(open(CAM))
+    with open(CAM) as f:
+        doc = json.load(f)
     cams = doc.get("cameras", [])
-    # 1) drop bogus previous waze cameras (they were speed limits, not cams)
-    kept = [c for c in cams if c.get("source") != "waze"]
+    # 1) drop only bogus previous waze cameras (speed-limit point notices), keep real cameras and provincial tagged cameras
+    real_cam_types = {
+        "speed_camera", "red_light_camera", "phone_camera", "seatbelt_camera",
+        "distance_camera", "bus_lane_camera", "hov_lane_camera",
+        "carpool_lane_camera", "stop_camera", "noise_camera",
+    }
+    def is_bogus_waze(c):
+        return (c.get("source") == "waze"
+                and c.get("focus") == "speed"
+                and not (c.get("district") or "").strip()
+                and c.get("type") not in real_cam_types)
+    kept = [c for c in cams if not is_bogus_waze(c)]
     dropped = len(cams) - len(kept)
     keys = {(round(c["lat"], 5), round(c["lng"], 5), c.get("focus")) for c in kept}
 
@@ -197,7 +270,8 @@ def fix_cameras():
         per_focus[focus] += 1
 
     doc["cameras"] = kept
-    json.dump(doc, open(CAM, "w"), ensure_ascii=False, separators=(",", ":"))
+    with open(CAM, "w") as f:
+        json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
     print(f"[CAMS] dropped {dropped} bogus waze speed-camera entries")
     print(f"[CAMS] +{added} real enforcement cameras -> {len(kept)} total")
     print("  by focus:", dict(per_focus.most_common()))

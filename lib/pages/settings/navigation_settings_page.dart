@@ -18,7 +18,10 @@ import 'package:navbridge/services/offline_tiles.dart'
         cameraAlerts,
         gpsFilter,
         simpleMode,
-        navSpeedStyle;
+        navSpeedStyle,
+        alertBarCount,
+        navBannerBottom,
+        carScreenAnchor;
 import 'package:navbridge/ui/widgets.dart';
 
 class NavigationSettingsPage extends StatefulWidget {
@@ -38,6 +41,16 @@ class _NavigationSettingsPageState extends State<NavigationSettingsPage> {
   /// 'chip' | 'dial' — see [navSpeedStyle]. Defaults to the dial.
   String _navSpeedStyle = 'dial';
 
+  /// How many hazards the nav alert bar shows — see [alertBarCount].
+  int _alertBarCount = 3;
+
+  /// Where the turn banner sits — see [navBannerBottom].
+  bool _navBannerBottom = false;
+
+  /// Where the car arrow sits vertically while navigating — see
+  /// [carScreenAnchor]. 0 = centre, 0.10 = lower third, 0.22 = near bottom.
+  double _carScreenAnchor = 0.0;
+
   @override
   void initState() {
     super.initState();
@@ -47,6 +60,27 @@ class _NavigationSettingsPageState extends State<NavigationSettingsPage> {
     _gpsFilter = gpsFilter;
     _gpsFilterStrength = gpsFilterStrength;
     _navSpeedStyle = navSpeedStyle;
+    _alertBarCount = alertBarCount;
+    _navBannerBottom = navBannerBottom;
+    _carScreenAnchor = carScreenAnchor;
+  }
+
+  Future<void> _setCarScreenAnchor(double v) async {
+    if (v == _carScreenAnchor) return;
+    setState(() {
+      _carScreenAnchor = v;
+      carScreenAnchor = v;
+    });
+    await saveAllSettings();
+  }
+
+  Future<void> _setNavBannerBottom(bool v) async {
+    if (v == _navBannerBottom) return;
+    setState(() {
+      _navBannerBottom = v;
+      navBannerBottom = v;
+    });
+    await saveAllSettings();
   }
 
   Future<void> _setNavSpeedStyle(String v) async {
@@ -54,6 +88,15 @@ class _NavigationSettingsPageState extends State<NavigationSettingsPage> {
     setState(() {
       _navSpeedStyle = v;
       navSpeedStyle = v;
+    });
+    await saveAllSettings();
+  }
+
+  Future<void> _setAlertBarCount(int v) async {
+    if (v == _alertBarCount) return;
+    setState(() {
+      _alertBarCount = v;
+      alertBarCount = v;
     });
     await saveAllSettings();
   }
@@ -404,6 +447,137 @@ class _NavigationSettingsPageState extends State<NavigationSettingsPage> {
                 _navSpeedStyle == 'dial'
                     ? 'Đồng hồ tròn như widget nổi: vạch cam→đỏ chạy theo tốc độ, số lớn ở giữa, biển giới hạn chồng góc phải.'
                     : 'Chip trắng: tốc độ + biển giới hạn dạng hai vòng tròn nhỏ cạnh tên đường.',
+                style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // --- Upcoming-hazard alert bar --------------------------------------
+        const SettingsSection('Thanh cảnh báo'),
+        SettingsCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Số biển báo sắp tới hiện trên thanh dưới đồng hồ tốc độ, xếp theo '
+                'thứ tự sẽ gặp (chỉ biểu tượng — giữ lâu để xem tên). Chọn 0 để tắt.',
+                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              ),
+              const SizedBox(height: 8),
+              SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(
+                    value: 0,
+                    label: Text('Tắt', style: TextStyle(fontSize: 12)),
+                  ),
+                  ButtonSegment(
+                    value: 1,
+                    label: Text('1', style: TextStyle(fontSize: 12)),
+                  ),
+                  ButtonSegment(
+                    value: 2,
+                    label: Text('2', style: TextStyle(fontSize: 12)),
+                  ),
+                  ButtonSegment(
+                    value: 3,
+                    label: Text('3', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+                selected: {_alertBarCount},
+                onSelectionChanged: (s) =>
+                    unawaited(_setAlertBarCount(s.first)),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // --- Where the turn banner sits -------------------------------------
+        const SettingsSection('Vị trí thanh chỉ đường'),
+        SettingsCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Thanh rẽ (mũi tên + tên đường + khoảng cách) hiện ở trên hay dưới '
+                'màn hình khi dẫn đường.',
+                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              ),
+              const SizedBox(height: 8),
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(
+                    value: false,
+                    label: Text('Trên', style: TextStyle(fontSize: 12)),
+                    icon: Icon(Icons.vertical_align_top, size: 16),
+                  ),
+                  ButtonSegment(
+                    value: true,
+                    label: Text('Dưới', style: TextStyle(fontSize: 12)),
+                    icon: Icon(Icons.vertical_align_bottom, size: 16),
+                  ),
+                ],
+                selected: {_navBannerBottom},
+                onSelectionChanged: (s) =>
+                    unawaited(_setNavBannerBottom(s.first)),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _navBannerBottom
+                    ? 'Giống Google Maps / Waze: thanh rẽ nằm dưới, ngay trên thanh ETA.'
+                    : 'Mặc định: thanh rẽ nằm trên cùng, dưới thanh tốc độ.',
+                style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // --- Where the car arrow sits on screen -----------------------------
+        const SettingsSection('Vị trí mũi tên'),
+        SettingsCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Mũi tên xe nằm ở đâu trên màn hình khi dẫn đường. Càng xuống '
+                'thấp thì càng thấy nhiều đường phía trước (kiểu Google Maps).',
+                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              ),
+              const SizedBox(height: 8),
+              SegmentedButton<double>(
+                segments: const [
+                  ButtonSegment(
+                    value: 0.0,
+                    label: Text('Giữa', style: TextStyle(fontSize: 12)),
+                    icon: Icon(Icons.vertical_align_center, size: 16),
+                  ),
+                  ButtonSegment(
+                    value: 0.10,
+                    label: Text('Dưới 1/3', style: TextStyle(fontSize: 12)),
+                    icon: Icon(Icons.vertical_align_bottom, size: 16),
+                  ),
+                  ButtonSegment(
+                    value: 0.22,
+                    label: Text('Sát đáy', style: TextStyle(fontSize: 12)),
+                    icon: Icon(Icons.south, size: 16),
+                  ),
+                ],
+                selected: {_carScreenAnchor},
+                onSelectionChanged: (s) =>
+                    unawaited(_setCarScreenAnchor(s.first)),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _carScreenAnchor <= 0.01
+                    ? 'Mặc định: mũi tên ở giữa màn hình (thấy ít đường phía trước).'
+                    : (_carScreenAnchor < 0.16
+                          ? 'Kiểu Google Maps: mũi tên ở 1/3 dưới — phần lớn màn '
+                                'hình là đường phía trước.'
+                          : 'Mũi tên sát đáy — thấy xa nhất phía trước, nhưng '
+                                'phía sau gần như không còn.'),
                 style: TextStyle(fontSize: 11, color: Colors.grey[700]),
               ),
             ],

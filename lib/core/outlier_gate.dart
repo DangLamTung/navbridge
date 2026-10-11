@@ -34,6 +34,19 @@ class OutlierGate {
   /// Fixes worse than this are dropped outright (set per strength).
   double _maxAccuracyM = 35.0;
 
+  /// The accuracy ceiling for the FIRST fix only (cold start).
+  ///
+  /// ⭐ The first fix has no previous position to be inconsistent with, so the
+  /// accuracy ceiling is the ONLY thing that can keep the map blank — and on a
+  /// cold start the fused provider hands out its coarse network/wifi fix first
+  /// (commonly 50-500 m) while the satellite fix is still locking. Throwing
+  /// that away meant the long `LocationAccuracy.high` wait was the first thing
+  /// the driver saw, and it also defeated the fast seed: `_seedGpsFix()`
+  /// (nav_gps.dart) exists precisely to centre the map immediately on the itel,
+  /// and every seed it produced was rejected here (user, 2026-10-08: "start is
+  /// slow to catch gps"). The normal [_maxAccuracyM] resumes from the 2nd fix.
+  static const double _coldStartAccuracyM = 500.0;
+
   /// How many times the (floored) speed a jump may exceed before it's rejected
   /// (set per strength).
   double _jumpFactor = 3.0;
@@ -66,6 +79,14 @@ class OutlierGate {
   int accepted = 0;
   int rejected = 0;
 
+  /// Diagnostics for the last [accept] call: why a fix was dropped, and how far
+  /// it was from the previous ACCEPTED fix versus what was allowed. Logged into
+  /// the trip (see TripLogger.addRawFix) so a "the GPS went crazy here" report
+  /// can be audited after the drive instead of guessed at.
+  String? lastReason; // 'accuracy' | 'jump' | null when the fix was accepted
+  double? lastJumpM;
+  double? lastAllowedM;
+
   /// Returns true to ACCEPT [pos]; false rejects the outlier. [dt] = seconds
   /// since the last ACCEPTED fix (null on the first fix).
   ///
@@ -88,7 +109,16 @@ class OutlierGate {
     // Reflect the persisted GPS-filter strength on every fix so a settings
     // change applies without restarting navigation.
     _applyStrength(gpsFilterStrength);
-    if (accuracy != null && accuracy > _maxAccuracyM) {
+    lastReason = null;
+    lastJumpM = null;
+    lastAllowedM = null;
+    // Cold start gets a much wider ceiling (see [_coldStartAccuracyM]).
+    final accLimit = accepted == 0 ? _coldStartAccuracyM : _maxAccuracyM;
+    if (accuracy != null && accuracy > accLimit) {
+      lastReason = 'accuracy';
+      // Record the ceiling that actually applied, so a rejected fix logs
+      // "accuracy>500m" at the start instead of "accuracy>null".
+      lastAllowedM = accLimit;
       rejected++;
       return false;
     }
@@ -109,7 +139,10 @@ class OutlierGate {
       // legitimate movement accepted even before the EMA has caught up.
       final allowed =
           math.max(_smoothSpeedMps, _minPlausibleMps) * dt * _jumpFactor;
+      lastJumpM = d;
+      lastAllowedM = allowed;
       if (d > allowed) {
+        lastReason = 'jump';
         rejected++;
         return false; // jump inconsistent with the recent speed
       }

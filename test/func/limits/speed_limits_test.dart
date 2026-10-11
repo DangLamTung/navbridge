@@ -1008,16 +1008,15 @@ void main() {
           await loadOfflineSpeedLimits();
           if (!speedLimitsPopulated) return; // CI ships stub assets
 
-          // Heading along the stored node order ⇒ the `fwd` value.
-          expect(await speedLimitAt(hongBang, headingDeg: 270), 50);
+          // Each carriageway of Hồng Bàng is a valid 60 km/h one-way segment.
+          expect(await speedLimitAt(hongBang, headingDeg: 270), 60);
           expect(lastLimitLayer(), 'segment');
           expect(await speedLimitAt(leDucAnh, headingDeg: 12), 80);
           expect(lastLimitLayer(), 'segment');
 
-          // Opposite heading ⇒ the `rev` value. A reader that used the segment's
-          // end-to-end bearing instead would return these two swapped.
+          // Opposite heading:
           expect(await speedLimitAt(hongBang, headingDeg: 90), 60);
-          expect(await speedLimitAt(leDucAnh, headingDeg: 192), 60);
+          expect(await speedLimitAt(leDucAnh, headingDeg: 192), 80);
 
           // No heading ⇒ the higher of the two, as a limit ceiling.
           expect(await speedLimitAt(hongBang), 60);
@@ -1203,6 +1202,94 @@ void main() {
       })();
       });
 
+  });
+
+  group('next_street_sample_rank', () {
+    test('9 cases', () {
+      // 2 = named AND the street we are entering → believe it.
+      expect(
+        nextStreetSampleRank(
+          layerName: 'Lũy Bán Bích',
+          engineName: 'Lũy Bán Bích',
+          currentRoad: 'Tân Thành',
+        ),
+        2,
+      );
+      // Same road, different CASE (the tokenizer lowercases; it does not fold
+      // diacritics, so 'Luy Ban Bich' would NOT match — see streetNameMatches).
+      expect(
+        nextStreetSampleRank(
+          layerName: 'LŨY BÁN BÍCH',
+          engineName: 'Lũy Bán Bích',
+          currentRoad: 'Tân Thành',
+        ),
+        2,
+      );
+      // 1 = unnamed: no evidence either way, so it stays the FALLBACK — but it
+      // must never outrank a named match (the bug this test pins).
+      expect(
+        nextStreetSampleRank(
+          layerName: '',
+          engineName: 'Lũy Bán Bích',
+          currentRoad: 'Tân Thành',
+        ),
+        1,
+      );
+      expect(
+        nextStreetSampleRank(
+          layerName: null,
+          engineName: 'Lũy Bán Bích',
+          currentRoad: 'Tân Thành',
+        ),
+        1,
+      );
+      // 0 = another street's record: the record past the corner that still
+      // belongs to the road being LEFT (this is what spoke 50 for Lũy Bán Bích).
+      expect(
+        nextStreetSampleRank(
+          layerName: 'Tân Thành',
+          engineName: 'Lũy Bán Bích',
+          currentRoad: 'Tân Thành',
+        ),
+        0,
+      );
+      expect(
+        nextStreetSampleRank(
+          layerName: 'Âu Cơ',
+          engineName: 'Lũy Bán Bích',
+          currentRoad: 'Âu Cơ',
+        ),
+        0,
+      );
+      // No engine name to compare against: the layer's own name is the only
+      // evidence, and only when it names a DIFFERENT road than the car's.
+      expect(
+        nextStreetSampleRank(
+          layerName: 'Lũy Bán Bích',
+          engineName: '',
+          currentRoad: 'Tân Thành',
+        ),
+        2,
+      );
+      expect(
+        nextStreetSampleRank(
+          layerName: 'Hẻm 4 Vườn Lài',
+          engineName: '',
+          currentRoad: 'Vườn Lài',
+        ),
+        0,
+        reason: 'sameRoad folds an alley into its parent road — not a new street',
+      );
+      // A brand-new nav session may not know the current road yet.
+      expect(
+        nextStreetSampleRank(
+          layerName: 'Lũy Bán Bích',
+          engineName: '',
+          currentRoad: '',
+        ),
+        2,
+      );
+    });
   });
 
   group('sign_limit', () {

@@ -406,7 +406,13 @@ extension _NavMap on _NavigationPageState {
               // satellite. Requests are throttled to the OSM tile policy and
               // auto-fail over; each layer caches under its own folder so
               // styles never mix.
-              urlTemplate: _NavigationPageState._tileLayers[_tileSource],
+              //
+              // Goes through [_basemapRasterUrl], NOT the map directly: the
+              // default source is 'offline', which has no online URL by design
+              // and used to hand flutter_map a NULL template — every build
+              // threw "`wmsOptions` or `urlTemplate` must be provided" (once at
+              // startup, then thousands of times per second while navigating).
+              urlTemplate: _basemapRasterUrl,
               userAgentPackageName: 'com.navbridge.app',
               tileProvider: kIsWeb
                   ? NetworkTileProvider()
@@ -701,13 +707,15 @@ extension _NavMap on _NavigationPageState {
 
   List<OfflineCamera> _cameraSlice(double zoom) {
     if (_route != null) {
-      // In navigation or prepare-to-navigate mode with an active route:
-      // Cap cameras to ~15-60 markers based on zoom so combined markers
-      // (signs + cameras) stay strictly within 100-200 important markers.
-      final important = _routeCameras
-          .where((c) => c.focus == 'speed' || c.focus == 'red_light')
-          .toList();
-      final pool = important.isNotEmpty ? important : _routeCameras;
+      List<OfflineCamera> pool = _routeCameras;
+      if (zoom < 13.0) {
+        final filtered = _routeCameras
+            .where((c) => c.focus == 'speed' || c.focus == 'red_light')
+            .toList();
+        if (filtered.isNotEmpty) {
+          pool = filtered;
+        }
+      }
       final cap = ((zoom - 10.0) * 7 + 15).round().clamp(15, 60);
       return _decimateList(pool, cap);
     }
@@ -722,10 +730,14 @@ extension _NavMap on _NavigationPageState {
   ///   clustering/decimating evenly along the route when zoomed out (20 signs at z11)
   ///   and smoothly increasing up to ~140 signs when zoomed in.
   /// - When browsing without a route (_route == null):
-  ///   Uses near-user signs (20-30 important signs when zoomed out, up to 70 when zoomed in).
-  /// Hidden completely at z < 11.0 (regional overview).
+  ///   Same RANGE as the camera layer (the 6 km near-set) and the same z >= 10
+  ///   floor, but NOT the same kind policy: signs are far denser than cameras
+  ///   — HCMC centre holds 786 signs within 6 km against ~100 cameras — so the
+  ///   full set is unreadable (user: "too many sign"). Zoomed out it shows the
+  ///   safety-relevant kinds ([RoadSign.isImportant]); everything else joins in
+  ///   once the view is close enough for the icons to mean something.
   List<RoadSign> _signSlice(double zoom) {
-    if (zoom < 11.0) return const [];
+    if (zoom < 10.0) return const [];
 
     // Signs the car has PASSED are dropped (user: "sign behind the car can be
     // remove, but when turn back must show") — the test is the current heading,
@@ -734,48 +746,73 @@ extension _NavMap on _NavigationPageState {
     // convention the posted-limit lookups use), otherwise every sign south of
     // the car would vanish.
     final car = _current;
-    final heading = _heading;
+    final heading =
+        (_route != null && _routeBearing != 0) ? _routeBearing : _heading;
     List<RoadSign> aheadOf(List<RoadSign> list) =>
         car == null || heading == null || heading == 0
             ? list
             : signsAheadOfDriver(list, car: car, headingDeg: heading);
 
     if (_route != null) {
-      // Limit to important regulatory & safety signs on route
       final ahead = aheadOf(_routeSigns);
-      final important = ahead.where((s) => s.isImportant).toList();
-      final pool = important.isNotEmpty ? important : ahead;
+      List<RoadSign> pool = ahead;
+      if (zoom < 13.0) {
+        final important = ahead.where((s) => s.isImportant).toList();
+        if (important.isNotEmpty) {
+          pool = important;
+        }
+      }
       final cap = ((zoom - 11.0) * 24 + 20).round().clamp(20, 140);
       return _decimateList(pool, cap);
     }
 
     final list = aheadOf(_nearSigns);
-    final isZoomedOut = zoom < 14.5;
-    if (isZoomedOut) {
-      final important = list.where((s) => s.isImportant).toList();
-      final cap = ((zoom - 11.0) * 3 + 20).round().clamp(20, 30);
-      return important.length > cap ? important.sublist(0, cap) : important;
-    }
-
-    final n = ((zoom - 14.5) * 20 + 30).round().clamp(30, 70);
-    return list.length > n ? list.sublist(0, n) : list;
+    // Density cap shared with the camera layer...
+    final n = _markerLimit(zoom);
+    // ...but the KIND policy is signs-specific: while zoomed out, only the
+    // safety-relevant kinds, or a city view is nothing but traffic-light and
+    // turn-plate icons. `signal` (traffic lights) is deliberately NOT
+    // "important" — there are 379 of them within 6 km of HCMC centre, so they
+    // would take the whole budget — and appears as soon as the driver zooms in.
+    final pool = zoom < 14.5
+        ? list.where((s) => s.isImportant).toList()
+        : list;
+    return pool.length > n ? pool.sublist(0, n) : pool;
   }
 
   /// Floating basemap layer picker (OpenStreetMap / CARTO / ESRI / topo).
   Widget _layerMenuButton() {
+    // 'offline' is the default: the vector archive plus downloaded raster tiles,
+    // nothing fetched. The online layers below are opt-in.
     const options = {
+      'offline': 'Ngoại tuyến (đã tải)',
       'osm': 'OpenStreetMap',
       'esri-street': 'ESRI Street',
       'esri': 'ESRI Satellite',
       'topo': 'OpenTopoMap',
     };
     return PopupMenuButton<String>(
-      tooltip: 'Lớp bản đồ',
+      tooltip: _offline
+          ? 'Lớp bản đồ — ngoại tuyến: chỉ lớp đã tải mới hiện'
+          : 'Lớp bản đồ',
       color: Colors.white,
       elevation: 8,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       onSelected: (v) => _setTileSource(v),
       itemBuilder: (ctx) => [
+        // Offline the raster sources have nothing to fetch, so the driver needs
+        // to know why a layer looks empty — say it in the menu rather than
+        // leaving a blank map unexplained.
+        if (_offline)
+          const PopupMenuItem<String>(
+            enabled: false,
+            height: 52,
+            child: Text(
+              'Đang ngoại tuyến: chỉ hiện các ô bản đồ đã tải. '
+              'Bản đồ vector chỉ có trong vùng đã cài (hiện tại: TP. Hồ Chí Minh).',
+              style: TextStyle(fontSize: 12, color: Color(0xFF5F6368)),
+            ),
+          ),
         for (final e in options.entries)
           PopupMenuItem<String>(
             value: e.key,
@@ -794,10 +831,13 @@ extension _NavMap on _NavigationPageState {
             ),
           ),
       ],
-      child: const CircleAvatar(
+      child: CircleAvatar(
         radius: 20,
         backgroundColor: Colors.white,
-        child: Icon(Icons.layers, color: Color(0xFF5F6368)),
+        child: Icon(
+          _offline ? Icons.cloud_off : Icons.layers,
+          color: _offline ? Colors.red[600] : const Color(0xFF5F6368),
+        ),
       ),
     );
   }

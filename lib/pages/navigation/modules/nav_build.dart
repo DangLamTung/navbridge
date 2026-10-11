@@ -81,6 +81,9 @@ extension _NavBuild on _NavigationPageState {
                     signs: _routeSigns,
                     controller: _vmFollow,
                     smoothCamera: smoothCamera,
+                    // Same car-arrow screen position as the full-screen map so
+                    // entering/leaving PiP doesn't move the arrow.
+                    carAnchor: carScreenAnchor,
                     // PiP can't be pinched — start wider than the full-screen
                     // camera so more of the route is visible in the small
                     // window (z13 ≈ ~7 km view).
@@ -204,6 +207,10 @@ extension _NavBuild on _NavigationPageState {
                   signs: _routeSigns,
                   controller: _vmFollow,
                   smoothCamera: smoothCamera,
+                  // Car-arrow screen position (Settings → "Vị trí mũi tên"):
+                  // the follow camera looks past the car so the arrow rides
+                  // lower on screen and more road stays visible ahead.
+                  carAnchor: carScreenAnchor,
                 )
               : _buildMap(route, current),
           Positioned.fill(
@@ -227,7 +234,11 @@ extension _NavBuild on _NavigationPageState {
                         // for driving/viewing; search returns after
                         // "Xoá lộ trình".
                         _navigating
-                            ? _navTopBar()
+                            ? (navBannerBottom
+                                  // Moved to the bottom edge — see the bottom
+                                  // Positioned below (Settings → "Dẫn đường").
+                                  ? const SizedBox.shrink()
+                                  : _navTopBar())
                             : (_route != null
                                   ? const SizedBox.shrink()
                                   : _topBar()),
@@ -274,32 +285,11 @@ extension _NavBuild on _NavigationPageState {
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                // Speed display style (Settings → Hiển thị
-                                // tốc độ): the compact chip, or the floating
-                                // widget's round gauge. Same values either way
-                                // — only the drawing differs.
-                                if (navSpeedStyle == 'dial')
-                                  SpeedDialChip(
-                                    info: _roadInfo,
-                                    speedMps: _progress?.speedMps,
-                                    limitOverride: _effectiveSpeedLimit > 0
-                                        ? _effectiveSpeedLimit
-                                        : null,
-                                    limitSrc: _limitSourceLabel,
-                                    fromEsp: _espActive(),
-                                  )
-                                else
-                                  RoadInfoChip(
-                                    info: _roadInfo,
-                                    loading: _roadLoading,
-                                    speedMps: _progress?.speedMps,
-                                    limitOverride: _effectiveSpeedLimit > 0
-                                        ? _effectiveSpeedLimit
-                                        : null,
-                                    // GPS source tag lives INSIDE the chip so
-                                    // it never overlaps the right column.
-                                    fromEsp: _espActive(),
-                                  ),
+                                // The speed island (speed + limit chip, with the
+                                // "sắp tới" sign bar under it) is NOT here any
+                                // more: it is a DRAGGABLE overlay of its own —
+                                // see [_speedIsland] — so the rider can move it
+                                // off the road ahead.
                                 // Close chip to dismiss the search / POI
                                 // markers on the nav map (blue search markers
                                 // + the tapped/selected POI highlight).
@@ -437,6 +427,14 @@ extension _NavBuild on _NavigationPageState {
                                           },
                                           itemBuilder: (context) => [
                                             _layerHeader('Loại bản đồ'),
+                                            // First and the default: the map
+                                            // works with no signal at all.
+                                            _layerItem(
+                                              'type:offline',
+                                              Icons.cloud_off,
+                                              'Ngoại tuyến (đã tải)',
+                                              _tileSource == 'offline',
+                                            ),
                                             _layerItem(
                                               'type:osm',
                                               Icons.map,
@@ -493,13 +491,16 @@ extension _NavBuild on _NavigationPageState {
                                                 _tileSource == 'vietmapsat',
                                               ),
                                             ],
+                                            // Same vector archive, but with the
+                                            // online CARTO raster underneath —
+                                            // nicer outside the archive's
+                                            // coverage while there IS signal.
                                             _layerItem(
                                               'type:vector',
                                               Icons.layers,
-                                              'Bản đồ Vector (HCMC)',
+                                              'Bản đồ Vector + nền CARTO',
                                               _tileSource == 'vector',
-                                            ),
-                                            const PopupMenuDivider(height: 12),
+                                            ),                                            const PopupMenuDivider(height: 12),
                                             _layerHeader('Lớp phủ & Hiệu ứng'),
                                             _layerItem(
                                               '3d',
@@ -908,7 +909,17 @@ extension _NavBuild on _NavigationPageState {
                     left: 0,
                     right: 0,
                     bottom: 0,
-                    child: _bottomArea(),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // The turn banner, when the user put it at the BOTTOM
+                        // (Settings → "Dẫn đường") — the layout riders know
+                        // from Google Maps / Waze. It sits directly above the
+                        // ETA bar so the two read as one block.
+                        if (_navigating && navBannerBottom) _navTopBar(),
+                        _bottomArea(),
+                      ],
+                    ),
                   ),
                   // Auto-center button — rendered in this overlay so it sits
                   // ABOVE the MapLibre platform view (a sibling inside the
@@ -922,6 +933,9 @@ extension _NavBuild on _NavigationPageState {
                   // silently hit this button instead → "does nothing").
                   // The button is DRAGGABLE — hold and drag it anywhere on
                   // the map (the position is remembered for the session).
+                  // The speed island is its own draggable overlay (see
+                  // [_speedIsland]) — only while navigating, like this button.
+                  if (_navigating) _speedIsland(),
                   if (_navigating) _autoCenterButton(),
                 ],
               ),
@@ -962,23 +976,36 @@ extension _NavBuild on _NavigationPageState {
   Widget _simConsoleLayer() {
     if (!simConsoleEnabled) return const SizedBox.shrink();
     final size = MediaQuery.of(context).size;
-    final w = (size.width - 24).clamp(220.0, 360.0);
-    final h = (size.height - (_navigating ? 280 : 200)).clamp(240.0, 600.0);
+    // The console is a debug tool over a map, so it takes the space it needs and
+    // no more: it used to be up to 360 x 600, which on a laptop window covered
+    // most of the right half of the map ("the right side simulate shit is taking
+    // too much space"). It also starts collapsed on the playback route
+    // (`nav_sim_panel.dart`) and open on the simulation route, where it is the
+    // point of the page.
+    final w = (size.width - 24).clamp(200.0, 300.0);
+    final h = (size.height - (_navigating ? 280 : 200)).clamp(200.0, 520.0);
+    // ⭐ MAX size, not FIXED size. It used to be a fixed box, so "Thu nhỏ"
+    // replaced the content with a one-line Row inside a box of the same size —
+    // and since the shell is an opaque dark Material, collapsing produced a
+    // large BLACK BLOCK that also swallowed every tap on the map underneath
+    // (user, 2026-10-09: "thu nhỏ is not thu nhỏ, it is shitty black block, also
+    // can not click on map"). A shrink-wrapped child means collapsed really is
+    // small, and nothing invisible covers the map.
     return Positioned(
       right: 12,
       top: _navigating ? 96 : 150,
-      width: w,
-      height: h,
-      child: _showSimConsole
-          ? SimConsole(
-              onClose: () => setNavState(() => _showSimConsole = false),
-              onLayerChanged: _onDebugLayerChanged,
-            )
-          : Align(
-              alignment: Alignment.topRight,
-              child: Material(
-                elevation: 6,
-                color: const Color(0xF2181A22),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: w, maxHeight: h),
+        child: _showSimConsole
+            ? SimConsole(
+                onClose: () => setNavState(() => _showSimConsole = false),
+                onLayerChanged: _onDebugLayerChanged,
+              )
+            : Align(
+                alignment: Alignment.topRight,
+                child: Material(
+                  elevation: 6,
+                  color: const Color(0xF2181A22),
                 borderRadius: BorderRadius.circular(20),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(20),
@@ -1011,7 +1038,8 @@ extension _NavBuild on _NavigationPageState {
                 ),
               ),
             ),
-    );
+          ),
+        );
   }
 
   /// The draggable auto-center ("my_location") button shown while navigating.
@@ -1063,6 +1091,75 @@ extension _NavBuild on _NavigationPageState {
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+
+  /// The speed island — the speed + limit chip with the "sắp tới" sign bar
+  /// under it — as a DRAGGABLE overlay on the nav map.
+  ///
+  /// It used to be pinned under the top bar, where on a small phone it covers
+  /// the stretch of road just ahead. Hold and drag it anywhere; the position is
+  /// REMEMBERED across sessions (dragged back the same way) — dragging is the
+  /// control, there is no menu for it.
+  Widget _speedIsland() {
+    final size = MediaQuery.of(context).size;
+    // Default: under the turn banner on the left, where it has always been.
+    final pos = speedIslandX < 0
+        ? const Offset(12, 96)
+        : Offset(speedIslandX, speedIslandY);
+    const margin = 12.0;
+    return Positioned(
+      left: pos.dx.clamp(0.0, size.width - margin),
+      top: pos.dy.clamp(0.0, size.height - margin),
+      child: GestureDetector(
+        behavior: HitTestBehavior.deferToChild,
+        onPanUpdate: (d) {
+          final s = MediaQuery.of(context).size;
+          setNavState(() {
+            speedIslandX = (speedIslandX < 0 ? 12.0 : speedIslandX + d.delta.dx)
+                .clamp(0.0, s.width - margin);
+            speedIslandY = (speedIslandY < 0 ? 96.0 : speedIslandY + d.delta.dy)
+                .clamp(0.0, s.height - margin);
+          });
+        },
+        // Persist once the finger lifts — not per pan update, which would write
+        // the settings file dozens of times per drag.
+        onPanEnd: (_) => unawaited(saveAllSettings()),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Speed display style (Settings → Hiển thị tốc độ): the compact
+            // chip, or the floating widget's round gauge. Same values either
+            // way — only the drawing differs.
+            if (navSpeedStyle == 'dial')
+              SpeedDialChip(
+                info: _roadInfo,
+                speedMps: _progress?.speedMps,
+                limitOverride: _effectiveSpeedLimit > 0
+                    ? _effectiveSpeedLimit
+                    : null,
+                limitSrc: _limitSourceLabel,
+                fromEsp: _espActive(),
+              )
+            else
+              RoadInfoChip(
+                info: _roadInfo,
+                loading: _roadLoading,
+                speedMps: _progress?.speedMps,
+                limitOverride: _effectiveSpeedLimit > 0
+                    ? _effectiveSpeedLimit
+                    : null,
+                // GPS source tag lives INSIDE the chip so it never overlaps
+                // the right-hand controls.
+                fromEsp: _espActive(),
+              ),
+            // The sign bar belongs to the same glance, so it travels with the
+            // chip.
+            _alertBar(),
+          ],
         ),
       ),
     );

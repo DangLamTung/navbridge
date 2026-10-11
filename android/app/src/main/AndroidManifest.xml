@@ -1,6 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Network (OSM tiles, OSRM routing, Nominatim) -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Exporting a built .ghz routing archive to Downloads. API 29+ publishes
+         it through MediaStore, which needs no permission; only Android 8-9
+         writes the public Downloads folder directly, hence maxSdkVersion. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28"/>
     <!-- Floating speed-limit/camera widget over other apps (Waze-Mod style) -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>

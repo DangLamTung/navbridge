@@ -89,18 +89,17 @@ List<LatLng> decimatePolyline(
 /// scan would accept.
 bool withinCoarseCorridor(List<LatLng> geo, LatLng p, double corridorMeters) {
   if (geo.isEmpty) return false;
-  final step = math.max(1, (geo.length / kCoarseTarget).ceil());
-  var best = double.infinity;
-  for (var i = 0; i < geo.length; i += step) {
-    // [fastDistanceMeters], not haversine: this is a ×3-loose pre-filter and
-    // its ~0.3 % error is invisible at that margin, while the trig saved here
-    // is what the per-item pass runs millions of times (the country-length
-    // preview measured 18 s with the exact distance).
-    final d = fastDistanceMeters(geo[i], p);
-    if (d < best) best = d;
-    if (best <= corridorMeters * 3) return true; // close enough — early out
+  if (geo.length == 1) {
+    return fastDistanceMeters(geo.first, p) <= corridorMeters * 3;
   }
-  return best <= corridorMeters * 3;
+  final step = math.max(1, (geo.length / kCoarseTarget).ceil());
+  final thresh = corridorMeters * 3;
+  for (var i = 0; i < geo.length - 1; i += step) {
+    final j = math.min(i + step, geo.length - 1);
+    final proj = projectOnSegment(geo[i], geo[j], p);
+    if (fastDistanceMeters(proj, p) <= thresh) return true; // close enough — early out
+  }
+  return false;
 }
 
 /// Metres from [from] (projected onto [geo]) to [target] (projected onto
@@ -126,11 +125,10 @@ double? routeMetersAhead(LatLng from, LatLng target, List<LatLng> geo) {
 /// Returns null when [p] is farther than 200 m from [geo] (not this route at
 /// all).
 double? lateralOffsetMeters(List<LatLng> geo, LatLng p) {
-  const Distance d = Distance();
   var best = double.infinity;
   for (var i = 0; i < geo.length - 1; i++) {
     final proj = projectOnSegment(geo[i], geo[i + 1], p);
-    final off = d.as(LengthUnit.Meter, proj, p);
+    final off = fastDistanceMeters(proj, p);
     if (off < best) best = off;
   }
   if (best > 200) return null;
@@ -141,20 +139,19 @@ double? lateralOffsetMeters(List<LatLng> geo, LatLng p) {
 /// [p]. Returns null if [p] is farther than 200 m from the polyline (i.e. not
 /// on the route — e.g. an object on a parallel street).
 double? nearestAlong(List<LatLng> geo, LatLng p) {
-  const Distance d = Distance();
   double bestDist = double.infinity;
   double bestCum = 0;
   double cum = 0;
   for (var i = 0; i < geo.length - 1; i++) {
     final a = geo[i];
     final b = geo[i + 1];
-    final seg = d.as(LengthUnit.Meter, a, b);
+    final seg = fastDistanceMeters(a, b);
     // Project p onto segment a-b (linear approx at city scale).
     final proj = projectOnSegment(a, b, p);
-    final off = d.as(LengthUnit.Meter, proj, p);
+    final off = fastDistanceMeters(proj, p);
     if (off < bestDist) {
       bestDist = off;
-      bestCum = cum + d.as(LengthUnit.Meter, a, proj);
+      bestCum = cum + fastDistanceMeters(a, proj);
     }
     cum += seg;
   }

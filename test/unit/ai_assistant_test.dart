@@ -108,4 +108,25 @@ void main() {
       'thời tiết Hà Nội mai thế nào',
     );
   });
+
+  test('toGeminiContents ensures strict user/model alternation and starts with user', () {
+    final a = AiAssistant.instance;
+    final messages = [
+      {'role': 'system', 'content': 'System prompt'},
+      {'role': 'assistant', 'content': 'Leading assistant should be dropped or merged'},
+      {'role': 'user', 'content': 'Câu hỏi 1'},
+      {'role': 'user', 'content': 'Câu hỏi 2 (nối tiếp)'},
+      {'role': 'assistant', 'content': 'Trả lời 1'},
+      {'role': 'assistant', 'content': 'Trả lời 2'},
+      {'role': 'user', 'content': 'Câu hỏi 3'},
+    ];
+    final gemini = a.toGeminiContentsForTest(messages);
+    expect(gemini.first['role'], 'user');
+    for (var i = 1; i < gemini.length; i++) {
+      expect(gemini[i]['role'], isNot(equals(gemini[i - 1]['role'])));
+    }
+    // Consecutive user messages were merged into single turn
+    final firstUser = gemini.first;
+    expect((firstUser['parts'] as List).length, 2);
+  });
 }

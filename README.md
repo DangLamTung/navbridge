@@ -40,7 +40,7 @@ routing, Overpass, Open-Meteo, RainViewer — no API keys required).
 - **Speed / red-light camera alerts** (phạt nguội DB) — bundled offline
   `vietnam_cameras.json` with **8,600+ enforcement points nationwide**
   (refreshed by `tool/fetch_overpass_cameras.py` /
-  `tool/fetch_police_cameras.py`, plus aggregated online traffic-camera data)
+  a local-only crawl kept out of git, plus aggregated online traffic-camera data)
 - **Road signs** (STOP, nhường đường, traffic lights, cấm vượt / cấm rẽ /
   cấm quay đầu, speed limits…) from the bundled offline Việt Nam index
   `vietnam_signs.json` — **48,600+ signs** (built by
@@ -140,7 +140,7 @@ or `~/Documents/Eink/flutter_sdk`).
 ### Data tooling
 
 - `tools/signs/build_signs.py` — rebuild `vietnam_signs.json` from OSM Overpass
-- `tool/fetch_overpass_cameras.py` / `tool/fetch_police_cameras.py` — refresh
+- `tool/fetch_overpass_cameras.py` — refresh
   the camera database (`vietnam_cameras.json`)
 - `tool/analyze_trip.py` — analyze a recorded trip
 - `tools/build_graph.sh` — build the on-device GraphHopper Việt Nam graph
@@ -158,7 +158,7 @@ keys required):
 
 | Dataset | Entries | Sources | Refresh |
 |---|---|---|---|
-| Cameras<br>`vietnam_cameras.json` | 8,618<br>(speed / violations / red-light) | police "phạt nguội" lists, OSM Overpass, Waze, online traffic-camera data | `tool/fetch_police_cameras.py` · `tool/fetch_overpass_cameras.py` |
+| Cameras<br>`vietnam_cameras.json` | 8,618<br>(speed / violations / red-light) | police "phạt nguội" lists, OSM Overpass, Waze, online traffic-camera data | `tool/fetch_overpass_cameras.py` (police lists are crawled locally, never committed) |
 | Road signs<br>`vietnam_signs.json` | 48,653 | OSM Overpass, Waze, online traffic-sign data | `tools/signs/build_signs.py` · `tools/signs/build_waze_signs.py` |
 | Speed limits<br>`vietnam_speed_limits.geojson` | 93,463 road segments<br>(real posted limits) | online navigation data | — |
 | POIs<br>`vietnam_pois.json` | 20,607 across 25 categories | OSM Overpass | — |

@@ -192,16 +192,21 @@ void main() {
     });
   });
 
-  group('manoeuvreLimitToSpeak — never a number that RISES', () {
-    test('a next-street limit below the current one is spoken', () {
-      expect(
-        manoeuvreLimitToSpeak(
-          nextStreetLimit: 30,
-          currentLimit: 50,
-          namesNextStreet: true,
-        ),
-        30,
+  group('manoeuvreLimitToSpeak — a number not yet in force is the NEXT one', () {
+    test('a next-street limit below the current one is said as NEXT', () {
+      // A TIGHTENING is not in force yet either: the car is still on the 50 road
+      // when the driver hears about the 30. It used to be phrased "Tốc độ tối đa
+      // 30 km/h" (as if already in force), which both mis-stated it and armed the
+      // change-announcer's 45 s "already said" window — so the drop was never
+      // voiced once it arrived. Measured 2026-10-08: 4/4 drops silent, 4/4 rises
+      // announced, i.e. "turn from 60 to 50 street … it keeps 60 km".
+      final lim = manoeuvreLimitToSpeak(
+        nextStreetLimit: 30,
+        currentLimit: 50,
+        namesNextStreet: true,
       );
+      expect(lim, (kmh: 30, isNext: true));
+      expect(manoeuvreLimitPhrase(lim), ' Tốc độ tiếp theo là 30 km/h.');
     });
 
     test('an EQUAL next-street limit is spoken', () {
@@ -211,22 +216,24 @@ void main() {
           currentLimit: 50,
           namesNextStreet: true,
         ),
-        50,
+        (kmh: 50, isNext: false),
       );
     });
 
-    test('a next-street limit ABOVE the current one is silence (Ấp Bắc)', () {
+    test('a next-street limit ABOVE the current one is said as NEXT (Ấp Bắc)', () {
       // 2026-09-29: riding 50 km/h Ấp Bắc the callout ended "… rẽ trái vào Cộng
       // Hòa … Tốc độ tối đa 60 km/h" and the driver heard it as Ấp Bắc's own
-      // limit. A RISING number is the change announcer's job.
-      expect(
-        manoeuvreLimitToSpeak(
-          nextStreetLimit: 60,
-          currentLimit: 50,
-          namesNextStreet: true,
-        ),
-        0,
+      // limit — the fix then was SILENCE. 2026-10-08: "say 50 km on the next
+      // only is distracting, add some line like tốc độ tiếp theo là 50 km/h" →
+      // the number is spoken again, but flagged as the NEXT one, which is what
+      // the phrase does (see manoeuvreLimitPhrase below).
+      final lim = manoeuvreLimitToSpeak(
+        nextStreetLimit: 60,
+        currentLimit: 50,
+        namesNextStreet: true,
       );
+      expect(lim, (kmh: 60, isNext: true));
+      expect(manoeuvreLimitPhrase(lim), ' Tốc độ tiếp theo là 60 km/h.');
     });
 
     test('no road named → the road under the car is the useful number', () {
@@ -236,7 +243,7 @@ void main() {
           currentLimit: 50,
           namesNextStreet: false,
         ),
-        50,
+        (kmh: 50, isNext: false),
       );
       expect(
         manoeuvreLimitToSpeak(
@@ -244,7 +251,7 @@ void main() {
           currentLimit: 0,
           namesNextStreet: false,
         ),
-        0,
+        (kmh: 0, isNext: false),
       );
     });
 
@@ -255,7 +262,7 @@ void main() {
           currentLimit: 0,
           namesNextStreet: true,
         ),
-        60,
+        (kmh: 60, isNext: false),
       );
       expect(
         manoeuvreLimitToSpeak(
@@ -263,8 +270,22 @@ void main() {
           currentLimit: 50,
           namesNextStreet: true,
         ),
-        0,
+        (kmh: 0, isNext: false),
       );
+    });
+
+    test('the phrase: in force vs next, and nothing when there is no number', () {
+      expect(
+        manoeuvreLimitPhrase((kmh: 50, isNext: false)),
+        ' Tốc độ tối đa 50 km/h.',
+      );
+      expect(
+        manoeuvreLimitPhrase((kmh: 50, isNext: true)),
+        ' Tốc độ tiếp theo là 50 km/h.',
+      );
+      expect(manoeuvreLimitPhrase((kmh: 0, isNext: false)), '',
+          reason: 'a wrong number is worse than none');
+      expect(manoeuvreLimitPhrase((kmh: 0, isNext: true)), '');
     });
   });
 }

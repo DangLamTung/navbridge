@@ -146,6 +146,26 @@ class AppSettings {
   ///            number) with the limit sign overlapping it.
   final String navSpeedStyle;
 
+  /// How many upcoming hazards the nav alert bar shows — signs AND cameras
+  /// merged in route order. 0 hides the bar; 3 (default) is the most that fits
+  /// beside the speed island on a phone.
+  final int alertBarCount;
+
+  /// Where the turn banner sits while navigating: false = top (default),
+  /// true = bottom edge, the layout riders expect from Google Maps / Waze.
+  final bool navBannerBottom;
+
+  /// Where the speed island (speed chip + sign bar) sits on the nav screen,
+  /// in logical pixels. A negative x means "never dragged" → default spot.
+  final double speedIslandX;
+  final double speedIslandY;
+
+  /// How far the follow camera looks PAST the car, as a fraction of the
+  /// visible viewport — this is where the car arrow sits vertically:
+  /// 0 = dead centre (default), ~0.10 = lower third (Google-Maps framing),
+  /// ~0.22 = near the bottom edge. See [carScreenAnchor] in offline_tiles.dart.
+  final double carScreenAnchor;
+
   const AppSettings({
     this.forceOffline = false,
     this.dataSource = 'osm',
@@ -167,7 +187,7 @@ class AppSettings {
     this.voiceBoostMax = 0.7,
     this.ttsVoiceName = '',
     this.ttsVoiceLocale = 'vi-VN',
-    this.voicePack = 'voice_vn_fast',
+    this.voicePack = 'voice_vn_hanoi_quyphai',
     this.bleAutoConnect = true,
     this.lastBleMac = '',
     this.lastBleName = '',
@@ -182,6 +202,11 @@ class AppSettings {
     this.aiDeepSeekModel = '',
     this.aiWebSearch = true,
     this.navSpeedStyle = 'dial',
+    this.alertBarCount = 3,
+    this.navBannerBottom = false,
+    this.speedIslandX = -1,
+    this.speedIslandY = -1,
+    this.carScreenAnchor = 0.0,
   });
 
   Map<String, dynamic> toJson() => {
@@ -194,6 +219,11 @@ class AppSettings {
     'cameraAlerts': cameraAlerts,
     'gpsFilter': gpsFilter,
     'navSpeedStyle': navSpeedStyle,
+    'alertBarCount': alertBarCount,
+    'navBannerBottom': navBannerBottom,
+    'speedIslandX': speedIslandX,
+    'speedIslandY': speedIslandY,
+    'carScreenAnchor': carScreenAnchor,
     'radar': radar,
     'pipAspect': pipAspect,
     'ridingMode': ridingMode,
@@ -258,6 +288,11 @@ class AppSettings {
     String? aiDeepSeekModel,
     bool? aiWebSearch,
     String? navSpeedStyle,
+    int? alertBarCount,
+    bool? navBannerBottom,
+    double? speedIslandX,
+    double? speedIslandY,
+    double? carScreenAnchor,
   }) {
     return AppSettings(
       forceOffline: forceOffline ?? this.forceOffline,
@@ -269,6 +304,11 @@ class AppSettings {
       cameraAlerts: cameraAlerts ?? this.cameraAlerts,
       gpsFilter: gpsFilter ?? this.gpsFilter,
       navSpeedStyle: navSpeedStyle ?? this.navSpeedStyle,
+      alertBarCount: alertBarCount ?? this.alertBarCount,
+      navBannerBottom: navBannerBottom ?? this.navBannerBottom,
+      speedIslandX: speedIslandX ?? this.speedIslandX,
+      speedIslandY: speedIslandY ?? this.speedIslandY,
+      carScreenAnchor: carScreenAnchor ?? this.carScreenAnchor,
       radar: radar ?? this.radar,
       pipAspect: pipAspect ?? this.pipAspect,
       ridingMode: ridingMode ?? this.ridingMode,
@@ -313,11 +353,14 @@ String ttsVoiceLocale = 'vi-VN';
 /// Active pre-recorded voice pack (folder under `assets/audio/`). Empty =
 /// system TTS only. `SoundAlerts` reads this to pick which clips to play.
 ///
-/// `voice_vn_fast` is the fastest Vietnamese pack (the shortest clip per phrase
-/// merged from the Waze mod's four VN packs — see tools/build_voice_pack_vn.py).
-/// `voice_thai_ngoc_bich` was the old default and is ~14% slower; settings
-/// saved with it are migrated on load.
-String voicePack = 'voice_vn_fast';
+/// `voice_vn_hanoi_quyphai` is the shipped default: a cloned Vietnamese voice
+/// (Cloud TTS voice `voice_580d1874-…`, 82 clips) that speaks the speed-limit
+/// announcements. The other packs stay selectable — `voice_vn_fast` is the
+/// merged Waze-mod pack (shortest clip per phrase, see
+/// tools/build_voice_pack_vn.py) and `voice_thai_ngoc_bich` was the default
+/// before it. Both of those were only ever DEFAULTS, so settings saved with
+/// them are migrated on load (see [loadSettings]).
+String voicePack = 'voice_vn_hanoi_quyphai';
 
 /// Cap on the media-stream volume pushed during an announcement's loudness
 /// boost (see [voiceBoostMax] on [AppSettings]).
@@ -396,12 +439,18 @@ Future<AppSettings> _loadSettingsOnce() async {
     final type = (j['lastBleType'] ?? 'auto') as String;
     final voiceName = (j['ttsVoiceName'] ?? '') as String;
     final voiceLocale = (j['ttsVoiceLocale'] ?? 'vi-VN') as String;
-    final rawPack = (j['voicePack'] ?? 'voice_vn_fast') as String;
-    // Migrate the old default: `voice_thai_ngoc_bich` was the only bundled
-    // pack before `voice_vn_fast` existed, so anybody still on it never chose
-    // it deliberately — move them to the faster merged pack (14% less speech,
-    // and the overspeed warning drops 2.74 s -> 1.63 s).
-    final pack = rawPack == 'voice_thai_ngoc_bich' ? 'voice_vn_fast' : rawPack;
+    final rawPack = (j['voicePack'] ?? 'voice_vn_hanoi_quyphai') as String;
+    // Migrate the two older DEFAULTS: `voice_thai_ngoc_bich` was the only
+    // bundled pack before `voice_vn_fast` existed, and `voice_vn_fast` was the
+    // default until the cloned pack replaced it — anybody still on either never
+    // chose it deliberately (user, 2026-10-08: "still using the voice from tts
+    // default" — the pack was bundled but never selected, so it was never
+    // heard). NOTE: because this rewrites on every load, re-picking one of the
+    // two old packs by hand will be migrated again — the same caveat the
+    // thai_ngoc_bich rule already had.
+    final pack = (rawPack == 'voice_thai_ngoc_bich' || rawPack == 'voice_vn_fast')
+        ? 'voice_vn_hanoi_quyphai'
+        : rawPack;
     final boostMax = ((j['voiceBoostMax'] ?? 0.7) as num).toDouble().clamp(
       0.0,
       1.0,
@@ -448,6 +497,11 @@ Future<AppSettings> _loadSettingsOnce() async {
       cameraAlerts: (j['cameraAlerts'] ?? true) as bool,
       gpsFilter: (j['gpsFilter'] ?? true) as bool,
       navSpeedStyle: (j['navSpeedStyle'] ?? 'dial') as String,
+      alertBarCount: (j['alertBarCount'] ?? 3) as int,
+      navBannerBottom: (j['navBannerBottom'] ?? false) as bool,
+      speedIslandX: ((j['speedIslandX'] ?? -1) as num).toDouble(),
+      speedIslandY: ((j['speedIslandY'] ?? -1) as num).toDouble(),
+      carScreenAnchor: ((j['carScreenAnchor'] ?? 0.0) as num).toDouble(),
       radar: (j['radar'] ?? false) as bool,
       pipAspect: (rawPip == 'portrait' || rawPip == 'landscape')
           ? '34'

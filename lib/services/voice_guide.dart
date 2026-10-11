@@ -14,9 +14,30 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:navbridge/core/settings.dart'
     show ttsVoiceName, ttsVoiceLocale, voiceBoostMax, ttsSpeechRate, ttsPitch;
 import 'package:navbridge/services/offline_tiles.dart' show voiceVolume;
+import 'package:navbridge/services/sound_alerts.dart' show SoundAlerts;
 
 /// What kind of announcement a queue entry is.
 enum _AnnKind { tts, clip }
+
+/// AUDIO mute — silence the speaker WITHOUT stopping the guidance.
+///
+/// Deliberately separate from the nav screen's `_voiceOn` toggle. That one is a
+/// GUIDANCE switch: `_maybeSpeakManeuver` / `_maybeSpeakLimitChange` /
+/// `_maybeSpeakCamera` all return on `if (!_voiceOn) return;` BEFORE they log,
+/// so turning it off hides the announcement from the trip file as well. This
+/// flag is checked at the last moment, inside the speaker itself, so every
+/// sentence still goes to the log and only the sound is dropped — which is what
+/// makes a replayed drive worth watching with the volume off (user, 2026-10-08:
+/// "add a mute button").
+bool voiceMuted = false;
+
+/// Set [voiceMuted] and, when muting, cut whatever is playing right now —
+/// otherwise the sentence already in flight would finish after the tap and the
+/// button would look broken.
+Future<void> setVoiceMuted(bool muted) async {
+  voiceMuted = muted;
+  if (muted) await VoiceGuide.instance.stop();
+}
 
 /// One queued announcement — either a TTS sentence or a pre-recorded clip.
 class _Announcement {
@@ -188,8 +209,20 @@ class VoiceGuide {
   /// Speak [text]. By default this QUEUES behind whatever is playing, so the
   /// running sentence always finishes. Only a message at [priorityHigh] or
   /// above interrupts one already in progress.
+  ///
+  /// When a pre-recorded studio voice pack is active, exact matches in the
+  /// vocabulary catalog (traffic signs, cameras, alerts) play the studio audio clip
+  /// automatically with zero latency instead of synthesized TTS.
   Future<void> speak(String text, {int priority = priorityNormal}) async {
+    // MUTED: drop the audio at the speaker, not at the caller — every caller
+    // logs its sentence BEFORE it gets here, so the trip file stays complete.
+    if (voiceMuted) return;
     if (!_ready || text.isEmpty) return;
+    final clip = SoundAlerts.clipForPhrase(text);
+    if (clip != null) {
+      _enqueue(_Announcement.clip(clip, priority));
+      return;
+    }
     _enqueue(_Announcement.tts(text, priority));
   }
 
@@ -198,6 +231,7 @@ class VoiceGuide {
   /// for the speed-limit announcements. Returns false when the voice engine is
   /// not ready, so the caller can fall back to the system TTS.
   Future<bool> speakClip(String asset, {int priority = priorityNormal}) async {
+    if (voiceMuted) return false;
     if (!_ready || asset.isEmpty) return false;
     _enqueue(_Announcement.clip(asset, priority));
     return true;
@@ -294,6 +328,7 @@ class VoiceGuide {
   /// AI assistant reading a long answer aloud sentence-by-sentence). Now just a
   /// low-priority enqueue into the shared queue. Call [stop] to flush.
   Future<void> speakQueued(String text) async {
+    if (voiceMuted) return;
     if (!_ready || text.isEmpty) return;
     _enqueue(_Announcement.tts(text, priorityLow));
   }

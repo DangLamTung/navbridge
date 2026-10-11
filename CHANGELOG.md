@@ -4,6 +4,49 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
+## 1.1.4 — 2026-10-11 (build 4011)
+
+**A one-way street with one lane is 50, not 60.** Thông tư 38/2024 names
+"đường một chiều một làn" as its own 50 km/h case, but the road-form test read
+the inferred `divided` flag first, so a way tagged `oneway` + `lanes=1` still
+counted as a đường đôi and showed 60 in a built-up area. A direct one-way
+one-lane tag now outranks that inference, which is itself only guessed from an
+opposite carriageway of the same street running alongside. Recorded on Đường
+Tôn Thất Hiệp, where the attributes flip mid-street and the dial jumped 50 → 60
+on the same road; the same signature appeared on Đường D2 and Lê Đại Hành.
+
+**One-way signs, from the Waze segment data.** The sign pack gains 17,805
+`one_way` rows (59,200 → 77,005) chained from the segment one-way flags, one
+sign at each end of every one-way run of 85 m or more. They are drawn on the
+map and deliberately not announced — a spoken "one-way" at every junction is
+noise. The published pack gzips to 889 KB.
+
+**A held limit can no longer outlive the road it came from.** A lookup miss
+used to fall through a guard that was tautological on a miss, so the previous
+segment's value could stand indefinitely. The value is now held only while the
+car is still on the same road and within 300 m, and a value may not change
+until two consecutive fixes agree on it — which stops the dial flickering
+through the attributes that flip at intersections.
+
+**The data updater actually updates.** The app's default data source is the
+`offline-data-latest` release asset, not the bundled files, and that release
+had 404'd since 2026-10-03 — so every pack since reached the phone only inside a
+new APK. Published and verified live.
+
+### Internal
+
+- Track simulation: a route plus a modelled GPS receiver (lateral scatter,
+speed/heading jitter, cold start, degraded and lost fixes) driving the real
+`_onGpsFix` pipeline, so the algorithm can be tested without a recording.
+- The voice-callout audit no longer reports the 1 Hz log artifact as a wrong
+street name: a callout fired at an intersection was being compared against the
+fix *after* the car had crossed. Only the pre-callout fix is accepted, so the
+real defect (naming the road ahead) cannot hide.
+- Offline graph source/candidate selection, geo-index build, and new sign,
+camera, resident-coverage and limit-chain audit tools.
+- Sign-pack backups, downloaded shapefile sources and pre-built `.pmtiles`
+archives are now git-ignored.
+
 ## 1.1.3 — 2026-09-30 (build 4008)
 
 **The posted limit is read once, as one answer.** The cascade (Waze per-segment →

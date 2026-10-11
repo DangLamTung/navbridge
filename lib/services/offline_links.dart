@@ -14,7 +14,11 @@ import 'nav_map_store.dart' show navMapName;
 import 'offline_router.dart' show resolveGraphUrl;
 import 'terrain.dart' show kTerrainTileUrl;
 import 'vietmap_config.dart'
-    show dataUpdateBaseUrl, graphDownloadBaseUrl, navMapDownloadBaseUrl;
+    show
+        dataUpdateBaseUrl,
+        effectiveDataUpdateUrl,
+        graphDownloadBaseUrl,
+        navMapDownloadBaseUrl;
 
 /// One offline data source: what it is, where it comes from, how to fetch it.
 class OfflineLink {
@@ -69,17 +73,13 @@ List<OfflineLink> offlineDownloadLinks() => [
         : '$navMapDownloadBaseUrl/$navMapName',
     configured: navMapDownloadBaseUrl.isNotEmpty,
   ),
-  // 3. Auto-updated traffic point data (cameras + road signs) — self-hosted.
+  // 3. Auto-updated traffic point data (cameras + road signs + speed limits).
   OfflineLink(
     title: 'Camera & biển báo giao thông',
-    description: dataUpdateBaseUrl.isEmpty
-        ? 'Chưa cấu hình DATA_URL khi build. Máy chủ cần version.json + '
-              'vietnam_cameras.json + vietnam_signs.json (cùng schema với '
-              'assets/offline_map/).'
-        : 'Cùng schema với assets/offline_map/; app tự tải khi có bản mới.',
-    url: dataUpdateBaseUrl.isEmpty
-        ? 'Chưa cấu hình DATA_URL (chỉ dùng dữ liệu đi kèm app)'
-        : dataUpdateBaseUrl,
+    description:
+        'Máy chủ cập nhật dữ liệu (version.json, cameras, signs, speed limits). '
+        'App tự động kiểm tra và tải khi có bản phát hành mới.',
+    url: effectiveDataUpdateUrl,
     configured: dataUpdateBaseUrl.isNotEmpty,
   ),
   // 4. Offline 3D terrain (Terrarium DEM) — free, no key, downloaded per region.

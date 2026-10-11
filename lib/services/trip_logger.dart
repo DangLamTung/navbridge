@@ -85,6 +85,13 @@ class TripFix {
   /// applied (50 hai chiều / 60 đường đôi) instead of the rural class default.
   final bool? urban;
 
+  /// The ROUTE's own street name for the step the car is in at this fix (''
+  /// when the engine has none). Logged next to [streetName] — the name the
+  /// road matcher PUBLISHED — because the two disagreeing is the whole
+  /// "I was on Trường Chinh but the chip said Hẻm 415" class of report, and
+  /// without both names a recording cannot prove which side was wrong.
+  final String? routeName;
+
   TripFix({
     required this.time,
     required this.lat,
@@ -104,6 +111,7 @@ class TripFix {
     this.lanes,
     this.divided,
     this.urban,
+    this.routeName,
   });
 
   Map<String, dynamic> toTakeout() {
@@ -129,6 +137,7 @@ class TripFix {
       if (lanes != null) 'lanes': lanes,
       if (divided != null) 'divided': divided,
       if (urban != null) 'urban': urban,
+      if (routeName != null) 'routeName': routeName,
       'activity': [
         {
           'timestampMs': ms,
@@ -139,6 +148,73 @@ class TripFix {
       ],
     };
   }
+}
+
+/// One RAW fix: the position EXACTLY as the OS delivered it, BEFORE the app's
+/// own filtering touches it, plus what the filter decided about it.
+///
+/// Why this exists: the `locations` list only holds ACCEPTED fixes, so the
+/// app's own outlier gate DELETES the evidence of a bad fix before it is
+/// written. A report like "on Trường Chinh the GPS was totally wrong" was
+/// therefore unauditable — the raw numbers were gone. Every incoming fix is
+/// recorded here, accepted or not.
+class TripRawFix {
+  /// The FIX's own timestamp (not wall-clock — the receiver batch-delivers).
+  final DateTime time;
+  final double lat;
+  final double lng;
+  final double accuracyM;
+  final double speedMps;
+  final double? heading;
+
+  /// True when the fix reached the map/engine; false when the gate dropped it.
+  final bool accepted;
+
+  /// False when the user turned the GPS filter off (raw mode: nothing dropped).
+  final bool filterOn;
+
+  /// Why a fix was rejected: 'accuracy' | 'jump'. Null when accepted.
+  final String? reason;
+
+  /// Metres moved since the previous ACCEPTED fix, and the allowance the gate
+  /// applied — this is what says whether the reject was right.
+  final double? jumpM;
+  final double? allowedM;
+
+  /// True when the fix came from the ESP32 receiver's NMEA instead of the phone.
+  final bool fromEsp;
+
+  TripRawFix({
+    required this.time,
+    required this.lat,
+    required this.lng,
+    required this.accuracyM,
+    required this.speedMps,
+    this.heading,
+    required this.accepted,
+    required this.filterOn,
+    this.reason,
+    this.jumpM,
+    this.allowedM,
+    this.fromEsp = false,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'timestamp': time.toUtc().toIso8601String(),
+    'latitudeE7': (lat * 1e7).round(),
+    'longitudeE7': (lng * 1e7).round(),
+    // 1 decimal: `accuracy` in `locations` was rounded to whole metres, which
+    // cannot show a 5.4 m vs 5.6 m difference at a decision boundary.
+    'accuracy': (accuracyM * 10).round() / 10,
+    'velocity': (speedMps * 10).round() / 10,
+    if (heading != null) 'heading': heading!.round(),
+    'accepted': accepted,
+    if (!filterOn) 'filterOff': true,
+    if (reason != null) 'rejectReason': reason,
+    if (jumpM != null) 'jumpM': (jumpM! * 10).round() / 10,
+    if (allowedM != null) 'allowedM': (allowedM! * 10).round() / 10,
+    if (fromEsp) 'fromEsp': true,
+  };
 }
 
 /// A place the vehicle stopped at (Google-Timeline style). Detected when the
@@ -231,6 +307,11 @@ class TripLogger {
   /// position + time so they can be compared against the fixes / street data.
   final List<TripAnnouncement> announcements = [];
 
+  /// EVERY incoming GPS fix, raw and unfiltered, with the filter's verdict —
+  /// see [TripRawFix]. Deliberately NOT thinned like [fixes]: the point is to
+  /// keep the fixes the app threw away.
+  final List<TripRawFix> rawFixes = [];
+
   TripLogger({required this.name, DateTime? startedAt, this.spoolDir})
     : startedAt = startedAt ?? DateTime.now() {
     _spool = TripSpool(fileName: defaultFileName, dir: spoolDir);
@@ -293,18 +374,28 @@ class TripLogger {
     int? lanes,
     bool? divided,
     bool? urban,
+    String? routeName,
+    /// The FIX's own time. Defaults to the wall clock, which is right for a real
+    /// drive (they are the same thing) and WRONG for a simulation played faster
+    /// than real time: at 8× the interval test below saw fixes 125 ms apart and
+    /// thinned them to one per WALL second, so the recording held 1 fix per 8 s
+    /// of driving (measured 2026-10-08: 24 fixes for a 189-fix drive, while
+    /// `rawFixes` held all 189). The algorithm measures every cadence in fix
+    /// time (`nav_clock.dart`) for exactly this reason; the trip log has to
+    /// agree, or a fast run is not comparable to a real one.
+    DateTime? at,
   }) {
+    final now = at ?? DateTime.now();
     if (fixes.isNotEmpty) {
       final last = fixes.last;
       final moved = distanceMeters(LatLng(last.lat, last.lng), pos);
-      if (DateTime.now().difference(last.time) < _minInterval &&
-          moved < _minDistance) {
+      if (now.difference(last.time) < _minInterval && moved < _minDistance) {
         return; // too soon and too close — skip
       }
     }
     fixes.add(
       TripFix(
-        time: DateTime.now(),
+        time: now,
         lat: pos.latitude,
         lng: pos.longitude,
         accuracyM: accuracyM,
@@ -322,6 +413,7 @@ class TripLogger {
         lanes: lanes,
         divided: divided,
         urban: urban,
+        routeName: routeName,
       ),
     );
     // Track for place (stop) detection.
@@ -329,6 +421,42 @@ class TripLogger {
     // Continuous write: this fix is on disk NOW, so a kill / crash / battery
     // pull mid-drive loses at most the last second instead of the whole drive.
     _spool.add('f', fixes.last.toTakeout());
+  }
+
+  /// Record EVERY raw GPS fix — accepted or rejected — with what the filter
+  /// decided. The `locations` list is a filtered, thinned view (1 s / 5 m,
+  /// gate-approved only); this is the ground truth of what the receiver said.
+  void addRawFix({
+    required DateTime time,
+    required double lat,
+    required double lng,
+    required double accuracyM,
+    required double speedMps,
+    double? heading,
+    required bool accepted,
+    required bool filterOn,
+    String? rejectReason,
+    double? jumpM,
+    double? allowedM,
+    bool fromEsp = false,
+  }) {
+    rawFixes.add(
+      TripRawFix(
+        time: time,
+        lat: lat,
+        lng: lng,
+        accuracyM: accuracyM,
+        speedMps: speedMps,
+        heading: heading,
+        accepted: accepted,
+        filterOn: filterOn,
+        reason: rejectReason,
+        jumpM: jumpM,
+        allowedM: allowedM,
+        fromEsp: fromEsp,
+      ),
+    );
+    _spool.add('r', rawFixes.last.toJson());
   }
 
   /// Record a voice announcement at [pos] (the car's current position).
@@ -463,6 +591,10 @@ class TripLogger {
     ],
     'places': [for (final p in places) p.toJson()],
     'announcements': [for (final a in announcements) a.toJson()],
+    // Only when present, so trips recorded before this existed (and every test
+    // fixture) keep their exact previous shape.
+    if (rawFixes.isNotEmpty)
+      'rawFixes': [for (final r in rawFixes) r.toJson()],
   };
 
   String get defaultFileName {
@@ -637,6 +769,7 @@ Map<String, dynamic>? decodeSpoolFile(File f) {
   final fixes = <Map<String, dynamic>>[];
   final places = <Map<String, dynamic>>[];
   final announcements = <Map<String, dynamic>>[];
+  final rawFixes = <Map<String, dynamic>>[];
   for (final raw in f.readAsStringSync().split('\n')) {
     final line = raw.trim();
     if (line.isEmpty) continue;
@@ -655,6 +788,8 @@ Map<String, dynamic>? decodeSpoolFile(File f) {
         places.add(body);
       case 'a':
         announcements.add(body);
+      case 'r':
+        rawFixes.add(body);
     }
   }
   if (fixes.length < 2) return null; // same bar as [TripLogger.hasEnoughData]
@@ -665,6 +800,7 @@ Map<String, dynamic>? decodeSpoolFile(File f) {
     ],
     'places': places,
     'announcements': announcements,
+    if (rawFixes.isNotEmpty) 'rawFixes': rawFixes,
     // Marks a salvaged trip, so a viewer/tool can say so instead of pretending
     // the drive ended where the app was killed.
     'recovered': true,

@@ -132,6 +132,24 @@ class WeatherTimeBar extends StatelessWidget {
                 onPressed: onRefresh,
                 tooltip: 'Cập nhật',
               ),
+            // Close (✕) — turns the layer OFF and so takes this bar away.
+            // THIS WAS MISSING: [onClose] was accepted (and the page passes
+            // `_toggleRadar`) but no button ever rendered it, so once the radar
+            // bar appeared there was no way to close it — you had to reopen the
+            // layers menu and find the radar row again.
+            if (onClose != null)
+              IconButton(
+                icon: const Icon(
+                  Icons.close,
+                  size: 16,
+                  color: Color(0xFF5F6368),
+                ),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+                onPressed: onClose,
+                tooltip: 'Tắt lớp',
+              ),
           ],
         ),
       ),

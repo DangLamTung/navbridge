@@ -65,6 +65,32 @@ Future<bool> installOfflineDataFile(String sourceFilePath) async {
   }
 }
 
+/// Load user-persisted custom DATA_URL if previously saved.
+Future<String> loadCustomDataUrl() async {
+  try {
+    final dir = await offlineDataDir();
+    final f = File('${dir.path}/custom_data_url.txt');
+    if (await f.exists()) {
+      return (await f.readAsString()).trim();
+    }
+  } catch (_) {}
+  return '';
+}
+
+/// Persist custom DATA_URL to disk (or remove if empty).
+Future<void> saveCustomDataUrl(String url) async {
+  try {
+    final dir = await offlineDataDir();
+    final f = File('${dir.path}/custom_data_url.txt');
+    final clean = url.trim();
+    if (clean.isEmpty) {
+      if (await f.exists()) await f.delete();
+    } else {
+      await f.writeAsString(clean, flush: true);
+    }
+  } catch (_) {}
+}
+
 /// Read an offline data file, preferring an auto-updated copy from the server
 /// over the one bundled in the APK.
 ///

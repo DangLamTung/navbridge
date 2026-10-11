@@ -16,8 +16,9 @@
 ///    VN expressways.
 /// 2. **Vietmap** — when `dataSource == 'vietmap'` and online, car + motorbike
 ///    only (VN-native, live congestion).
-/// 3. **GraphHopper** — the on-device graph, car only, offline. Used whenever
-///    `routingEngine != 'osrm'`.
+/// 3. **GraphHopper** — the on-device graph, offline. It carries a CAR profile
+///    only, so a motorbike route is computed on car roads (see
+///    [resolveRouteChain]). Used whenever `routingEngine != 'osrm'`.
 /// 4. **OSRM** — online last resort (public server or self-hosted), all
 ///    profiles. Skipped when `forceOffline` (the user demanded no network) or
 ///    when the engine is pinned to graphhopper.
@@ -74,7 +75,7 @@ extension RouteProviderX on RouteProvider {
     RouteProvider.vietmap =>
       'Việt Nam, có kẹt xe. Tránh cao tốc/phà: KHÔNG (bỏ qua).',
     RouteProvider.graphhopper =>
-      'Ngoại tuyến trên máy (chỉ ô tô). Tránh cao tốc/phà: có.',
+      'Ngoại tuyến trên máy (xe máy đi trên đồ thị ô tô). Tránh cao tốc/phà: có.',
     RouteProvider.osrm => 'Trực tuyến dự phòng. Tránh cao tốc/phà: có.',
   };
 
@@ -87,7 +88,8 @@ extension RouteProviderX on RouteProvider {
     // (DRIVE/TWO_WHEELER). Walking never uses highways, so nothing is sent.
     RouteProvider.google => profile != RouteProfile.walking,
     RouteProvider.vietmap => false, // no exclusion parameter in route v4
-    RouteProvider.graphhopper => profile == RouteProfile.car,
+    RouteProvider.graphhopper =>
+      profile == RouteProfile.car || profile == RouteProfile.motorbike,
     RouteProvider.osrm => profile != RouteProfile.motorbike,
   };
 
@@ -95,7 +97,8 @@ extension RouteProviderX on RouteProvider {
   bool canAvoidFerry(RouteProfile profile) => switch (this) {
     RouteProvider.google => profile != RouteProfile.walking,
     RouteProvider.vietmap => false,
-    RouteProvider.graphhopper => profile == RouteProfile.car,
+    RouteProvider.graphhopper =>
+      profile == RouteProfile.car || profile == RouteProfile.motorbike,
     RouteProvider.osrm => true,
   };
 }
@@ -119,7 +122,14 @@ List<RouteProvider> resolveRouteChain(RouteProfile profile) {
       (profile == RouteProfile.car || profile == RouteProfile.motorbike)) {
     chain.add(RouteProvider.vietmap);
   }
-  if (profile == RouteProfile.car && routingEngine != 'osrm') {
+  // The on-device archive is built from a CAR profile only — it holds no
+  // motorcycle encodings — so a motorbike route is computed on car roads and may
+  // reach expressways a bike is banned from. That is a deliberate approximation
+  // (agreed 2026-09-30): the alternative is NO offline routing for the default
+  // vehicle, since `vehicleType` defaults to 'motorbike'. A real motorcycle
+  // profile needs the graph rebuilt with one.
+  if ((profile == RouteProfile.car || profile == RouteProfile.motorbike) &&
+      routingEngine != 'osrm') {
     chain.add(RouteProvider.graphhopper);
   }
   if (!forceOffline && routingEngine != 'graphhopper') {

@@ -109,26 +109,54 @@ class LimitChangeAnnouncer {
   }
 }
 
-/// The limit to attach to a manoeuvre callout, or 0 to say nothing.
+/// The speed number a manoeuvre callout should carry, and how to phrase it.
 ///
-/// The number belongs to the road being turned INTO ([nextStreetLimit]) — that
-/// is what the sentence names. But it is spoken ONLY when it does not RISE
-/// above the road under the car: a higher number reads as "you may go faster
-/// now" while the driver is still on the slower road. User, 2026-09-29: riding
-/// 50 km/h Ấp Bắc the callout ended "… rẽ trái vào Cộng Hòa … Tốc độ tối đa
-/// 60 km/h" (Cộng Hòa's limit) and was heard as "Ấp Bắc is 60". A RISING limit
-/// is the change announcer's job — it says it when the car actually reaches
-/// that road, so nothing is lost.
+/// ⭐ It is no longer SILENT when the number RISES. It used to be, because a
+/// rising number read as "this road is 60" while the car was still on a 50 road
+/// (user, 2026-09-29: riding 50 on Ấp Bắc, "… rẽ trái vào Cộng Hòa … Tốc độ tối
+/// đa 60 km/h" was heard as Ấp Bắc = 60). The cure is the WORDING, not silence:
+/// a limit that is not in force yet is announced as the NEXT one — "Tốc độ
+/// tiếp theo là 60 km/h" (user, 2026-10-08: "say 50 km on the next only is
+/// distracting, add some line like tốc độ tiếp theo là 50 km/h").
 ///
-/// [namesNextStreet] false means the callout does not name a road to turn into,
-/// so the useful number is the road under the car.
-int manoeuvreLimitToSpeak({
+/// [isNext] is true when the number belongs to the road being ENTERED and is
+/// not the one in force under the car (it differs — rising or tightening) — it
+/// applies from the corner onward. Phrase it "Tốc độ tiếp theo là X km/h";
+/// otherwise "Tốc độ tối đa X km/h" (already in force). [kmh] 0 = say nothing.
+({int kmh, bool isNext}) manoeuvreLimitToSpeak({
   required int nextStreetLimit,
   required int currentLimit,
   required bool namesNextStreet,
 }) {
-  if (!namesNextStreet) return currentLimit > 0 ? currentLimit : 0;
-  if (nextStreetLimit <= 0) return 0;
-  if (currentLimit <= 0) return nextStreetLimit; // nothing to compare against
-  return nextStreetLimit <= currentLimit ? nextStreetLimit : 0;
+  // No road named → the useful number is the road under the car, already in
+  // force.
+  if (!namesNextStreet) {
+    return (kmh: currentLimit > 0 ? currentLimit : 0, isNext: false);
+  }
+  if (nextStreetLimit <= 0) return (kmh: 0, isNext: false);
+  // Nothing to compare against: the entered road's number, phrased normally.
+  if (currentLimit <= 0) return (kmh: nextStreetLimit, isNext: false);
+  // ⭐ A number that DIFFERS from the one in force is not yet in force — whether
+  // it rises OR tightens — so it is said as the NEXT one either way: the driver
+  // is still on the current road when they hear it.
+  //
+  // A tightening used to be phrased "Tốc độ tối đa 50 km/h", i.e. as if it were
+  // already in force. Worse, that callout also armed the change-announcer's
+  // "already said" window (45 s), so the drop was then NEVER voiced once it
+  // actually took effect. Measured on the 2026-10-08 drives: every 60→50 drop
+  // was SILENT (4/4) while every 50→60 rise was announced (4/4) — so the last
+  // number the driver had been told stayed 60, which is exactly their report
+  // "turn from 60 to 50 street … it keeps 60 km".
+  return (kmh: nextStreetLimit, isNext: nextStreetLimit != currentLimit);
+}
+
+/// The sentence fragment a manoeuvre callout ends with, or '' for none.
+///
+/// ONE number, ONE phrase — and a number that is not in force yet says so, so it
+/// can never be heard as the limit of the road under the car.
+String manoeuvreLimitPhrase(({int kmh, bool isNext}) limit) {
+  if (limit.kmh <= 0) return '';
+  return limit.isNext
+      ? ' Tốc độ tiếp theo là ${limit.kmh} km/h.'
+      : ' Tốc độ tối đa ${limit.kmh} km/h.';
 }

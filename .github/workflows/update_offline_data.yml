@@ -1,0 +1,137 @@
+name: Update Offline Data
+
+# Automatically build monthly offline navigation data (VietMap KC01, GraphHopper,
+# PMTiles vector map, Waze speed limits, cameras, and signs) and push to GitHub Releases
+# (free host with direct download URLs) and/or Google Drive.
+#
+# Triggers:
+#   * Scheduled: 1st of every month at 03:00 UTC (matches VietMap KC01 release schedule)
+#   * Manual run (Actions -> Update Offline Data -> Run workflow)
+
+on:
+  schedule:
+    - cron: '0 3 1 * *'
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'GraphHopper region extract to build'
+        required: true
+        default: 'saigon'
+        type: choice
+        options:
+          - saigon
+          - hanoi
+          - danang
+          - vietnam
+          - skip
+      force_vietmap:
+        description: 'Force VietMap rebuild even if upstream tag unchanged'
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: 'GitHub Release tag for public hosting'
+        required: true
+        default: 'offline-data-latest'
+
+permissions:
+  contents: write
+
+jobs:
+  update_and_publish:
+    name: Build & Publish Offline Data
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Java 21 (for GraphHopper builder)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Step 1 - Crawl & build offline datasets (KC01, WME, Police CSGT)
+        env:
+          VIETMAP_API_KEY: ${{ secrets.VIETMAP_API_KEY }}
+        run: |
+          FORCE_FLAG=""
+          if [ "${{ github.event.inputs.force_vietmap }}" = "true" ]; then
+            FORCE_FLAG="--force"
+          fi
+          # ⛔ The provincial-police crawl is deliberately NEVER run here. That
+          # data is policy-sensitive and must not run on a GitHub runner or
+          # reach the repository - run it locally instead
+          # (tool/fetch_police_cameras.py, see private/).
+          POLICE_FLAG=""
+          # Run pipeline: KC01 + WME + deduplication
+          ./tools/auto_update.sh $FORCE_FLAG $POLICE_FLAG || true
+
+      - name: Step 2 - Build GraphHopper offline routing graph (.ghz)
+        if: "${{ github.event.inputs.region != 'skip' }}"
+        run: |
+          REGION="${{ github.event.inputs.region || 'saigon' }}"
+          echo "Building GraphHopper graph for region: $REGION"
+          bash tools/auto_create_graph.sh "$REGION"
+
+      - name: Step 3 - Publish local release package & generate version.json
+        run: |
+          python3 tools/update_server.py --publish --force
+          ls -la update/latest/
+
+      - name: Step 4 - Push to GitHub Releases (Free Direct CDN Host)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || 'offline-data-latest' }}
+        run: |
+          TAG="${RELEASE_TAG}"
+          REPO="${{ github.repository }}"
+          echo "Publishing release assets to $REPO at tag $TAG..."
+
+          # Create release if it doesn't already exist
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --title "Offline Navigation Data ($TAG)" \
+            --notes "Automated NavBridge offline navigation datasets: GraphHopper, PMTiles, Cameras, Road Signs, Speed Limits." \
+            --clobber 2>/dev/null || true
+
+          # Upload all files from update/latest
+          FILES=(update/latest/*)
+          echo "Uploading ${#FILES[@]} assets..."
+          gh release upload "$TAG" "${FILES[@]}" --repo "$REPO" --clobber
+
+      - name: Step 5 - Optional Google Drive Sync via rclone
+        env:
+          RCLONE_CONFIG_GDRIVE: ${{ secrets.RCLONE_CONFIG_GDRIVE }}
+        if: "${{ env.RCLONE_CONFIG_GDRIVE != '' }}"
+        run: |
+          echo "Installing rclone..."
+          sudo apt-get install -y rclone
+          mkdir -p ~/.config/rclone
+          echo "${RCLONE_CONFIG_GDRIVE}" > ~/.config/rclone/rclone.conf
+          echo "Syncing update/latest to Google Drive remote 'gdrive:navbridge/latest'..."
+          rclone sync update/latest gdrive:navbridge/latest --progress
+
+      - name: Step 6 - Summary of Public Download URLs
+        run: |
+          TAG="${{ github.event.inputs.release_tag || 'offline-data-latest' }}"
+          REPO="${{ github.repository }}"
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+          echo "### 🚀 NavBridge Offline Data Published Successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Configure in NavBridge Settings (or build APK with these):**" >> $GITHUB_STEP_SUMMARY
+          echo "- **DATA_URL** (Traffic & Signs auto-update): \`$BASE\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **NAVMAP_URL** (PMTiles Vector Map): \`$BASE/saigon_z16.pmtiles\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **GRAPH_URL** (GraphHopper Routing Graph): \`$BASE/routing_graph.ghz\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Direct Asset Download Links:" >> $GITHUB_STEP_SUMMARY
+          for f in update/latest/*; do
+            NAME="$(basename "$f")"
+            SIZE="$(du -h "$f" | cut -f1)"
+            echo "- [\`$NAME\`]($BASE/$NAME) ($SIZE)" >> $GITHUB_STEP_SUMMARY
+          done

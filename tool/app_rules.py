@@ -20,11 +20,10 @@ MB = {
     'motorway': 80, 'motorway_link': 60, 'trunk': 60, 'trunk_link': 50,
     'primary': 60, 'primary_link': 50, 'secondary': 60, 'secondary_link': 50,
     'tertiary': 60, 'tertiary_link': 50, 'unclassified': 50, 'residential': 50,
-    'living_street': 20, 'service': 30, 'pedestrian': 10, 'footway': 10,
-    'cycleway': 20,
+    'living_street': 50, 'service': 50, 'pedestrian': 50, 'footway': 50,
+    'cycleway': 50,
 }
-NON_MOTOR = ('motorway', 'motorway_link', 'living_street', 'service',
-             'pedestrian', 'footway', 'cycleway')
+NON_MOTOR = ('motorway', 'motorway_link')
 _ONE_WAY = ('yes', 'true', '1', '-1', 'reverse')
 
 
@@ -40,8 +39,12 @@ def statutory_motorbike(highway, oneway=None, lanes=None, divided=False,
         return base
     if urban or highway in ('residential', 'unclassified'):
         lanes_n = int(lanes) if str(lanes).isdigit() else 2
-        # đường đôi / một chiều ≥2 làn -> 60, hai chiều / 1 làn -> 50
-        is_div = bool(divided) or (_is_oneway(oneway) and lanes_n >= 2)
+        # đường đôi / một chiều ≥2 làn -> 60, hai chiều / 1 làn -> 50.
+        # A DIRECT one-way 1-lane tag outranks the `divided` inference —
+        # mirror of dividedForm() in lib/services/overpass.dart.
+        oneway_1lane = _is_oneway(oneway) and lanes_n == 1
+        is_div = (not oneway_1lane) and (
+            bool(divided) or (_is_oneway(oneway) and lanes_n >= 2))
         return 60 if is_div else 50
     return base
 
@@ -163,13 +166,43 @@ class RoadNameHysteresis:
         self.moved = 0.0
 
 
+# --- the road VALUE gate (mirror of nav_gps.dart `_gateValue`) --------------
+# The NAME-change path has had hysteresis for a long time; the VALUE had none,
+# so a road that briefly resolves with another road's class repainted the limit
+# for exactly one fix — measured 2026-10-09 on the 00:12 sim: `fix 77 hw=trunk
+# lim=60 src=city` and back to `hw=unclassified lim=50` on fix 78 (same at
+# 103/172/248). A NON-LAYER value change on an UNCHANGED name must now be
+# confirmed; LAYER values (Waze/VietMap) are never gated, because gating them
+# re-opens the 2026-09-24 "the limit changes too slowly" bug.
+VALUE_GATE_FIXES = 2
+VALUE_GATE_METERS = 15.0
+
+
+def value_sig(limit, highway, urban, src) -> str:
+    """Mirror of nav_gps.dart `_valueSig`."""
+    return f'{limit}|{highway}|{urban}|{src}'
+
+
+def value_gate_publishes(cur_sig: str, next_sig: str, *, same_name: bool,
+                         cur_from_layer: bool, next_from_layer: bool,
+                         gate: 'RoadNameHysteresis', moved_m: float) -> bool:
+    """Mirror of nav_gps.dart `_gateValue`: True => publish the new value."""
+    if not same_name or cur_from_layer or next_from_layer:
+        gate.reset()
+        return True
+    if cur_sig == next_sig:
+        gate.reset()
+        return True
+    return gate.accept(cur_sig, next_sig, moved_m)
+
+
 if __name__ == '__main__':
     # Tiny self-check of the ported rules, so a typo cannot pass silently.
     assert statutory_motorbike('residential', oneway=False) == 50
     assert statutory_motorbike('secondary', oneway='yes', lanes=2) == 60
     assert statutory_motorbike('secondary', oneway='yes', lanes=1) == 50
     assert statutory_motorbike('primary', oneway='yes', lanes=None) == 60
-    assert statutory_motorbike('service') == 30
+    assert statutory_motorbike('service') == 50
     # A posted sign is authority, capped by the vehicle's form ceiling:
     # Lũy Bán Bích — residential two-way, Waze posts 60 -> 60 (it used to show 50).
     assert sim_limit('residential', lanes=2, posted=60) == 60
@@ -182,7 +215,7 @@ if __name__ == '__main__':
     assert sim_limit('service', posted=60) == 60
     assert sim_limit('service', posted=90) == 60          # legal ceiling
     assert sim_limit('service', posted=90, urban=False) == 70
-    assert sim_limit('service') == 30                     # nothing posted
+    assert sim_limit('service') == 50                     # nothing posted: statutory 50
     # An OSM `maxspeed` tag is LAST: it may only tighten, never set or raise.
     assert sim_limit('residential', lanes=2, posted=60, source='osm') == 50
     assert sim_limit('service', posted=20, source='osm') == 20
@@ -198,5 +231,26 @@ if __name__ == '__main__':
     h = RoadNameHysteresis()
     assert h.accept('Ấp Bắc', 'Lũy Bán Bích', 4.0) is False
     assert h.accept('Ấp Bắc', 'Lũy Bán Bích', 4.0) is True
+
+    # The VALUE gate: a one-fix class flip never publishes, a persisting one does.
+    g = RoadNameHysteresis(VALUE_GATE_FIXES, VALUE_GATE_METERS)
+    sig50 = value_sig(50, 'unclassified', True, 'class')
+    sig60 = value_sig(60, 'trunk', False, 'city')
+    assert value_gate_publishes(sig50, sig60, same_name=True,
+                                cur_from_layer=False, next_from_layer=False,
+                                gate=g, moved_m=13.0) is False
+    assert value_gate_publishes(sig50, sig50, same_name=True,
+                                cur_from_layer=False, next_from_layer=False,
+                                gate=g, moved_m=13.0) is True   # back to 50
+    assert value_gate_publishes(sig50, sig60, same_name=True,
+                                cur_from_layer=False, next_from_layer=False,
+                                gate=g, moved_m=13.0) is False
+    assert value_gate_publishes(sig50, sig60, same_name=True,
+                                cur_from_layer=False, next_from_layer=False,
+                                gate=g, moved_m=13.0) is True    # confirmed
+    # A LAYER value is never gated, whatever the name does.
+    assert value_gate_publishes(sig50, sig60, same_name=True,
+                                cur_from_layer=True, next_from_layer=True,
+                                gate=g, moved_m=0.0) is True
 
     print('app_rules self-check: OK')

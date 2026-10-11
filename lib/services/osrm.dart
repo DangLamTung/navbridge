@@ -14,6 +14,18 @@ import 'package:latlong2/latlong.dart';
 
 const String osrmPublic = 'https://router.project-osrm.org';
 
+/// Override for [osrmPublic] — set once at startup when a LOCAL relay is in
+/// front of it (`?osrm=/osrm`, see `tool/sim_serve.py`).
+///
+/// ⭐ WHY THIS EXISTS. The public OSRM server sends no CORS headers, so a
+/// browser fetch to it fails and the web build cannot plan a route at all
+/// (measured 2026-10-08: `ROUTER: GraphHopper returned no route — next`, then
+/// silence, no route and no error). A same-origin relay fixes that — and the
+/// point is that the app then plans its OWN route: the request, the polyline
+/// decode and the manoeuvres are all its own work. A route supplied to the app
+/// as an already-decoded point list tests the decoder of whoever prepared it.
+String? osrmBaseOverride;
+
 /// Real-world ETA buffer: OSRM/Vietmap durations assume ideal free-flow
 /// speeds, so on real city streets (traffic, red lights, stops) the trip
 /// takes noticeably longer than the static estimate. Applied to every
@@ -94,30 +106,54 @@ class OsrmRoute {
 }
 
 /// Decode a Google/OSRM encoded polyline (precision 5).
+///
+/// ⚠ Every step here is ARITHMETIC, deliberately — `*`, `%`, `~/` — and it must
+/// stay that way. The textbook decoder accumulates with `result |= (b & 0x1f)
+/// << shift` and reads the zig-zag with `(result & 1)` / `~(result >> 1)`, and
+/// every one of those operators is 32-BIT in dart2js but 64-bit in the Dart VM.
+/// A value that needs more than 31 bits therefore survives a VM test and is
+/// silently mangled in the browser. Measured on a real OSRM body (2026-10-08):
+/// the same file decoded correctly in a VM test while the browser produced a
+/// destination of 27.917,32.643 (Egypt), with every vertex after the first ~110
+/// growing by exactly 2³²/1e5 = 42949.67296° — the signature of an accumulator
+/// that wrapped. Arithmetic on values below 2⁵³ is exact in JS, so this form is
+/// identical on both platforms (see test/unit/osrm_polyline_decode_test.dart).
 List<LatLng> decodePolyline(String encoded) {
   final points = <LatLng>[];
   var index = 0;
   var lat = 0, lng = 0;
   final len = encoded.length;
   while (index < len) {
-    var b = 0, shift = 0, result = 0;
+    var b = 0;
+    var shift = 0;
+    var result = 0;
     do {
       if (index >= len) return points; // truncated polyline — bail
       b = encoded.codeUnitAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
+      // '?'..'~' encode 0..63; anything else is not a polyline.
+      if (b < 0 || b > 0x3f) return points;
+      // Six 5-bit chunks carry 30 bits, which covers every real delta (the
+      // largest possible is 2³⁰ units = 10737 km). A seventh chunk means the
+      // input is not a polyline — and `1 << 35` would be wrong on JS anyway,
+      // so stop rather than return a coordinate built from it.
+      if (shift > 30) return points;
+      result += (b & 0x1f) * (1 << shift);
       shift += 5;
     } while (b >= 0x20);
-    final dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+    // Zig-zag, in arithmetic: odd → -(n+1)/2, even → n/2.
+    final dlat = result % 2 == 0 ? result ~/ 2 : -((result + 1) ~/ 2);
     lat += dlat;
     shift = 0;
     result = 0;
     do {
       if (index >= len) return points; // truncated polyline — bail
       b = encoded.codeUnitAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
+      if (b < 0 || b > 0x3f) return points;
+      if (shift > 30) return points;
+      result += (b & 0x1f) * (1 << shift);
       shift += 5;
     } while (b >= 0x20);
-    final dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+    final dlng = result % 2 == 0 ? result ~/ 2 : -((result + 1) ~/ 2);
     lng += dlng;
     points.add(LatLng(lat / 1e5, lng / 1e5));
   }
@@ -181,7 +217,7 @@ Future<List<OsrmRoute>> fetchOsrmRoutes(
   }
   final coords = points.map((p) => '${p.longitude},${p.latitude}').join(';');
   final base =
-      '${baseUrl ?? osrmPublic}/route/v1/$profile/'
+      '${baseUrl ?? osrmBaseOverride ?? osrmPublic}/route/v1/$profile/'
       '$coords?overview=full&geometries=polyline&steps=$steps';
   final altPart = maxAlternatives > 1
       ? '&alternatives=${maxAlternatives - 1}'
@@ -260,11 +296,66 @@ List<OsrmRoute> _parseOsrmRoutes(_RouteParseInput input) {
   ];
 }
 
+/// Parse an OSRM `route` response that came from somewhere else — the SAME
+/// parser the live client uses, so a supplied route is decoded exactly like a
+/// fetched one (polyline, legs, steps, manoeuvres).
+///
+/// Used by the track simulation (`nav_track_sim.dart`): a headless driver has
+/// no usable router (the offline graph is native, and the public OSRM server is
+/// unreachable from the browser), so the tool plans the route and hands it over.
+/// That is an INPUT, not an answer: the app still has to work out the roads, the
+/// posted limits, the signs and the announcements from the map data.
+List<OsrmRoute> parseOsrmResponse(
+  String body, {
+  LatLng fallbackManeuver = const LatLng(0, 0),
+}) {
+  try {
+    final data = jsonDecode(body);
+    if (data is! Map) return const [];
+    final routes = data['routes'] as List?;
+    if (routes == null || routes.isEmpty) return const [];
+    return [
+      for (final r in routes.cast<Map<String, dynamic>>())
+        _parseOsrmRoute(r, fallbackManeuver),
+    ];
+  } catch (_) {
+    return const [];
+  }
+}
+
 /// OSRM `exclude=` value built from the avoid flags (motorway / ferry).
 /// Returns null when nothing is excluded.
 String? osrmExclude({required bool avoidHighway, required bool avoidFerry}) {
   final parts = [if (avoidHighway) 'motorway', if (avoidFerry) 'ferry'];
   return parts.isEmpty ? null : parts.join(',');
+}
+
+/// The route's geometry: an explicit `geometry_points` array when the document
+/// carries one, else the encoded `geometry` polyline.
+///
+/// ⚠ WHY the explicit form exists. A decoded polyline is only as good as the
+/// varint reader, and that reader is NOT the same program on every platform:
+/// `decodePolyline` uses `<<` and `|`, which are 32-BIT operations in
+/// dart2js/javascript but 64-bit in the Dart VM. Measured on a real OSRM
+/// response (2026-10-08): the same file decoded correctly in a VM test and in the
+/// browser produced a DESTINATION of 27.917,32.643 — with every vertex after
+/// ~fix 110 growing by exactly 2^32/1e5 = 42949.67296 degrees, the signature of
+/// an accumulator that wrapped. So a driver that plans a route elsewhere can
+/// hand over explicit points and take the decoder out of the loop.
+List<LatLng> _geometryOf(Map<String, dynamic> r) {
+  final pts = r['geometry_points'];
+  if (pts is List) {
+    final out = <LatLng>[];
+    for (final p in pts) {
+      if (p is List && p.length >= 2) {
+        final lat = (p[0] as num).toDouble();
+        final lng = (p[1] as num).toDouble();
+        out.add(LatLng(lat, lng));
+      }
+    }
+    if (out.length >= 2) return out;
+  }
+  return decodePolyline((r['geometry'] ?? '') as String);
 }
 
 OsrmRoute _parseOsrmRoute(Map<String, dynamic> r, LatLng fallbackManeuver) {
@@ -296,7 +387,7 @@ OsrmRoute _parseOsrmRoute(Map<String, dynamic> r, LatLng fallbackManeuver) {
   return OsrmRoute(
     distance: ((r['distance'] ?? 0) as num).toDouble(),
     duration: ((r['duration'] ?? 0) as num).toDouble(),
-    geometry: decodePolyline((r['geometry'] ?? '') as String),
+    geometry: _geometryOf(r),
     steps: stepList,
     stopCumulative: stopCum,
   );
@@ -313,7 +404,7 @@ Future<LatLng?> matchGpsTrace(
   if (trace.length < 2) return null;
   final coords = trace.map((p) => '${p.longitude},${p.latitude}').join(';');
   final url =
-      '${baseUrl ?? osrmPublic}/match/v1/$profile/'
+      '${baseUrl ?? osrmBaseOverride ?? osrmPublic}/match/v1/$profile/'
       '$coords?overview=full&geometries=polyline&tidy=true';
   try {
     final res = await http

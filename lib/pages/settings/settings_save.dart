@@ -19,7 +19,12 @@ import 'package:navbridge/services/offline_tiles.dart'
         voiceVolume,
         wakeWord,
         simpleMode,
-        navSpeedStyle;
+        navSpeedStyle,
+        alertBarCount,
+        navBannerBottom,
+        speedIslandX,
+        speedIslandY,
+        carScreenAnchor;
 import 'package:navbridge/services/overlay_visibility.dart'
     show overlayEnabled, overlayLayout, overlayScale;
 import 'package:navbridge/services/vietmap_config.dart' show dataSource;
@@ -35,6 +40,11 @@ AppSettings snapshotSettings() => AppSettings(
   cameraAlerts: cameraAlerts,
   gpsFilter: gpsFilter,
   navSpeedStyle: navSpeedStyle,
+  alertBarCount: alertBarCount,
+  navBannerBottom: navBannerBottom,
+  speedIslandX: speedIslandX,
+  speedIslandY: speedIslandY,
+  carScreenAnchor: carScreenAnchor,
   radar: radarOn,
   pipAspect: pipAspect,
   ridingMode: ridingMode,

@@ -152,6 +152,11 @@ Set<String> routeRoadNames(
 /// Hysteresis for a road-name change: the new name must be proposed
 /// [confirmFixes] times, or the car must travel [confirmMeters] while it is
 /// proposed, before it replaces the name on screen.
+///
+/// ⭐ It is also used for the road's VALUE (class + posted limit) with
+/// `same: (a, b) => a == b` — the same confirmation rule applies to a number
+/// that would otherwise repaint for one fix, so the two gates share one
+/// implementation instead of drifting apart. See `_gateValue` in `nav_gps.dart`.
 class RoadNameHysteresis {
   RoadNameHysteresis({this.confirmFixes = 2, this.confirmMeters = 30});
 
@@ -179,13 +184,18 @@ class RoadNameHysteresis {
   /// i.e. exactly the flapping it exists to prevent. Observations closer
   /// together than [_minObservationGap] count once. Omitting [at] disables the
   /// guard (unit tests call it that way).
+  ///
+  /// [same] decides what counts as "no change". Defaults to [sameRoadSpelling]
+  /// (the name rule, which folds `Cộng Hòa` ⇄ `Cộng Hoà`); pass `(a, b) => a == b`
+  /// to gate an exact signature such as the road's value/class.
   bool accept({
     required String current,
     required String candidate,
     required double movedM,
     DateTime? at,
+    bool Function(String a, String b)? same,
   }) {
-    if (sameRoadSpelling(candidate, current)) {
+    if ((same ?? sameRoadSpelling)(candidate, current)) {
       reset();
       return false;
     }

@@ -44,7 +44,7 @@ OsrmRoute _straightRoute() {
 void main() {
   group('TurnByTurnEngine', () {
 
-    test('23 cases', () {
+    test('25 cases', () {
     // ---- case: positionAtDistance clamps to the polyline ends ----
     (() {
         final engine = TurnByTurnEngine(_straightRoute());
@@ -584,6 +584,129 @@ void main() {
         );
         south.snapToRoute(const LatLng(10.81, 106.6401));
         expect(south.routeBearing(), closeTo(180, 10));
+
+    })();
+
+
+    // ---- case: nextText looks PAST a short unnamed connector step ----
+    (() {
+        // A: east ~300 m → unnamed 40 m connector → B: east ~300 m.
+        // OSRM emits the connector as its own unnamed step (verified against
+        // router.project-osrm.org), so the road the driver turns INTO is the
+        // NEXT step's name, not the connector's.
+        final cornerA = const LatLng(10.82, 106.6247433);
+        final cornerB = const LatLng(10.8196408, 106.6247433);
+        final geometry = <LatLng>[
+          for (var k = 0; k <= 6; k++) LatLng(10.82, 106.62 + k * 0.0004573),
+          cornerA,
+          cornerB,
+          for (var k = 1; k <= 6; k++)
+            LatLng(10.8196408, 106.6247433 + k * 0.0004573),
+        ];
+        final route = OsrmRoute(
+          distance: 640,
+          duration: 60,
+          geometry: geometry,
+          steps: [
+            OsrmStep(
+              name: 'Đường A',
+              distance: 300,
+              duration: 30,
+              type: 'depart',
+              modifier: null,
+              maneuver: geometry.first,
+            ),
+            OsrmStep(
+              name: '', // the unnamed connector — 40 m
+              distance: 40,
+              duration: 4,
+              type: 'turn',
+              modifier: 'right',
+              maneuver: cornerA,
+            ),
+            OsrmStep(
+              name: 'Đường B',
+              distance: 300,
+              duration: 30,
+              type: 'turn',
+              modifier: 'right',
+              maneuver: cornerB,
+            ),
+            OsrmStep(
+              name: 'Đích',
+              distance: 0,
+              duration: 0,
+              type: 'arrive',
+              modifier: null,
+              maneuver: geometry.last,
+            ),
+          ],
+          stopCumulative: const [640],
+        );
+        final engine = TurnByTurnEngine(route);
+        final nav = engine.update(engine.positionAtDistance(100));
+        expect(nav.nextText, 'Đường B',
+            reason: 'the 40 m unnamed connector must be looked past');
+
+    })();
+
+
+    // ---- case: a LONG unnamed road is NOT skipped ----
+    (() {
+        // Same shape, but the unnamed leg is 500 m — a real unnamed road (a
+        // hẻm), not a connector. Naming the street after it would be wrong.
+        final cornerA = const LatLng(10.82, 106.6247433);
+        final cornerB = const LatLng(10.8154479, 106.6247433); // ~500 m south
+        final geometry = <LatLng>[
+          for (var k = 0; k <= 6; k++) LatLng(10.82, 106.62 + k * 0.0004573),
+          cornerA,
+          cornerB,
+          const LatLng(10.8154479, 106.6252006),
+        ];
+        final route = OsrmRoute(
+          distance: 850,
+          duration: 80,
+          geometry: geometry,
+          steps: [
+            OsrmStep(
+              name: 'Đường A',
+              distance: 300,
+              duration: 30,
+              type: 'depart',
+              modifier: null,
+              maneuver: geometry.first,
+            ),
+            OsrmStep(
+              name: '',
+              distance: 500,
+              duration: 50,
+              type: 'turn',
+              modifier: 'right',
+              maneuver: cornerA,
+            ),
+            OsrmStep(
+              name: 'Đường B',
+              distance: 50,
+              duration: 5,
+              type: 'turn',
+              modifier: 'right',
+              maneuver: cornerB,
+            ),
+            OsrmStep(
+              name: 'Đích',
+              distance: 0,
+              duration: 0,
+              type: 'arrive',
+              modifier: null,
+              maneuver: geometry.last,
+            ),
+          ],
+          stopCumulative: const [850],
+        );
+        final engine = TurnByTurnEngine(route);
+        final nav = engine.update(engine.positionAtDistance(100));
+        expect(nav.nextText, '',
+            reason: 'a 500 m unnamed road is a road, not a connector');
 
     })();
     });

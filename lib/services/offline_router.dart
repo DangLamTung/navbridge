@@ -42,6 +42,32 @@ class SnapResult {
   });
 }
 
+/// A `.ghz` built on the phone by [OfflineRouter.buildGraphArchive].
+class GraphArchiveResult {
+  /// Absolute path of the written archive.
+  final String path;
+
+  /// Size of the archive in bytes.
+  final int bytes;
+
+  /// Total size of the graph files that went into it — the two together say how
+  /// much space the archive costs versus the folder it duplicates.
+  final int sourceBytes;
+
+  const GraphArchiveResult({
+    required this.path,
+    required this.bytes,
+    required this.sourceBytes,
+  });
+}
+
+/// Copying the archive to Downloads needs storage permission (Android 8–9 only;
+/// on API 29+ MediaStore handles it silently). The UI asks for it and retries.
+class GraphExportNeedsPermission implements Exception {
+  @override
+  String toString() => 'Cần quyền ghi bộ nhớ để xuất tệp.';
+}
+
 class OfflineRouter {
   OfflineRouter._();
 
@@ -49,7 +75,37 @@ class OfflineRouter {
 
   bool _loaded = false;
   bool get isLoaded => _loaded;
+
+  /// True when the last load failed because the folder on the phone is a
+  /// half-written graph (no `GH` marker in `properties`) rather than absent.
+  /// The two need different advice: one is "download data", the other is
+  /// "delete this and start again".
+  bool _corrupt = false;
+  bool get graphCorrupt => _corrupt;
+
   Completer<void>? _loadCompleter;
+
+  /// Set while a `.ghz` is being built, so the native `buildProgress` calls land
+  /// on the screen that started the build. The channel is shared with routing,
+  /// so the handler must not disturb anything else.
+  void Function(int done, int total)? _archiveProgress;
+  bool _progressHandlerInstalled = false;
+
+  void _installProgressHandler() {
+    if (_progressHandlerInstalled) return;
+    _progressHandlerInstalled = true;
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'buildProgress') {
+        final m = call.arguments;
+        if (m is Map) {
+          final done = (m['done'] as num?)?.toInt() ?? 0;
+          final total = (m['total'] as num?)?.toInt() ?? 0;
+          _archiveProgress?.call(done, total);
+        }
+      }
+      return null;
+    });
+  }
 
   /// Completes once the graph has finished loading (or failed to load).
   /// Offline routing awaits this so it doesn't fail while the graph is still
@@ -70,8 +126,16 @@ class OfflineRouter {
     try {
       final ok = await _channel.invokeMethod<bool>('load', {'dir': graphPath});
       _loaded = ok ?? false;
+      _corrupt = false;
       if (!_loadCompleter!.isCompleted) _loadCompleter!.complete();
       return _loaded;
+    } on PlatformException catch (e) {
+      // `graph_corrupt` is the native side's marker check refusing a folder
+      // that GraphHopper would only reject with a storage-layer stack trace.
+      _corrupt = e.code == 'graph_corrupt';
+      debugPrint('ROUTER: load error (${e.code}): ${e.message}');
+      if (!_loadCompleter!.isCompleted) _loadCompleter!.complete();
+      return false;
     } catch (e) {
       debugPrint('ROUTER: load error: $e');
       if (!_loadCompleter!.isCompleted) _loadCompleter!.complete();
@@ -277,80 +341,434 @@ Future<void> deleteRoutingGraph() async {
   }
 }
 
-/// Path to pass to the loader: the extracted directory if populated,
-/// or a `.ghz` / `.osm.pbf` file (which will be converted on-device and deleted).
+/// GraphHopper marks its `properties` file with the ASCII pair `GH`, preceded by a
+/// two-byte field — a real graph starts `00 02 47 48`, so the marker is **not at
+/// offset 0**.
+///
+/// Getting that wrong is expensive: the first version of this check tested
+/// offset 0, so every *valid* graph read as "debris" and [loadBestGraph] would
+/// have deleted a good 452 MB graph folder on the next heal. The pair is now
+/// sought in the first 8 bytes.
+///
+/// A folder whose `properties` is missing or empty IS debris — the debris of an
+/// interrupted import, which creates the file first and can be killed before it
+/// writes anything (seen on the itel_P663LN: a 249.6 MB folder with an empty
+/// `properties` kept offline routing dead while the UI reported "data present").
+bool graphPropertiesMarkerOk(File properties) {
+  if (!properties.existsSync()) return false;
+  try {
+    final raf = properties.openSync();
+    try {
+      final head = raf.readSync(8);
+      for (var i = 0; i + 1 < head.length; i++) {
+        if (head[i] == 0x47 && head[i + 1] == 0x48) return true; // 'G','H'
+      }
+      return false;
+    } finally {
+      raf.closeSync();
+    }
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Whether [dir] holds a graph GraphHopper can open.
+///
+/// Looks at `properties` in the folder itself, and one level down: a `.ghz` whose
+/// entries keep a wrapper directory extracts to `dir/<wrapper>/properties`, and
+/// calling that "debris" would let the self-healing loader delete a perfectly
+/// good graph. Debris from an interrupted import is the other shape — a
+/// `properties` at the ROOT that is present but carries no marker.
+bool graphFolderLoadable(Directory dir) {
+  if (graphPropertiesMarkerOk(File('${dir.path}/properties'))) return true;
+  try {
+    for (final e in dir.listSync()) {
+      if (e is Directory &&
+          graphPropertiesMarkerOk(File('${e.path}/properties'))) {
+        return true;
+      }
+    }
+  } catch (_) {}
+  return false;
+}
+
+/// Whether the graph folder on the phone exists but cannot load.
+///
+/// False when there is no folder or it is empty — that is "not installed", a
+/// different state with a different fix.
+Future<bool> graphFolderCorrupt([String? dirPath]) async {
+  final dir = Directory(dirPath ?? await routingGraphDir());
+  if (!dir.existsSync()) return false;
+  try {
+    if (dir.listSync().isEmpty) return false;
+  } catch (_) {
+    return false;
+  }
+  return !graphFolderLoadable(dir);
+}
+
+/// Whether [f] is a COMPLETE zip archive, judged by its end-of-central-directory
+/// record.
+///
+/// The cheap check that stops a truncated archive from reaching GraphHopper,
+/// which can only say `zip END header not found` after being handed the file.
+/// Seen on the itel_P663LN: the app adopted a `.ghz` while `adb push` was still
+/// writing it, copied a partial file, and deleted the source — leaving a file
+/// that was the right name and the right size to look plausible, and unusable.
+bool zipComplete(File f) {
+  try {
+    final len = f.lengthSync();
+    if (len < 22) return false;
+    final raf = f.openSync();
+    try {
+      final window = len < 65536 ? len : 65536;
+      raf.setPositionSync(len - window);
+      final tail = raf.readSync(window);
+      // 'PK\x05\x06' — scan back, a valid archive may carry a trailing comment.
+      for (var i = tail.length - 22; i >= 0; i--) {
+        if (tail[i] == 0x50 &&
+            tail[i + 1] == 0x4b &&
+            tail[i + 2] == 0x05 &&
+            tail[i + 3] == 0x06) {
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      raf.closeSync();
+    }
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Delete sibling archives that are not complete zips. They cannot be used by
+/// anything, and leaving them makes every load fail forever.
+void dropIncompleteArchives(String dir) {
+  for (final ext in ['.ghz', '.zip']) {
+    final f = File('$dir$ext');
+    if (!f.existsSync()) continue;
+    if (zipComplete(f)) continue;
+    try {
+      f.deleteSync();
+      debugPrint('ROUTER: dropped incomplete archive ${f.path}');
+    } catch (e) {
+      debugPrint('ROUTER: could not drop ${f.path}: $e');
+    }
+  }
+}
+
+/// The archive/source sitting beside the graph folder, best first: `.ghz` first
+/// because unzipping is minutes faster than importing a PBF. Incomplete archives
+/// are left out — a half-written `.ghz` must never be chosen.
+List<String> graphSiblingSources(String dir) {
+  final out = <String>[];
+  for (final ext in ['.ghz', '.zip']) {
+    final f = File('$dir$ext');
+    if (f.existsSync() && zipComplete(f)) out.add(f.path);
+  }
+  for (final ext in ['.osm.pbf', '.pbf']) {
+    final f = File('$dir$ext');
+    if (f.existsSync()) out.add(f.path);
+  }
+  return out;
+}
+
+/// Which path the loader should be handed. Pure, because the decision *is* the
+/// bug: a populated folder wins only when it can actually load, otherwise the
+/// first sibling source does — an interrupted import must never shadow the file
+/// that would fix it.
+String graphSourcePath({
+  required String dir,
+  required bool populated,
+  required bool loadable,
+  required List<String> siblings,
+}) {
+  if (populated && loadable) return dir;
+  if (siblings.isNotEmpty) return siblings.first;
+  return dir;
+}
+
+/// Path to pass to the loader: the extracted directory if populated and
+/// loadable, else a `.ghz` / `.pbf` file (which the native side converts and
+/// deletes), else whatever the Download scan turns up.
 Future<String> routingGraphPath() async {
   final dir = await routingGraphDir();
   final d = Directory(dir);
+  var populated = false;
   if (d.existsSync()) {
     try {
-      if (d.listSync().isNotEmpty) return dir;
+      populated = d.listSync().isNotEmpty;
     } catch (_) {}
   }
-  for (final ext in ['.ghz', '.osm.pbf', '.pbf', '.zip']) {
-    final local = File('$dir$ext');
-    if (local.existsSync()) return local.path;
+  final siblings = graphSiblingSources(dir);
+  if (populated || siblings.isNotEmpty) {
+    return graphSourcePath(
+      dir: dir,
+      populated: populated,
+      loadable: populated && graphFolderLoadable(d),
+      siblings: siblings,
+    );
   }
-  // Also check external storage / Download directory if user downloaded via browser or pushed via ADB
-  for (final p in [
-    '/sdcard/Download/routing_graph.ghz',
-    '/sdcard/Download/graph.ghz',
-    '/sdcard/Download/vietnam-latest.osm.pbf',
-    '/sdcard/Download/vietnam.osm.pbf',
-    '/sdcard/Download/saigon-latest.osm.pbf',
-    '/storage/emulated/0/Download/routing_graph.ghz',
-    '/storage/emulated/0/Download/graph.ghz',
-    '/storage/emulated/0/Download/vietnam-latest.osm.pbf',
-  ]) {
-    final f = File(p);
-    if (f.existsSync()) {
+  // Nothing app-owned: fall back to a loose file in a folder we can read — the
+  // app's own external dir first, then the public Downloads, whatever the name.
+  final adopted = await adoptExternalGraphSource(dir);
+  if (adopted != null) return adopted;
+  return File('$dir.ghz').existsSync() ? '$dir.ghz' : dir;
+}
+
+/// Public folders a downloaded extract can land in, in the order we look.
+const List<String> kPublicDownloadDirs = [
+  '/sdcard/Download',
+  '/storage/emulated/0/Download',
+];
+
+/// Loadable sources inside [dirPath], best first: `.ghz`/`.zip` before a raw
+/// PBF (unzipping is minutes faster than importing), then newest first.
+///
+/// The NAME is not consulted beyond its extension, on purpose. The old code
+/// listed exact filenames (`vietnam-latest.osm.pbf`, `graph.ghz`, …), so a file
+/// the user actually had — `vietnam-260928.osm.pbf` — matched nothing and sat in
+/// Downloads invisible while the app insisted no data had been downloaded.
+List<String> graphCandidatesIn(String dirPath) {
+  final d = Directory(dirPath);
+  if (!d.existsSync()) return const [];
+  final found = <(String, int, DateTime)>[];
+  try {
+    for (final e in d.listSync()) {
+      if (e is! File) continue;
+      final name = e.path.toLowerCase();
+      final isArchive = name.endsWith('.ghz') || name.endsWith('.zip');
+      final isPbf = name.endsWith('.osm.pbf') || name.endsWith('.pbf');
+      if (!isArchive && !isPbf) continue;
+      found.add((e.path, isArchive ? 0 : 1, e.statSync().modified));
+    }
+  } catch (_) {
+    // Scoped storage can deny a raw listing of a public folder; the file picker
+    // remains the reliable route on Android 11+.
+    return const [];
+  }
+  found.sort((a, b) {
+    final byKind = a.$2.compareTo(b.$2);
+    return byKind != 0 ? byKind : b.$3.compareTo(a.$3);
+  });
+  return [for (final f in found) f.$1];
+}
+
+/// Where a sideloaded graph may be dropped so this app can read it, best first.
+///
+/// `/sdcard/Download` is NOT dependable on Android 11+: a file pushed by `adb`
+/// (or written by any other app) belongs to another uid, and the raw path is
+/// denied — `File(...).existsSync()` simply answers false, so a perfectly good
+/// 247 MB `.ghz` sits there invisible and the app reports "no offline data".
+/// Observed on the itel_P663LN: the preload found nothing and failed in 322 ms
+/// with the archive present in Downloads.
+///
+/// `/sdcard/Android/data/<pkg>/files` is owned by the app, readable with no
+/// permission, and `adb push` can write it — so it is searched FIRST.
+Future<List<String>> graphSearchDirs() async {
+  final dirs = <String>[];
+  try {
+    final ext = await getExternalStorageDirectory();
+    if (ext != null) dirs.add(ext.path);
+  } catch (_) {
+    // Desktop / tests: no external dir, the public list still applies.
+  }
+  dirs.addAll(kPublicDownloadDirs);
+  return dirs;
+}
+
+/// Copy a loose graph source from any searchable folder into app storage (a copy
+/// the app owns is always readable) and return it.
+Future<String?> adoptExternalGraphSource(String dir) async {
+  for (final searchDir in await graphSearchDirs()) {
+    for (final p in graphCandidatesIn(searchDir)) {
+      final f = File(p);
+      if (!f.existsSync()) continue;
+      final lower = p.toLowerCase();
+      final isArchive = lower.endsWith('.ghz') || lower.endsWith('.zip');
+      // A file still being written (adb push, an in-flight download) must not be
+      // copied: the copy would be truncated, and deleting the source afterwards
+      // would destroy the only good bytes. Skip it and let the next start win.
+      if (!await _sizeStable(f)) {
+        debugPrint('ROUTER: $p is still being written — leaving it alone');
+        continue;
+      }
+      if (isArchive && !zipComplete(f)) {
+        debugPrint('ROUTER: $p is an incomplete archive — leaving it alone');
+        continue;
+      }
       try {
-        final ext = p.endsWith('.osm.pbf')
+        final ext = lower.endsWith('.osm.pbf')
             ? '.osm.pbf'
             : p.substring(p.lastIndexOf('.'));
         final target = File('$dir$ext');
         if (!target.existsSync() || target.lengthSync() != f.lengthSync()) {
           target.parent.createSync(recursive: true);
           f.copySync(target.path);
-          // Delete from /sdcard/Download after copying to reclaim download storage
-          try {
-            f.deleteSync();
-          } catch (_) {}
         }
+        // Verify before reclaiming: same length, and a complete archive.
+        final copied =
+            target.existsSync() && target.lengthSync() == f.lengthSync();
+        final usable = !isArchive || zipComplete(target);
+        if (!copied || !usable) {
+          debugPrint('ROUTER: adoption of $p did not verify; keeping the source');
+          return f.path;
+        }
+        try {
+          f.deleteSync();
+        } catch (_) {}
+        debugPrint('ROUTER: adopted graph source $p');
         return target.path;
-      } catch (_) {
+      } catch (e) {
+        debugPrint('ROUTER: could not adopt $p: $e');
         return f.path;
       }
     }
   }
-  return File('$dir.ghz').existsSync() ? '$dir.ghz' : dir;
+  return null;
 }
 
+/// True when [f] has stopped growing (two samples ~700 ms apart agree), so a
+/// half-written file is never copied.
+Future<bool> _sizeStable(File f) async {
+  try {
+    final a = f.lengthSync();
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+    final b = f.lengthSync();
+    return a == b && b > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Where the in-app builder writes the archive: next to the graph folder, so
+/// [routingGraphPath] finds it again after a folder wipe or a reinstall.
+Future<String> graphArchivePath() async => '${await routingGraphDir()}.ghz';
+
+/// Build a portable `.ghz` from the graph folder currently on the phone.
+///
+/// The point is to pay the costly part once. Importing the country extract
+/// (`tools/data/vietnam-latest.osm.pbf`, 311 MB) needs minutes of CPU and GBs of
+/// RAM, and it is what a phone the user hands the PBF to would otherwise do
+/// again from scratch; an archive only has to be unzipped. It also makes the
+/// finished graph portable — pull it to a PC with `adb pull`, or export it to
+/// Downloads and share it.
+///
+/// Returns null when there is no graph folder to archive yet (import a PBF
+/// first); throws only on real native failures.
+Future<GraphArchiveResult?> buildGraphArchive({
+  void Function(int done, int total)? onProgress,
+}) async {
+  final dir = await routingGraphDir();
+  if (!Directory(dir).existsSync()) return null;
+
+  // These functions are top level (like [downloadGraph]), so the progress sink
+  // lives on the singleton; same library, so the private members are reachable.
+  final router = OfflineRouter.instance;
+  router._installProgressHandler();
+  router._archiveProgress = onProgress;
+  try {
+    final out = await graphArchivePath();
+    final res = await _channel.invokeMapMethod<String, dynamic>(
+      'buildArchive',
+      {'dir': dir, 'out': out},
+    );
+    if (res == null) return null;
+    return GraphArchiveResult(
+      path: (res['path'] as String?) ?? out,
+      bytes: (res['bytes'] as num?)?.toInt() ?? 0,
+      sourceBytes: (res['sourceBytes'] as num?)?.toInt() ?? 0,
+    );
+  } on PlatformException catch (e) {
+    throw StateError(e.message ?? 'Không tạo được tệp .ghz');
+  } finally {
+    router._archiveProgress = null;
+  }
+}
+
+/// Copy the built archive into shared storage (Downloads) so it survives an
+/// uninstall, is visible to a file manager, and can be pulled with `adb pull`.
+///
+/// API 29+ publishes it through MediaStore and needs no permission; Android 8–9
+/// throws [GraphExportNeedsPermission] so the caller can request it and retry.
+Future<String> exportGraphArchive([String? srcPath]) async {
+  final src = srcPath ?? await graphArchivePath();
+  if (!File(src).existsSync()) {
+    throw StateError('Chưa có tệp .ghz để xuất.');
+  }
+  try {
+    final where = await _channel.invokeMethod<String>('exportArchive', {'src': src});
+    return where ?? '';
+  } on PlatformException catch (e) {
+    if (e.code == 'need_permission') throw GraphExportNeedsPermission();
+    throw StateError(e.message ?? 'Không xuất được tệp .ghz');
+  }
+}
+
+/// Load whichever graph source the phone actually has, healing debris first.
+///
+/// Serialised: the boot preload and the navigation page's preload can fire
+/// together, and two concurrent attempts race on the same files — the first
+/// extracts an archive and deletes it, the second then fails with
+/// "Không tìm thấy dữ liệu: …routing_graph.ghz" (observed on the itel_P663LN).
+/// Concurrent callers join the running attempt instead.
+Future<bool> loadBestGraph({bool heal = true}) {
+  final running = _bestLoadInFlight;
+  if (running != null) {
+    debugPrint('ROUTER: graph load already in flight — joining it');
+    return running;
+  }
+  final attempt = _loadBestGraph(heal: heal)
+      .whenComplete(() => _bestLoadInFlight = null);
+  _bestLoadInFlight = attempt;
+  return attempt;
+}
+
+Future<bool>? _bestLoadInFlight;
+
+Future<bool> _loadBestGraph({required bool heal}) async {
+  final dir = await routingGraphDir();
+  if (heal) {
+    // Debris from an interrupted write cannot be opened by anything: a folder
+    // with no GH marker, or an archive with no zip end record. Clear both, or
+    // the app keeps choosing them and offline routing stays dead.
+    if (await graphFolderCorrupt(dir)) {
+      debugPrint(
+        'ROUTER: removing interrupted graph folder (no GH marker): $dir',
+      );
+      try {
+        Directory(dir).deleteSync(recursive: true);
+      } catch (e) {
+        debugPrint('ROUTER: could not remove $dir: $e');
+      }
+    }
+    dropIncompleteArchives(dir);
+  }
+  final path = await routingGraphPath();
+  final exists = File(path).existsSync() || Directory(path).existsSync();
+  if (!exists) return false;
+  return OfflineRouter.instance.load(path);
+}
+
+/// Whether a graph the loader can use is installed.
+///
+/// A populated folder counts only when it carries the GH marker; otherwise it is
+/// debris, and reporting it as present is what let the Offline screen announce
+/// "Bộ dữ liệu đã có (249.6 MB)" while every single load threw.
 Future<bool> routingGraphPresent() async {
   final dir = await routingGraphDir();
   final d = Directory(dir);
-  var nonEmpty = false;
+  var populated = false;
   try {
-    await for (final _ in d.list(followLinks: false)) {
-      nonEmpty = true;
-      break;
-    }
+    populated = d.existsSync() && d.listSync().isNotEmpty;
   } catch (_) {}
-  if (nonEmpty) return true;
-  for (final ext in ['.ghz', '.osm.pbf', '.pbf', '.zip']) {
-    if (File('$dir$ext').existsSync()) return true;
-  }
-  for (final p in [
-    '/sdcard/Download/routing_graph.ghz',
-    '/sdcard/Download/graph.ghz',
-    '/sdcard/Download/vietnam-latest.osm.pbf',
-    '/sdcard/Download/vietnam.osm.pbf',
-    '/sdcard/Download/saigon-latest.osm.pbf',
-    '/storage/emulated/0/Download/routing_graph.ghz',
-    '/storage/emulated/0/Download/graph.ghz',
-    '/storage/emulated/0/Download/vietnam-latest.osm.pbf',
-  ]) {
-    if (File(p).existsSync()) return true;
+  if (populated && graphFolderLoadable(d)) return true;
+  if (graphSiblingSources(dir).isNotEmpty) return true;
+  // Same extension-only rule as the loader: the name is whatever the user's
+  // browser gave the file.
+  for (final dirPath in await graphSearchDirs()) {
+    if (graphCandidatesIn(dirPath).isNotEmpty) return true;
   }
   return false;
 }
@@ -358,6 +776,11 @@ Future<bool> routingGraphPresent() async {
 /// Built-in source for the offline routing graph: the Geofabrik Việt Nam OSM
 /// extract. It is an `.osm.pbf`, converted to a GraphHopper graph on the phone
 /// by [downloadGraph]; no separately hosted `.ghz` is required.
+///
+/// 329 MB, verified live (application/octet-stream, `OSMHeader` magic). It is
+/// the whole country in one file, which on a low-end phone means a 3-minute
+/// import that Android can kill halfway — see the region presets for the faster
+/// route, and [graphFolderCorrupt] for what a killed import leaves behind.
 const String graphDefaultUrl =
     'https://download.geofabrik.de/asia/vietnam-latest.osm.pbf';
 
@@ -376,29 +799,28 @@ class GraphRegionPreset {
 }
 
 /// Popular region extracts available for direct download.
+///
+/// Each URL is verified live, byte-level: HEAD gives
+/// `application/octet-stream`/`application/x-pbf` and the first bytes carry the
+/// OSM PBF magic. That check matters — a status code alone is not evidence.
+/// Geofabrik answers its 404 page with `HTTP 200 text/html` **and** honours
+/// range requests, so three presets shipped here 404'd for as long as nobody
+/// looked at the bytes.
+///
+/// Only two Vietnamese sources exist: the country extract, and BBBike's Saigon
+/// extract (their index holds no Hà Nội / Đà Nẵng equivalent — a preset pointing
+/// there is a dead button, which is why those two are gone rather than repaired).
 const List<GraphRegionPreset> kGraphRegionPresets = [
   GraphRegionPreset(
     id: 'saigon',
     name: 'TP. Hồ Chí Minh',
-    description: '~25 MB PBF, xử lý nhanh (~1-2 phút)',
-    url: 'https://download.bbbike.org/osm/bbbike/HoChiMinhCity/HoChiMinhCity.osm.pbf',
-  ),
-  GraphRegionPreset(
-    id: 'hanoi',
-    name: 'Hà Nội',
-    description: '~20 MB PBF, xử lý nhanh (~1-2 phút)',
-    url: 'https://download.bbbike.org/osm/bbbike/Hanoi/Hanoi.osm.pbf',
-  ),
-  GraphRegionPreset(
-    id: 'danang',
-    name: 'Đà Nẵng',
-    description: '~15 MB PBF, xử lý nhanh (~1 phút)',
-    url: 'https://download.bbbike.org/osm/bbbike/DaNang/DaNang.osm.pbf',
+    description: '~14,5 MB PBF (BBBike), xử lý nhanh (~1 phút)',
+    url: 'https://download.bbbike.org/osm/bbbike/Saigon/Saigon.osm.pbf',
   ),
   GraphRegionPreset(
     id: 'vietnam',
     name: 'Toàn Việt Nam',
-    description: '~180 MB PBF (Geofabrik), toàn quốc',
+    description: '~314 MB PBF (Geofabrik), toàn quốc — nạp lâu trên máy yếu',
     url: 'https://download.geofabrik.de/asia/vietnam-latest.osm.pbf',
   ),
 ];
@@ -508,6 +930,15 @@ Future<bool> downloadToFile(
         .timeout(const Duration(seconds: 30));
     if (streamed.statusCode != 200) {
       debugPrint('DL: HTTP ${streamed.statusCode} for $url');
+      return false;
+    }
+    // A 200 is not proof of a file. Geofabrik answers its 404 page with
+    // `HTTP 200 text/html` and even honours range requests, so a dead link looks
+    // healthy to a status check and only fails later as an unreadable graph. If
+    // the server says HTML, the link is gone — say so.
+    final ctype = streamed.headers['content-type']?.toLowerCase() ?? '';
+    if (ctype.contains('text/html')) {
+      debugPrint('DL: $url returned HTML, not map data (link moved or expired)');
       return false;
     }
     final total = streamed.contentLength ?? 0;
@@ -641,8 +1072,10 @@ List<OsrmRoute> rankByPreference(List<OsrmRoute> routes, RoutePreference pref) {
 /// Throws when no source is available (fully offline without a graph).
 ///
 /// [profile] selects the road type (car / motorbike / bicycle / walking).
-/// The on-device graph is car-only: car routes use it; other profiles always
-/// route online (OSRM) so the path matches the chosen mode of transport.
+/// The on-device graph carries a car profile only: car routes use it, and a
+/// motorbike route is computed on those same car roads (the archive holds no
+/// motorcycle encodings). Bicycle and walking always route online (OSRM) so
+/// their path matches the mode of transport.
 /// With the Vietmap data source active, car + motorbike route on Vietmap
 /// (fast, VN-optimized, live congestion); bicycle/walking stay on OSRM.
 Future<OsrmRoute> fetchAnyRoute(
@@ -732,9 +1165,9 @@ Future<List<OsrmRoute>> fetchAnyRoutes(
   // that no source can serve this profile at all.
   if (lastError != null) throw lastError;
   throw StateError(
-    profile == RouteProfile.car
+    profile == RouteProfile.car || profile == RouteProfile.motorbike
         ? 'Ngoại tuyến: chưa tải bộ dữ liệu chỉ đường'
-        : 'Ngoại tuyến: bộ dữ liệu chỉ hỗ trợ ô tô',
+        : 'Ngoại tuyến: bộ dữ liệu chỉ hỗ trợ ô tô và xe máy',
   );
 }
 

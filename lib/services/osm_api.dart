@@ -14,13 +14,13 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show debugPrint;
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'package:navbridge/services/offline_poi.dart';
 import 'offline_tiles.dart' show forceOffline, geocodingProvider;
+import 'offline_loader.dart' show readOfflineText;
 import 'package:navbridge/services/vietmap_api.dart';
 import 'package:navbridge/services/api_notice.dart' show noteGoogleQuota;
 import 'vietmap_config.dart' show VietmapConfig, dataSource;
@@ -149,13 +149,19 @@ Future<void> _saveSearchCache() async {
 List<OsmSuggestion>? _offlinePlaces;
 bool _offlinePlacesLoaded = false;
 
+/// Drop the cached offline place index so the next search re-reads the file —
+/// called after an auto-update replaced `vietnam_places.json`.
+void resetOfflinePlaces() {
+  _offlinePlaces = null;
+  _offlinePlacesLoaded = false;
+}
+
 Future<void> _loadOfflinePlaces() async {
   if (_offlinePlacesLoaded) return;
   _offlinePlacesLoaded = true;
   try {
-    final raw = await rootBundle.loadString(
-      'assets/offline_map/vietnam_places.json',
-    );
+    // Prefers a downloaded copy over the bundled asset (offline_loader).
+    final raw = await readOfflineText('vietnam_places.json');
     final list = jsonDecode(raw) as List;
     _offlinePlaces = [
       for (final e in list.cast<Map<String, dynamic>>())

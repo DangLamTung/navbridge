@@ -1,5 +1,9 @@
 # Waze Data Pipeline → NavBridge offline assets
 
+> **See also:** [`offline-data-hosting.md`](offline-data-hosting.md) — where to
+> store the published bundles, how to push them (GCS / rclone / Drive), what can
+> crawl unattended, and the pre-publish safety gates.
+
 > End-to-end runbook: crawl Vietnam's Waze Map Editor (WME) data → decode it into
 > a road-notice DB → build the offline assets the NavBridge app ships → (optionally)
 > publish a **monthly update bundle** so devices can refresh without a full app release.

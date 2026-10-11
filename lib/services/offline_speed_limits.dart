@@ -19,6 +19,7 @@ import 'package:flutter/foundation.dart' show compute, debugPrint;
 import 'package:latlong2/latlong.dart';
 
 import 'offline_loader.dart';
+import '../core/road_match.dart' show sameRoad;
 
 /// Grid cell size in degrees (~2.2 km at the equator). Query touches 3×3 cells.
 const double _cellDeg = 0.02;
@@ -83,15 +84,18 @@ Future<void> _doLoad() async {
     _segs = null;
   }
   // 2) Waze / VietMap posted-limit POINTS (sparse, but a real sign location).
+  //    Each layer loads independently so a missing/corrupt asset for one does
+  //    not disable the other.
   try {
-    final raws = await Future.wait(<Future<String>>[
-      readOfflineText('waze_speed_limits.json'),
-      readOfflineText('vietmap_speed_limits.json'),
-    ]);
-    _waze = await compute(_buildWazeIndex, raws[0]);
-    _vietmap = await compute(_buildWazeIndex, raws[1]);
+    final raw = await readOfflineText('waze_speed_limits.json');
+    _waze = await compute(_buildWazeIndex, raw);
   } catch (_) {
     _waze = null;
+  }
+  try {
+    final raw = await readOfflineText('vietmap_speed_limits.json');
+    _vietmap = await compute(_buildWazeIndex, raw);
+  } catch (_) {
     _vietmap = null;
   }
   _loaded = true;
@@ -132,7 +136,7 @@ _WazeIndex _buildWazeIndex(String raw) {
     final lng = (p['lng'] as num?)?.toDouble();
     final kmh = (p['kmh'] as num?)?.toDouble();
     if (lat == null || lng == null || kmh == null) continue;
-    if (kmh < 5 || kmh > 200) continue;
+    if (kmh < 40 || kmh > 120) continue; // VN road statutory range 40..120 km/h
     final idx = pts.length ~/ 3;
     pts
       ..add(lat)
@@ -734,6 +738,39 @@ double segmentLineAngle(double? headingDeg, double bearingDeg) {
   return d;
 }
 
+/// How well a layer record describes the street the driver is turning INTO.
+///
+///   2 = named AND matching the street we name  → best, believe it
+///   1 = unnamed — no evidence either way (the layer names only ~38% of its
+///       records, so this is the common case; keep it as the fallback)
+///   0 = named and a DIFFERENT street          → never use it
+///
+/// ⭐ A NAMED match must beat a NEARER UNNAMED record. "An unnamed segment
+/// carries no evidence either way" is the right rule for the road UNDER the car
+/// (there the alternative is no limit at all), but wrong for the road being
+/// entered: at a junction the nearest record past the corner often belongs to
+/// the street being LEFT. Measured on the 2026-10-02 drive — turning from
+/// Tân Thành (50) into Lũy Bán Bích (60; its own segment says 60) the callout
+/// said "Tốc độ tối đa 50 km/h", because the unnamed record 30 m past the corner
+/// was accepted before the named 60 was ever looked at (user, 2026-10-08:
+/// "still say speed 50 when prepare turn to 60 street: luỹ bán bích").
+int nextStreetSampleRank({
+  required String? layerName,
+  required String? engineName,
+  required String? currentRoad,
+}) {
+  final layer = (layerName ?? '').trim();
+  if (layer.isEmpty) return 1; // unnamed: no evidence either way
+  final engine = (engineName ?? '').trim();
+  if (engine.isNotEmpty) {
+    return streetNameMatches(engine, layer) ? 2 : 0;
+  }
+  // No name from the engine — the layer's own name is the only evidence, and
+  // it is usable only when it names a road OTHER than the one under the car.
+  final cur = (currentRoad ?? '').trim();
+  return (cur.isEmpty || !sameRoad(layer, cur)) ? 2 : 0;
+}
+
 bool streetNameMatches(String? road, String? segment) {
   if (road == null || segment == null) return false;
   final a = _streetTokens(road);
@@ -775,7 +812,7 @@ const Set<String> _genericStreetTokens = {
 };
 
 bool _isAlleyToken(String t) =>
-    const {'hẻm', 'kiệt', 'ngõ', 'ngách', 'hẻmnhánh'}.contains(t);
+    const {'hẻm', 'kiệt', 'ngõ', 'ngách', 'nhánh'}.contains(t);
 
 /// True when the name carries no identity: every token is a generic road word
 /// ("Đường", "Tỉnh", "Quốc"…) or a bare number ("30"). Such a name cannot say
@@ -1046,18 +1083,26 @@ int _segmentValue(_SegIndex idx, int s, double brg, double? headingDeg) {
 
   // Statutory ceiling: in Vietnam, speeds > 90 km/h (100-120 km/h) are legal
   // EXCLUSIVELY on expressways (Freeway rt=3 or streetName indicating CT/Cao tốc).
+  // Cap non-expressway at 90 (the highest legal non-expressway speed, for
+  // divided roads). The `separator` field that would distinguish divided (90)
+  // from non-divided (80) is false on ALL 1.03 M segments in the crawl, so
+  // using it always produced 80 — wrong for divided roads posting 90.
   if (val > 90) {
-    final (rt, div) = idx.segClassOf(s);
+    final (rt, _) = idx.segClassOf(s);
     if (rt != 3) {
       final name = idx.streetName(s) ?? '';
       final isExp = name.startsWith('CT') ||
           name.contains('Cao tốc') ||
           name.contains('Expressway');
       if (!isExp) {
-        val = div ? 90 : 80;
+        val = 90;
       }
     }
   }
+
+  // Statutory floor: in Vietnam, posted motor limits on roads are 40..120 km/h.
+  // Values < 40 km/h (like 10, 20, 30) are noise, parking or mileposts.
+  if (val < 40) return 0;
 
   return val;
 }
@@ -1196,7 +1241,7 @@ int? _queryPointIndex(
       for (var k = 0; k < ids.length; k++) {
         final i = ids[k] * 3;
         final kmh = pts[i + 2];
-        if (kmh < 5 || kmh > 200) continue;
+        if (kmh < 5 || kmh > 120) continue; // VN statutory max 120 km/h
         final d = _ptDistM(pts[i], pts[i + 1], lat, lon, cosLat);
         if (d < best) {
           best = d;

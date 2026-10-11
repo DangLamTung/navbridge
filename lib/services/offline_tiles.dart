@@ -15,12 +15,12 @@ import 'package:archive/archive.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'offline_loader.dart' show readOfflineBytes;
 import 'vietmap_config.dart' show appendCartoApiKey;
 
 /// User-Agent sent with every tile request. The OSM tile policy REQUIRES a
@@ -364,6 +364,36 @@ bool forceOffline = false;
 /// the opt-in.
 String navSpeedStyle = 'dial';
 
+/// How many upcoming hazards the nav screen's alert bar shows — signs AND
+/// cameras merged in route order (0 = bar off). Default 3, which is what fits
+/// on a phone beside the speed island without hiding the map. Set in Settings →
+/// "Thanh cảnh báo"; persisted in [AppSettings.alertBarCount].
+int alertBarCount = 3;
+
+/// Where the turn banner (the big arrow + road + distance) sits during
+/// navigation: `false` = top edge (default, the historical layout), `true` =
+/// bottom edge like Google Maps / Waze. Set in Settings → "Dẫn đường";
+/// persisted in [AppSettings.navBannerBottom].
+bool navBannerBottom = false;
+
+/// Where the SPEED ISLAND sits on the nav screen (the speed + limit chip and
+/// the "sắp tới" sign bar under it), in logical pixels from the top-left.
+/// Negative x = never dragged, so the default spot is used. Dragging it writes
+/// these; persisted in [AppSettings.speedIslandX] / [speedIslandY].
+double speedIslandX = -1;
+double speedIslandY = -1;
+
+/// Where the CAR ARROW sits vertically on screen while navigating, as a
+/// fraction of the viewport height the camera looks PAST the car: 0 = dead
+/// centre (the historical framing), 0.10 = the car rides on the lower-third
+/// line like Google Maps (much more road visible ahead), 0.22 = near the
+/// bottom edge. Set in Settings → "Vị trí mũi tên"; persisted in
+/// [AppSettings.carScreenAnchor] and read by VectorNavMap.carAnchor.
+///
+/// Only the FOLLOW camera is offset — the arrow keeps being projected onto its
+/// real road position, so panning the map still shows the real spot.
+double carScreenAnchor = 0.0;
+
 /// Vehicle used for speed-limit defaults: 'car' | 'motorbike' | 'truck'.
 /// Persisted; applied on top of the road's OSM `maxspeed` (when tagged).
 ///
@@ -520,6 +550,37 @@ Future<bool> isOnline() async {
   }
 }
 
+/// True when the platform reports NO connection (or the user pinned offline).
+///
+/// [isOnline] is deliberately optimistic — "a connected route needs the HTTP
+/// attempt to be honest", and a Wi-Fi without internet looks connected. That
+/// optimism is right for a ROUTE REQUEST and wrong for a MAP TILE: offline, every
+/// uncached tile would pay for a fetch that cannot succeed before falling back to
+/// the cache/blank tile. This answers the cheap, safe question instead, cached for
+/// a few seconds so a screenful of tiles does not hammer the platform channel.
+bool _lastOfflineReading = false;
+DateTime? _lastOfflineCheckAt;
+Future<bool> isDefinitelyOffline() async {
+  if (forceOffline) return true;
+  final at = _lastOfflineCheckAt;
+  final now = DateTime.now();
+  if (at != null && now.difference(at) < const Duration(seconds: 4)) {
+    return _lastOfflineReading;
+  }
+  var offline = false;
+  try {
+    final r = await Connectivity().checkConnectivity().timeout(
+      const Duration(seconds: 3),
+    );
+    offline = r.isEmpty || r.contains(ConnectivityResult.none);
+  } catch (_) {
+    offline = false; // unknown → keep trying, as before
+  }
+  _lastOfflineReading = offline;
+  _lastOfflineCheckAt = now;
+  return offline;
+}
+
 /// Stream of connectivity changes (true = online).
 Stream<bool> onlineStream() => Connectivity().onConnectivityChanged.map(
   (r) => r.isNotEmpty && !r.contains(ConnectivityResult.none),
@@ -565,6 +626,20 @@ Future<Directory> tileStoreDir({String? source}) async {
 
 bool _overviewExtracted = false;
 
+/// Force the overview-tile archive to be re-extracted on the next call, after
+/// an auto-update replaced `overview_tiles.tar.gz`. Best-effort: the marker
+/// delete is fire-and-forget, and clearing the flag re-runs the extract path.
+void resetOverviewTilesExtraction() {
+  _overviewExtracted = false;
+  unawaited(() async {
+    try {
+      final sup = await getApplicationSupportDirectory();
+      final marker = File('${sup.path}/offline_tiles/.overview_extracted');
+      if (marker.existsSync()) marker.deleteSync();
+    } catch (_) {}
+  }());
+}
+
 /// Extracts the bundled Vietnam overview tiles ($z=0 \to z=8$) from the asset
 /// archive (`assets/offline_map/overview_tiles.tar.gz`) into local storage on
 /// first launch. Ensures zoomed-out map views never go blank even 100% offline.
@@ -581,13 +656,9 @@ Future<void> ensureOverviewTilesExtracted() async {
       return;
     }
 
-    final bytes = await rootBundle.load(
-      'assets/offline_map/overview_tiles.tar.gz',
-    );
-    final rawBytes = bytes.buffer.asUint8List(
-      bytes.offsetInBytes,
-      bytes.lengthInBytes,
-    );
+    // Prefers a downloaded copy over the bundled archive, so the overview
+    // tiles can be refreshed over the air too.
+    final rawBytes = await readOfflineBytes('overview_tiles.tar.gz');
     final decompressed = GZipDecoder().decodeBytes(rawBytes);
     final archive = TarDecoder().decodeBytes(decompressed);
 

@@ -107,3 +107,47 @@ docs/screenshots/
 # the build machine (git tracks the placeholders; see assets/offline_map/).
 assets/offline_map/*.bak
 assets/offline_map/*.bak_*
+
+# Dev-only: regenerable Google TTS voice audition clips (tools/build_voice_pack_gcp.py sample)
+assets/audio/voice_audition/
+
+# Sign-pack backups written by tools/signs/*.py before a rewrite (10 MB each).
+assets/offline_map/*.bak-*
+
+# Dev-only download sources (747 MB of Natural-Earth / water shapefiles) and
+# pre-built tile archives (433 MB). Regenerable; never part of the app.
+data/sources/
+tools/data/*.pmtiles
+
+# POLICY-SENSITIVE: provincial-police "phạt nguội" enforcement data and the
+# crawl that produces it. Kept locally only - never in the repo, never on a CI
+# runner. See private/ for the quarantined archive.
+private/
+tool/data/police_*
+tool/fetch_police_cameras.py
+tool/offline_geocode.py
+tool/photon_geocode.py
+
+# Voice packs: large regenerable binaries, fetched from the voice-packs release
+# asset at build time (tool/fetch_assets.sh). The paths stay declared in
+# pubspec.yaml - they must still be bundled into the APK.
+assets/audio/voice_vn_*/
+
+# Local scratch: 1.4 GB of downloaded shapefile sources, tile weights and
+# one-off analysis scripts. Never part of the app or the pipeline.
+data/
+
+# Generated analysis reports. docs/ keeps the MARKDOWN that explains the work,
+# not the HTML/PNG dumps it produced.
+docs/*.png
+docs/eval.html
+docs/gps_deviation_*.html
+docs/hn_sg_*.html
+docs/lamdong_km_cameras.html
+docs/limit_audit_*.html
+docs/resident_groundtruth.html
+docs/sim_data_*.json
+docs/simnav_*.txt
+docs/simulation_lbb.html
+docs/voice_*.html
+docs/apbac_truongchinh_before_after.html

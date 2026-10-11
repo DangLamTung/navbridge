@@ -122,11 +122,32 @@ limit already announced with a turn is not announced again when it takes effect.
 | Event | phrase |
 |---|---|
 | Maneuver callout (vehicle max on the street you turn INTO) | `… vào <road>. Tốc độ tối đa <X> km/h.` |
+| Maneuver callout, **number NOT in force yet** — it DIFFERS from the limit under the car (RISES or TIGHTENS) | `… vào <road>. Tốc độ tiếp theo là <X> km/h.` |
 | Speed-limit change | `Tốc độ tối đa <X> km/h` (pre-recorded clip; TTS fallback same text) |
 | Lower limit ahead | `Tốc độ tối đa <X> km/h phía trước <distance>` |
 | Overspeed (mild 5–10) | `Vượt quá tốc độ <X> km/h.` |
 | Overspeed (strong) | `Giảm tốc độ! Vượt quá tốc độ.` |
 | Motorbike on motorway | `Chú ý! Xe mô tô không được phép đi vào đường cao tốc. Xin thoát cao tốc khi có thể.` |
+
+⭐ A next-street limit that is NOT yet in force is spoken as **`Tốc độ tiếp theo là
+<X> km/h`** (2026-10-08) — whether it RISES or TIGHTENS. A rising number used to
+be silent: user, 2026-09-29 heard "… rẽ trái vào Cộng
+Hòa … Tốc độ tối đa 60 km/h" while riding 50 on Ấp Bắc and read it as Ấp Bắc's own
+limit, so the number was dropped. Silence cost information the driver wanted:
+2026-10-08 "say 50 km on the next only is distracting, add some line like tốc độ
+tiếp theo là 50 km/h". The wording now carries the attribution instead of the
+number being removed.
+
+⭐ A TIGHTENING is "not yet in force" for the same reason (the car is still on
+the higher-limit road when the driver hears it), so it uses the same wording. It
+used to be said as if in force AND that armed the 45 s "already said" window, so
+the drop was never voiced once it arrived — measured on the 2026-10-08 drives:
+**every 60→50 drop silent (4/4), every 50→60 rise announced (4/4)**, i.e. the last
+number the driver had been told stayed 60 (their report: "turn from 60 to 50
+street … it keeps 60 km"). Logic: `manoeuvreLimitToSpeak` +
+`manoeuvreLimitPhrase` (`lib/core/limit_change.dart`). Both audit tools parse the
+new form (`tool/announce_speed_audit.py` SPOKEN, `tool/check_voice_calls.py`
+LIMIT_RX).
 
 ---
 
@@ -152,7 +173,7 @@ limit already announced with a turn is not announced again when it takes effect.
 | Voice on | `Đã bật hướng dẫn bằng giọng nói.` |
 | Voice off | `Đã tắt nghe liên tục.` |
 | Listening | `Nghe rồi, nói lệnh đi.` |
-| GPS weak | `Tín hiệu GPS yếu, vị trí có thể không chính xác.` |
+| GPS weak | `Tín hiệu GPS yếu, vị trí có thể không chính xác.` — fires when accuracy ≥ 30 m, once per degraded episode (60 s cooldown, reset under 15 m). **Also before navigation**: a cold start accepts the fused provider's coarse network fix (up to 500 m, `_coldStartAccuracyM`) so the map centres immediately, and the driver is told why the position may still be off while the satellite fix lands (2026-10-08: "start is slow to catch gps … have an announcement of low quality gps fix"). |
 | AI prompt | `Bạn muốn hỏi AI điều gì?` |
 | AI not understood | `Xin lỗi, tôi không hiểu lệnh.` |
 | Voice help | `Bạn có thể nói: chỉ đường tới chợ Bến Thành, bắt đầu, dừng lại, phóng to, thu nhỏ, bật tiếng, tắt tiếng, nghe luôn, hỏi AI.` |

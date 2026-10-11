@@ -89,6 +89,95 @@ extension _NavBars on _NavigationPageState {
     );
   }
 
+  /// The next few signs on the route, nearest first, for [_alertBar]. How many
+  /// is the user's choice (Settings → "Thanh cảnh báo"); 0 turns the bar off.
+  /// [_aheadSigns] is already sorted by the scan that fills it.
+  List<SignAhead> get _nextAlerts {
+    final n = alertBarCount;
+    if (n <= 0) return const [];
+    return _aheadSigns.length > n ? _aheadSigns.sublist(0, n) : _aheadSigns;
+  }
+
+  /// "Sắp tới" — the next signs on the route, drawn with their REAL QCVN
+  /// artwork ([SignIcon]) in the order they will be met.
+  ///
+  /// ICON ONLY: a name per entry does not fit beside the speed island, and the
+  /// icon IS the sign. The name is still available on a long press (tooltip).
+  ///
+  /// The chevron collapses the bar to a pill when it is in the way; the pill
+  /// expands it again. Collapsing is per-session UI state, not a setting — the
+  /// count (including 0 = off) is the setting.
+  Widget _alertBar() {
+    final alerts = _nextAlerts;
+    if (alerts.isEmpty) return const SizedBox.shrink();
+    // Capped so a row of icons can never push the nav buttons off screen.
+    final cap = MediaQuery.of(context).size.width - 40;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: cap < 170 ? 170 : cap),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(6, 4, 4, 4),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFDADCE0)),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black12,
+              blurRadius: 4,
+              offset: Offset(0, 1),
+            ),
+          ],
+        ),
+        child: _alertBarCollapsed
+            ? InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => setNavState(() => _alertBarCollapsed = false),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 2),
+                  child: Icon(
+                    Icons.expand_more,
+                    size: 20,
+                    color: kAppBlue,
+                  ),
+                ),
+              )
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < alerts.length; i++) ...[
+                    if (i > 0)
+                      Container(
+                        width: 1,
+                        height: 26,
+                        margin: const EdgeInsets.symmetric(horizontal: 5),
+                        color: const Color(0xFFE8EAED),
+                      ),
+                    // Long press the icon for the sign's name.
+                    Tooltip(
+                      message: signShortLabel(alerts[i].sign.kind),
+                      child: SignIcon(
+                        kind: alerts[i].sign.kind,
+                        value: alerts[i].sign.value,
+                        size: 32,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(width: 2),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => setNavState(() => _alertBarCollapsed = true),
+                    child: const Icon(
+                      Icons.expand_less,
+                      size: 20,
+                      color: Color(0xFF5F6368),
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
   /// Compact maneuver bar shown inside the PiP (Picture-in-Picture) window:
   /// big arrow icon + road name + distance • ETA + camera/weather pills.
   /// Fills the bottom edge of the tiny floating window.
@@ -109,19 +198,21 @@ extension _NavBars on _NavigationPageState {
     // Nearest speed/red-light camera ahead (phạt nguội DB) — "📷 400m" chip.
     final cam = _nextCamera;
 
-    // Compact maneuver arrow — kept small so the bar stays thin and the map
-    // fills the PiP window.
+    // Maneuver arrow — deliberately small. The PiP window is tiny and the map
+    // is the point of it; the road name + distance carry the instruction, so
+    // the glyph only has to hint at the direction (user: "PiP mode need
+    // smaller icon").
     final Widget arrow = Container(
-      width: 26,
-      height: 26,
+      width: 20,
+      height: 20,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: kAppBlue,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
         icon,
-        style: const TextStyle(color: Colors.white, fontSize: 14, height: 1),
+        style: const TextStyle(color: Colors.white, fontSize: 11, height: 1),
       ),
     );
 
@@ -340,6 +431,14 @@ extension _NavBars on _NavigationPageState {
                 ),
               ),
               const Spacer(),
+              // The next road SIGNS, the same icons the nav screen's alert bar
+              // uses so the driver sees what is coming without the map.
+              // ICON ONLY and capped at 2 — the PiP window is tiny, and the
+              // names are on the nav screen / long press.
+              for (final a in _nextAlerts.take(2)) ...[
+                SignIcon(kind: a.sign.kind, value: a.sign.value, size: 20),
+                const SizedBox(width: 4),
+              ],
               // Speed limit — only when known.
               if (limit > 0)
                 Container(

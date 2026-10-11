@@ -49,7 +49,8 @@ def is_bogus(c):
 
 def main():
     write = "--write" in sys.argv
-    doc = json.load(open(ASSET))
+    with open(ASSET) as f:
+        doc = json.load(f)
     cams = doc.get("cameras", [])
 
     bogus = [c for c in cams if is_bogus(c)]
@@ -76,9 +77,10 @@ def main():
         shutil.copy2(ASSET, bak)
         print("backup:", os.path.basename(bak))
 
-    doc["version"] = (doc.get("version") or 1) + 1
+    doc["version"] = int(doc.get("version") or 1) + 1
     doc["cameras"] = keep
-    json.dump(doc, open(ASSET, "w"), ensure_ascii=False, separators=(",", ":"))
+    with open(ASSET, "w") as f:
+        json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
     print("wrote", ASSET, "version", doc["version"])
     return 0
 

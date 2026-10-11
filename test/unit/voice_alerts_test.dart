@@ -298,6 +298,62 @@ void main() {
               'assets/audio/voice_vn_fast/over_speed_limit.mp3',
             ]);
           });
+
+          test('a ROUTE CHANGE flushes the queue (stale callouts cannot play)',
+              () async {
+            // What a reroute does: `_cancelStaleRouteVoice()` (nav_voice.dart)
+            // calls VoiceGuide.stop(), because after the route is replaced every
+            // queued sentence is wrong — it can name a turn that no longer
+            // exists (user, 2026-10-08: "when reroute, tell the next road,
+            // cancel the voice of the previous route").
+            final v = VoiceGuide.instance;
+            v.speak('rẽ phải vào Đường Cũ');
+            v.speak('sau đó rẽ trái vào Đường Cũ');
+            v.speak('Camera tốc độ phía trước 300 mét');
+            await v.stop(); // ← the reroute
+            expect(v.pending, 0, reason: 'nothing may be left waiting');
+            // …then the NEW route's next road is announced.
+            v.speak('rẽ trái vào Đường Mới');
+            await settle();
+            await settle();
+            await settle();
+            expect(spoken, isNot(contains('sau đó rẽ trái vào Đường Cũ')));
+            expect(spoken, isNot(contains('Camera tốc độ phía trước 300 mét')));
+            expect(spoken.last, 'rẽ trái vào Đường Mới');
+          });
+
+          test('MUTED drops the audio, and unmuting restores it', () async {
+            // The mute is checked INSIDE the speaker, not at the callers: every
+            // caller logs its sentence before it speaks, so muting must not
+            // remove anything from the trip file / announcement log — it only
+            // stops the sound (user, 2026-10-08: "add a mute button"). This is
+            // why it is not the nav rail's `_voiceOn`, which returns before the
+            // log. Both audio paths are covered: the queue AND SoundAlerts,
+            // which plays the pre-recorded clips straight out on the native
+            // channel.
+            final v = VoiceGuide.instance;
+            addTearDown(() => setVoiceMuted(false));
+
+            await setVoiceMuted(true);
+            v.speak('rẽ trái vào Đường Tắt Tiếng');
+            await settle();
+            await settle();
+            final clipWhileMuted =
+                await SoundAlerts.instance.playOverSpeed();
+            await settle();
+            expect(spoken, isEmpty, reason: 'no sentence may be spoken');
+            expect(playedAssets, isEmpty, reason: 'no clip may be played');
+            expect(clipWhileMuted, isFalse,
+                reason: 'a false return is what makes the caller fall back to '
+                    'TTS — which is muted too, so the result is silence');
+            expect(v.pending, 0, reason: 'nothing may pile up while muted');
+
+            await setVoiceMuted(false);
+            v.speak('rẽ trái vào Đường Bật Tiếng');
+            await settle();
+            await settle();
+            expect(spoken, ['rẽ trái vào Đường Bật Tiếng']);
+          });
         });
       });
   });

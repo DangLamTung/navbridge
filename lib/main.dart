@@ -7,16 +7,50 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:navbridge/overlay/overlay_main.dart';
 import 'package:navbridge/pages/navigation/navigation_page.dart';
 import 'package:navbridge/services/nav_foreground.dart';
+import 'package:navbridge/services/offline_router.dart'
+    show loadBestGraph, routingGraphPresent;
+import 'package:navbridge/services/osrm.dart' show osrmBaseOverride;
 import 'package:navbridge/services/trip_logger.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (!kIsWeb) {
+  if (kIsWeb) {
+    // ⭐ `?osrm=/osrm` points the router at a SAME-ORIGIN relay to the public
+    // OSRM server (`tool/sim_serve.py`), because that server sends no CORS
+    // headers and a browser fetch to it is blocked — without the relay the web
+    // build cannot plan a route at all, and every web feature that needs one
+    // (the map route editor, the simulation) silently does nothing.
+    final relay = (Uri.base.queryParameters['osrm'] ?? '').trim();
+    if (relay.isNotEmpty) {
+      osrmBaseOverride = Uri.base.resolve(relay).toString();
+      debugPrint('ROUTER: OSRM relay $osrmBaseOverride');
+    }
+  } else {
     FlutterForegroundTask.initCommunicationPort();
     unawaited(NavForegroundService.instance.init());
     unawaited(recoverSpooledTrips());
+    unawaited(_preloadRoutingGraph());
   }
   runApp(const NavBridgeApp());
+}
+
+/// Load the offline routing graph as soon as the app boots.
+///
+/// The navigation page also does this, but only from its `initState` — so a cold
+/// start that lands on another screen never loads the graph, and the driver finds
+/// "chưa có dữ liệu chỉ đường ngoại tuyến" on the first offline route. Doing it here
+/// makes the load independent of which screen happens to open first.
+Future<void> _preloadRoutingGraph() async {
+  try {
+    if (!await routingGraphPresent()) {
+      debugPrint('ROUTER: no graph source installed at boot');
+      return;
+    }
+    final ok = await loadBestGraph();
+    debugPrint('ROUTER: boot graph preload loaded=$ok');
+  } catch (e) {
+    debugPrint('ROUTER: boot graph preload failed: $e');
+  }
 }
 
 /// Secondary entrypoint for the floating speed-limit / camera overlay widget

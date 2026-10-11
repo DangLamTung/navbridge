@@ -51,7 +51,7 @@ class RoadInfoChip extends StatelessWidget {
       borderRadius: BorderRadius.circular(16),
       color: Colors.white,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -59,26 +59,26 @@ class RoadInfoChip extends StatelessWidget {
             // widget) so it is readable at a glance while riding. Blue ring
             // normally, red fill while speeding.
             _Dial(
-              size: 46,
+              size: 58,
               ringColor: speeding ? const Color(0xFFD93025) : kAppBlue,
               fillColor: speeding ? const Color(0xFFD93025) : Colors.white,
               valueColor: speeding ? Colors.white : kAppBlue,
               big: kmh == null ? '--' : '$kmh',
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 7),
             // Speed-limit sign. MUST show the EFFECTIVE limit ([limit] =
             // sign-aware override), not [RoadInfo.speedLimit] — showing the
             // road's own tagged value here made the screen disagree with the
             // voice, which announces the effective limit ("voice said 60
             // while the screen showed 50").
             _Dial(
-              size: 46,
+              size: 58,
               ringColor: const Color(0xFFFF5252),
               fillColor: Colors.white,
               valueColor: Colors.black,
               big: (limit == null || limit <= 0) ? '--' : '$limit',
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 7),
             Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -92,7 +92,7 @@ class RoadInfoChip extends StatelessWidget {
                       ? i!.label
                       : (i?.name.isNotEmpty == true ? i!.name : ''),
                   style: const TextStyle(
-                    fontSize: 10.5,
+                    fontSize: 11.5,
                     fontWeight: FontWeight.w700,
                     color: kAppBlue,
                   ),
@@ -103,7 +103,7 @@ class RoadInfoChip extends StatelessWidget {
                       : '',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 10.5, color: Colors.grey[700]),
+                  style: TextStyle(fontSize: 11.5, color: Colors.grey[700]),
                 ),
               ],
             ),

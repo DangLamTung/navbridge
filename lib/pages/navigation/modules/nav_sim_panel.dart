@@ -109,6 +109,16 @@ class _SimConsoleState extends State<SimConsole> {
   double _speed = 4;
   bool _collapsed = false;
 
+  /// Which of the two web ROUTES this is.
+  ///
+  /// ⭐ `web/sim.html` and `web/logged.html` are the same app, but not the same
+  /// job: one simulates a drive (the console IS the thing you came for, so it
+  /// opens with the route editor showing), the other plays a recording back (the
+  /// console is a debugging tool, so it starts COLLAPSED — it was covering the
+  /// map). Splitting them by URL also stops a replay from starting a simulation
+  /// by accident, which is what one overloaded panel invited.
+  bool _isSimRoute = false;
+
   /// Last file chosen from disk, and what happened to it (parse errors are the
   /// common case: a Google Takeout Records.json is not a trip).
   ///
@@ -119,6 +129,10 @@ class _SimConsoleState extends State<SimConsole> {
   String _pickedJson = '';
   String _pickedInfo = '';
 
+  /// Path/URL of a raw GPS trace for the no-route simulation. Kept in the panel
+  /// so a run can be repeated without hunting for the file again.
+  final TextEditingController _gpsCtrl = TextEditingController();
+
   static const List<double> _speeds = [1, 2, 4, 10, 20, 0];
 
   @override
@@ -128,6 +142,18 @@ class _SimConsoleState extends State<SimConsole> {
     final boot = TripReplay.source;
     if (boot != null && boot != 'injected') _selected = boot;
     _refCtrl.text = _selected;
+    // The route decides the mode (see [_isSimRoute]).
+    _isSimRoute = kIsWeb && Uri.base.path.contains('sim');
+    _collapsed = !_isSimRoute;
+    if (_isSimRoute) {
+      _tab = _ConsoleTab.editor;
+      // ⭐ AND enable the map taps. Setting the tab alone only changed which
+      // controls were on screen: waypoints are added by the map's tap handler,
+      // which is gated on `simEditorMode` — the same thing the tab BUTTON sets
+      // (`simToggleEditor(true)`). Without this the console showed the editor
+      // and tapping the map did nothing at all.
+      simToggleEditor(true);
+    }
     simTick.addListener(_onTick);
     unawaited(_loadTrips());
   }
@@ -136,6 +162,7 @@ class _SimConsoleState extends State<SimConsole> {
   void dispose() {
     simTick.removeListener(_onTick);
     _refCtrl.dispose();
+    _gpsCtrl.dispose();
     super.dispose();
   }
 
@@ -503,6 +530,150 @@ class _SimConsoleState extends State<SimConsole> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 6),
+                  // ⭐ The SIMULATION, which is the one that answers a question
+                  // about the algorithm. "Chạy lộ trình này" (above) walks the
+                  // route's own geometry through the pipeline: a perfect
+                  // receiver, so it never exercises the outlier gate, the
+                  // heading filter or the road match. This button drives the
+                  // same route with SYNTHESISED GPS FIXES ([
+                  // GpsSimOptions]: receiver error, a coarse cold start,
+                  // degraded and lost fixes) and writes the trip as it goes.
+                  // Same distance, same map data, same voice — the difference is
+                  // that the input is what a phone would have handed over.
+                  //
+                  // ⭐ The two speeds below belong to this button, so a simulation
+                  // needs no URL and no command line: tap the points on the map,
+                  // set the speed, press it. The car's speed decides what the trip
+                  // SAYS (limits, overspeed, arrivals); the feed speed only decides
+                  // how long you wait, and must never change a recorded number.
+                  Row(
+                    children: [
+                      const SizedBox(
+                        width: 54,
+                        child: Text('Xe chạy',
+                            style: TextStyle(
+                                color: Colors.white70, fontSize: 10.5)),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value: simDriveKmh.clamp(5, 130),
+                          min: 5,
+                          max: 130,
+                          divisions: 25,
+                          label: '${simDriveKmh.round()} km/h',
+                          onChanged: (v) => setState(() => simSetDriveKmh(v)),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 54,
+                        child: Text(
+                          '${simDriveKmh.round()} km/h',
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 10.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      const SizedBox(
+                        width: 54,
+                        child: Text('Phát',
+                            style: TextStyle(
+                                color: Colors.white70, fontSize: 10.5)),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value: simFeedSpeed.clamp(1, 60),
+                          min: 1,
+                          max: 60,
+                          divisions: 59,
+                          label: '${simFeedSpeed.round()}×',
+                          onChanged: (v) => setState(() => simSetFeedSpeed(v)),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 54,
+                        child: Text(
+                          '${simFeedSpeed.round()}×',
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 10.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: simEditorWaypoints.length >= 2
+                          ? _simulateEditorRoute
+                          : null,
+                      icon: const Icon(Icons.gps_fixed, size: 14),
+                      label: const Text(
+                        'Mô phỏng GPS (bắt đầu → kết thúc)',
+                        style: TextStyle(fontSize: 10.5),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00695C),
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: const Color(0xFF2A2F3A),
+                        disabledForegroundColor: Colors.white38,
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  // ⭐ The RAW-INPUT mode: a GPS trace in, a trip out. Nothing
+                  // about the drive is given to the app — no route, no road
+                  // names, no limits — so every answer has to come out of the
+                  // map data. This is the one to use to test the algorithm;
+                  // the two buttons above hand the app a route and only test
+                  // how it follows one.
+                  const Text(
+                    'Tệp GPS (chỉ toạ độ + thời gian):',
+                    style: TextStyle(color: Colors.white70, fontSize: 10.5),
+                  ),
+                  const SizedBox(height: 4),
+                  SizedBox(
+                    height: 30,
+                    child: TextField(
+                      controller: _gpsCtrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        hintText: '/trips/gps_only.json hoặc https://…',
+                        hintStyle: TextStyle(color: Colors.white38, fontSize: 12),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 6,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _gpsCtrl.text.trim().isEmpty
+                          ? null
+                          : _simulateFromGpsFile,
+                      icon: const Icon(Icons.description_outlined, size: 14),
+                      label: const Text(
+                        'Chạy từ tệp GPS (không lộ trình)',
+                        style: TextStyle(fontSize: 10.5),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00695C),
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: const Color(0xFF2A2F3A),
+                        disabledForegroundColor: Colors.white38,
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -669,14 +840,50 @@ class _SimConsoleState extends State<SimConsole> {
               style: const TextStyle(color: Colors.white54, fontSize: 10),
             ),
           const SizedBox(height: 6),
-          const Text(
-            'NHẬT KÝ THÔNG BÁO',
-            style: TextStyle(
-              color: Colors.white54,
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.4,
-            ),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'NHẬT KÝ THÔNG BÁO',
+                  style: TextStyle(
+                    color: Colors.white54,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ),
+              // ⭐ The lines are LONG by design — timestamp, kind, position, and
+              // the road context the sentence was built from — so they exist to
+              // be pasted somewhere (an issue, a chat), not retyped. User,
+              // 2026-10-08: "nhật kí thông báo must copyable".
+              IconButton(
+                tooltip: simLog.isEmpty
+                    ? 'Chưa có gì để sao chép'
+                    : 'Sao chép toàn bộ nhật ký (${simLog.length} dòng)',
+                icon: const Icon(Icons.copy_all, size: 15),
+                color: Colors.white60,
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 26, minHeight: 22),
+                onPressed: simLog.isEmpty ? null : _copyLog,
+              ),
+              // ⭐ And the TRIP the run produced — the simulation's actual
+              // output. It has to leave the app: a simulated drive whose trip
+              // can only be read inside the console cannot be audited with the
+              // tools that audit every other drive.
+              IconButton(
+                tooltip: simLastTripJson.isEmpty
+                    ? 'Chưa có chuyến nào để tải'
+                    : 'Tải $simLastTripName',
+                icon: const Icon(Icons.download, size: 15),
+                color: Colors.white60,
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 26, minHeight: 22),
+                onPressed: simLastTripJson.isEmpty ? null : _saveTrip,
+              ),
+            ],
           ),
           const SizedBox(height: 2),
           // Newest first: while a run is on, the interesting line is the last.
@@ -702,7 +909,11 @@ class _SimConsoleState extends State<SimConsole> {
                         final a = simLog[simLog.length - 1 - i];
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 4),
-                          child: Text(
+                          // ⭐ SelectableText, not Text: a single line often
+                          // carries the one fact worth quoting (the road the
+                          // sentence was built from), and with a plain Text the
+                          // only way to get it off the screen was to retype it.
+                          child: SelectableText(
                             a.toString(),
                             style: const TextStyle(
                               color: Colors.white,
@@ -785,6 +996,74 @@ class _SimConsoleState extends State<SimConsole> {
   int get _resumeAt => simState == SimRunState.running
       ? 0
       : TripReplay.resumeFor(_tripKey);
+
+  /// ⭐ Drive the tapped waypoints as a SIMULATION.
+  ///
+  /// Only the ENDPOINTS are handed over, not the route: the page plans it with
+  /// the app's own router (`fetchAnyRoute` → OSRM, decoded by the app) and
+  /// synthesises the GPS stream along that geometry. That is what keeps this a
+  /// test of the app — a route supplied already decoded would test whoever
+  /// prepared it (`nav_track_sim.dart`).
+  void _simulateEditorRoute() {
+    if (simEditorWaypoints.length < 2) return;
+    setState(() {
+      // Same as "Chạy lộ trình này": the run's progress, counters and log live on
+      // the replay tab, so that is where the console has to be while it runs.
+      _tab = _ConsoleTab.replay;
+      simToggleEditor(false);
+    });
+    simRequestTrackSim(simEditorWaypoints);
+  }
+
+  /// Run the trace in the field: GPS in, trip out, no route planned.
+  void _simulateFromGpsFile() {
+    final ref = _gpsCtrl.text.trim();
+    if (ref.isEmpty) return;
+    setState(() {
+      _tab = _ConsoleTab.replay;
+      simToggleEditor(false);
+    });
+    simRequestGpsSim(ref);
+  }
+
+  /// Hand the last simulated drive's TRIP to the platform (a download on web).
+  Future<void> _saveTrip() async {
+    if (simLastTripJson.isEmpty) return;
+    final msg = await saveTextFile(
+      text: simLastTripJson,
+      fileName: simLastTripName.isEmpty ? 'Chuyến_đi.json' : simLastTripName,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 3)),
+    );
+  }
+
+  /// Copy the WHOLE announcement log to the clipboard.
+  ///
+  /// Oldest first, which is drive order — the panel shows newest first so the
+  /// interesting line is always on screen during a run, but a paste into an
+  /// issue reads as a timeline only if it starts at the beginning. Each line
+  /// already carries its own timestamp, so nothing is lost either way.
+  Future<void> _copyLog() async {
+    if (simLog.isEmpty) return;
+    final buf = StringBuffer()
+      ..writeln('NHẬT KÝ THÔNG BÁO — $simTripLabel')
+      ..writeln('$simFixesFed/$simFixesTotal fix · $simSpeed× · '
+          '${simLog.length} thông báo')
+      ..writeln('---');
+    for (final a in simLog) {
+      buf.writeln(a.toString());
+    }
+    await Clipboard.setData(ClipboardData(text: buf.toString()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Đã sao chép ${simLog.length} dòng nhật ký'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
 
   /// Read a trip JSON straight off the disk and drive it.
   ///

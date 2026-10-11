@@ -12,6 +12,7 @@ import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:navbridge/services/offline_links.dart';
@@ -30,8 +31,10 @@ import 'package:navbridge/services/nav_map_store.dart';
 import 'package:navbridge/core/settings.dart';
 import 'package:navbridge/services/terrain.dart';
 import 'package:navbridge/ui/widgets.dart';
+import 'package:navbridge/services/offline_loader.dart'
+    show loadCustomDataUrl, saveCustomDataUrl;
 import 'package:navbridge/services/vietmap_config.dart'
-    show appendCartoApiKey, customDataUpdateUrl;
+    show appendCartoApiKey, customDataUpdateUrl, defaultDataUpdateBaseUrl;
 
 String formatBytes(int b) {
   if (b >= 1 << 30) return '${(b / (1 << 30)).toStringAsFixed(2)} GB';
@@ -87,6 +90,19 @@ class _OfflineScreenState extends State<OfflineScreen> {
   int _graphDone = 0;
   int _graphTotal = 1;
   int _graphBytes = 0;
+
+  /// In-app `.ghz` builder: running flag, byte progress, and the archive the
+  /// phone currently holds (if any) so the export button can act on it.
+  bool _archiveBuilding = false;
+  int _archiveDone = 0;
+  int _archiveTotal = 1;
+  bool _archiveHas = false;
+  int _archiveBytes = 0;
+
+  /// The folder exists but cannot load (a half-written import: no `GH` marker in
+  /// its `properties`). Distinct from "not installed" because the fix is "delete
+  /// it", not "download something".
+  bool _graphCorrupt = false;
   int _cacheBytes = 0;
   StreamSubscription<bool>? _connSub;
 
@@ -125,10 +141,33 @@ class _OfflineScreenState extends State<OfflineScreen> {
     }
   }
 
+  /// Status icon for the update line. Kept out of the widget tree so the
+  /// nested conditionals do not have to be read inside a build() call.
+  IconData get _dataStatusIcon => _dataUpdating
+      ? Icons.hourglass_top
+      : OfflineDataUpdater.instance.lastError
+      ? Icons.error_outline
+      : Icons.check_circle_outline;
+
+  Color get _dataStatusColor => _dataUpdating
+      ? Colors.grey
+      : OfflineDataUpdater.instance.lastError
+      ? Colors.red.shade700
+      : Colors.green.shade700;
+
   @override
   void initState() {
     super.initState();
     _dataUrlCtl.text = customDataUpdateUrl;
+    loadCustomDataUrl().then((saved) {
+      if (mounted && saved.isNotEmpty) {
+        setState(() {
+          customDataUpdateUrl = saved;
+          _dataUrlCtl.text = saved;
+          _refreshDataUpdateState();
+        });
+      }
+    });
     _reload();
     _refreshGraph();
     _refreshNavMap();
@@ -169,24 +208,44 @@ class _OfflineScreenState extends State<OfflineScreen> {
         if (f is File) bytes += f.lengthSync();
       }
     }
+    // A `.ghz` built earlier in-app (or installed from one) sits next to the
+    // graph folder; report it so the user knows what an export would copy.
+    var archiveHas = false;
+    var archiveBytes = 0;
+    try {
+      final a = File(await graphArchivePath());
+      if (a.existsSync()) {
+        archiveHas = true;
+        archiveBytes = a.lengthSync();
+      }
+    } catch (_) {}
+    // Say so when the folder cannot load: otherwise the screen announces "data
+    // present" while every load throws, which is how a dead offline feature can
+    // look healthy for days.
+    final corrupt = await graphFolderCorrupt();
     await OfflineRouter.instance.refreshLoaded();
     if (mounted) {
       setState(() {
         _graphHas = has;
         _graphBytes = bytes;
         _graphLoaded = OfflineRouter.instance.isLoaded;
+        _archiveHas = archiveHas;
+        _archiveBytes = archiveBytes;
+        _graphCorrupt = corrupt;
       });
     }
   }
 
   Future<void> _loadGraph() async {
-    if (!await routingGraphPresent()) return;
     setState(() => _graphLoading = true);
-    final ok = await OfflineRouter.instance.load(await routingGraphPath());
+    // loadBestGraph deletes an unloadable folder first, so this button now also
+    // recovers from a half-imported graph instead of failing on it forever.
+    final ok = await loadBestGraph();
     if (mounted) {
       setState(() {
         _graphLoading = false;
         _graphLoaded = ok;
+        _graphCorrupt = OfflineRouter.instance.graphCorrupt;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -195,7 +254,24 @@ class _OfflineScreenState extends State<OfflineScreen> {
           ),
         ),
       );
+      if (ok) await _refreshGraph();
     }
+  }
+
+  /// One tap out of the trap where a half-written graph folder can never load:
+  /// delete it, then open the picker so a good file can be chosen immediately.
+  /// Without this the only escape is knowing to press "Xoá dữ liệu" first.
+  Future<void> _repairGraph() async {
+    await deleteRoutingGraph();
+    if (mounted) {
+      setState(() {
+        _graphHas = false;
+        _graphCorrupt = false;
+        _graphLoaded = false;
+      });
+    }
+    await _refreshGraph();
+    if (mounted) await _pickGraphFile();
   }
 
   /// Download the GraphHopper graph from [customUrl] (or the default / build-time
@@ -303,11 +379,88 @@ class _OfflineScreenState extends State<OfflineScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _graphLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi nạp tệp: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Lỗi nạp tệp: $e')));
       }
     }
+  }
+
+  /// Build the portable `.ghz` from the graph already on the phone.
+  ///
+  /// This is what makes the graph reusable: another handset installs it by
+  /// UNZIPPING (seconds) instead of re-importing the 311 MB country extract
+  /// (minutes of CPU, GBs of RAM). It costs disk — the archive sits next to the
+  /// folder it duplicates, so the phone holds both.
+  Future<void> _buildGraphArchive() async {
+    if (_archiveBuilding) return;
+    if (!_graphHas) {
+      _snack('Chưa có dữ liệu graph để đóng gói — hãy nạp tệp PBF trước.');
+      return;
+    }
+    setState(() {
+      _archiveBuilding = true;
+      _archiveDone = 0;
+      _archiveTotal = 1;
+    });
+    try {
+      final res = await buildGraphArchive(
+        onProgress: (done, total) {
+          if (!mounted) return;
+          setState(() {
+            _archiveDone = done;
+            _archiveTotal = total <= 0 ? 1 : total;
+          });
+        },
+      );
+      if (res == null) {
+        if (mounted) setState(() => _archiveBuilding = false);
+        _snack('Chưa có dữ liệu graph để đóng gói.');
+        return;
+      }
+      if (mounted) {
+        setState(() => _archiveBuilding = false);
+        _snack(
+          'Đã tạo tệp .ghz (${formatBytes(res.bytes)}) từ '
+          '${formatBytes(res.sourceBytes)} dữ liệu graph.',
+        );
+      }
+      await _refreshGraph();
+    } catch (e) {
+      if (mounted) setState(() => _archiveBuilding = false);
+      _snack('Không tạo được tệp .ghz: $e');
+    }
+  }
+
+  /// Copy the built archive to Downloads: it outlives an uninstall, is visible to
+  /// a file manager, and `adb pull /sdcard/Download/routing_graph.ghz` can take
+  /// it back to a PC.
+  Future<void> _exportGraphArchive() async {
+    try {
+      String where;
+      try {
+        where = await exportGraphArchive();
+      } on GraphExportNeedsPermission {
+        // Android 8–9 writes the public Downloads folder and needs the grant;
+        // API 29+ goes through MediaStore and never reaches this branch.
+        final st = await Permission.storage.request();
+        if (!st.isGranted) {
+          _snack('Cần quyền ghi bộ nhớ để xuất tệp.');
+          return;
+        }
+        where = await exportGraphArchive();
+      }
+      _snack(
+        where.isEmpty ? 'Đã xuất tệp .ghz.' : 'Đã xuất tệp .ghz ra $where',
+      );
+    } catch (e) {
+      _snack('Không xuất được tệp .ghz: $e');
+    }
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   /// Delete the on-device routing graph to reclaim phone storage.
@@ -348,9 +501,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
     if (u == null) return;
     final ok = await launchUrl(u, mode: LaunchMode.externalApplication);
     if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Không mở được liên kết.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Không mở được liên kết.')));
     }
   }
 
@@ -358,9 +511,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
   Future<void> _copyLink(String url) async {
     await Clipboard.setData(ClipboardData(text: url));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Đã sao chép liên kết.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Đã sao chép liên kết.')));
     }
   }
 
@@ -466,9 +619,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi cài bản đồ: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Lỗi cài bản đồ: $e')));
       }
     } finally {
       if (mounted) setState(() => _navDownloading = false);
@@ -478,14 +631,26 @@ class _OfflineScreenState extends State<OfflineScreen> {
 
   Future<void> _pickNavMapFile() async {
     try {
-      final res = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['pmtiles'],
-      );
+      // FileType.custom with ['pmtiles'] THROWS on Android before the picker
+      // opens: file_picker maps extensions to MIME types via MimeTypeMap and
+      // `.pmtiles` has none, so the allowed list is empty and it refuses with
+      // "Unsupported filter" (confirmed on device 2026-09-30 — the button could
+      // never have worked). Pick anything, then check the extension ourselves.
+      final res = await FilePicker.platform.pickFiles(type: FileType.any);
       if (res == null || res.files.isEmpty || res.files.single.path == null) {
         return;
       }
       final filePath = res.files.single.path!;
+      if (!filePath.toLowerCase().endsWith('.pmtiles')) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Hãy chọn tệp .pmtiles (bản đồ vector).'),
+            ),
+          );
+        }
+        return;
+      }
       setState(() => _navDownloading = true);
       final ok = await installNavMapFile(filePath);
       if (mounted) {
@@ -494,16 +659,16 @@ class _OfflineScreenState extends State<OfflineScreen> {
             content: Text(
               ok
                   ? 'Đã cài đặt tệp bản đồ PMTiles thành công.'
-                  : 'Không cài được tệp bản đồ.',
+                  : 'Không cài được tệp bản đồ (không phải PMTiles hoặc tệp lỗi).',
             ),
           ),
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi nạp bản đồ: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Lỗi nạp bản đồ: $e')));
       }
     } finally {
       if (mounted) setState(() => _navDownloading = false);
@@ -540,15 +705,17 @@ class _OfflineScreenState extends State<OfflineScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi nạp tệp dữ liệu: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Lỗi nạp tệp dữ liệu: $e')));
       }
     }
   }
 
-  void _applyCustomDataUrl() {
-    customDataUpdateUrl = _dataUrlCtl.text.trim();
+  Future<void> _applyCustomDataUrl() async {
+    final text = _dataUrlCtl.text.trim();
+    customDataUpdateUrl = text;
+    await saveCustomDataUrl(text);
     _refreshDataUpdateState();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -556,7 +723,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
           content: Text(
             customDataUpdateUrl.isNotEmpty
                 ? 'Đã áp dụng URL máy chủ dữ liệu: $customDataUpdateUrl'
-                : 'Đã xoá URL máy chủ tự đặt.',
+                : 'Đã khôi phục về máy chủ mặc định (GitHub CDN)',
           ),
         ),
       );
@@ -810,7 +977,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
           ),
           const SizedBox(height: 16),
           const Text(
-            'Dữ liệu giao thông (tự cập nhật)',
+            'Dữ liệu giao thông & bản đồ (tự cập nhật)',
             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
@@ -822,79 +989,31 @@ class _OfflineScreenState extends State<OfflineScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Header: icon, copy, and the server-URL gear. The gear used to
+                  // sit in the button row, which left roughly 200 px per button
+                  // and wrapped BOTH labels onto two lines ("Cập nhật / mạng",
+                  // "Cài tệp từ / máy").
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Icon(Icons.sync, size: 18, color: kAppBlue),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           _dataUpdateEnabled
-                              ? 'Camera & biển báo giao thông tải tự động khi có '
-                                    'bản mới (không cần cài APK).'
-                              : 'Chưa cấu hình máy chủ cập nhật dữ liệu giao thông '
-                                    '(DATA_URL). Mở ⚙ → Nguồn dữ liệu để đặt URL.',
+                              ? 'Biển báo, camera, giới hạn tốc độ, địa điểm và '
+                                    'bản đồ nền tải tự động khi có bản mới — '
+                                    'không cần cài lại APK.'
+                              : 'Chưa cấu hình máy chủ cập nhật (DATA_URL). '
+                                    'Mở ⚙ → Nguồn dữ liệu để đặt URL.',
                           style: const TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  if (_dataUpdateResult.isNotEmpty)
-                    Text(
-                      _dataUpdateResult,
-                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
-                    ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: kAppBlue,
-                            foregroundColor: Colors.white,
-                            minimumSize: const Size.fromHeight(40),
-                          ),
-                          onPressed:
-                              _online && !_dataUpdating && _dataUpdateEnabled
-                                  ? _checkDataUpdate
-                                  : null,
-                          icon: _dataUpdating
-                              ? const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(Icons.sync, size: 16),
-                          label: Text(
-                            _dataUpdating ? 'Đang cập nhật…' : 'Cập nhật mạng',
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size.fromHeight(40),
-                          ),
-                          onPressed: _pickDataFile,
-                          icon: const Icon(Icons.folder_open, size: 16),
-                          label: const Text(
-                            'Cài tệp từ máy',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
                       IconButton(
+                        visualDensity: VisualDensity.compact,
                         tooltip: _showDataUrlField
                             ? 'Ẩn URL máy chủ'
                             : 'Cấu hình URL máy chủ',
@@ -910,6 +1029,69 @@ class _OfflineScreenState extends State<OfflineScreen> {
                       ),
                     ],
                   ),
+                  if (_dataUpdateResult.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          _dataStatusIcon,
+                          size: 14,
+                          color: _dataStatusColor,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            _dataUpdateResult,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[800],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  // Full width primary. `Size.fromHeight` sets the width to
+                  // infinity, so this fills the card in a Column without needing
+                  // an Expanded wrapper — and the label stays on one line.
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: kAppBlue,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size.fromHeight(44),
+                    ),
+                    onPressed: _online && !_dataUpdating && _dataUpdateEnabled
+                        ? _checkDataUpdate
+                        : null,
+                    icon: _dataUpdating
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.sync, size: 16),
+                    label: Text(
+                      _dataUpdating
+                          ? 'Đang cập nhật…'
+                          : 'Cập nhật dữ liệu ngoại tuyến',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  // Secondary action demoted to a right-aligned text button —
+                  // the same pattern the "Xoá bộ nhớ đệm" row already uses.
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: _pickDataFile,
+                      icon: const Icon(Icons.folder_open, size: 16),
+                      label: const Text('Cài tệp từ máy'),
+                    ),
+                  ),
                   if (_showDataUrlField) ...[
                     const SizedBox(height: 8),
                     Row(
@@ -918,11 +1100,11 @@ class _OfflineScreenState extends State<OfflineScreen> {
                           child: TextField(
                             controller: _dataUrlCtl,
                             style: const TextStyle(fontSize: 12),
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               isDense: true,
-                              hintText: 'http://192.168.1.x:8080',
+                              hintText: defaultDataUpdateBaseUrl,
                               labelText: 'URL máy chủ cập nhật (DATA_URL)',
-                              border: OutlineInputBorder(),
+                              border: const OutlineInputBorder(),
                             ),
                           ),
                         ),
@@ -931,6 +1113,34 @@ class _OfflineScreenState extends State<OfflineScreen> {
                           onPressed: _applyCustomDataUrl,
                           child: const Text('Lưu'),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            customDataUpdateUrl.isEmpty
+                                ? 'Đang dùng mặc định: GitHub CDN (offline-data-latest)'
+                                : 'Đang dùng máy chủ riêng: $customDataUpdateUrl',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade600,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (customDataUpdateUrl.isNotEmpty)
+                          TextButton(
+                            onPressed: () {
+                              _dataUrlCtl.text = '';
+                              _applyCustomDataUrl();
+                            },
+                            child: const Text(
+                              'Khôi phục mặc định',
+                              style: TextStyle(fontSize: 11),
+                            ),
+                          ),
                       ],
                     ),
                   ],
@@ -1417,9 +1627,11 @@ class _OfflineScreenState extends State<OfflineScreen> {
                         child: Text(
                           _graphLoaded
                               ? 'Đã nạp — định tuyến ngoại tuyến sẵn sàng'
-                              : (_graphHas
-                                    ? 'Bộ dữ liệu đã có (${formatBytes(_graphBytes)})'
-                                    : 'Chưa có bộ dữ liệu chỉ đường'),
+                              : (_graphCorrupt
+                                    ? 'Dữ liệu hỏng — không mở được'
+                                    : (_graphHas
+                                          ? 'Bộ dữ liệu đã có (${formatBytes(_graphBytes)})'
+                                          : 'Chưa có bộ dữ liệu chỉ đường')),
                           style: const TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
@@ -1444,7 +1656,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
                           label: Text(kGraphRegionPresets[i].name),
                           selected: _selectedGraphPresetIdx == i,
                           onSelected: (sel) {
-                            if (sel) setState(() => _selectedGraphPresetIdx = i);
+                            if (sel) {
+                              setState(() => _selectedGraphPresetIdx = i);
+                            }
                           },
                         ),
                     ],
@@ -1486,8 +1700,9 @@ class _OfflineScreenState extends State<OfflineScreen> {
                             ),
                             onPressed: _online && !_graphLoading
                                 ? () => _downloadGraphFrom(
-                                      kGraphRegionPresets[_selectedGraphPresetIdx].url,
-                                    )
+                                    kGraphRegionPresets[_selectedGraphPresetIdx]
+                                        .url,
+                                  )
                                 : null,
                             icon: const Icon(Icons.download, size: 16),
                             label: Text(
@@ -1527,6 +1742,47 @@ class _OfflineScreenState extends State<OfflineScreen> {
                         ),
                       ],
                     ),
+                    if (_graphCorrupt) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.red[50],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red[200]!),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Dữ liệu chỉ đường trên máy bị hỏng: bản nạp trước '
+                              'bị dừng giữa chừng nên không mở được. Xoá rồi nạp '
+                              'lại bằng tệp .ghz hoặc .pbf.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.red[900],
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: !_graphLoading ? _repairGraph : null,
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.red[700],
+                                  minimumSize: const Size.fromHeight(38),
+                                ),
+                                icon: const Icon(Icons.healing, size: 16),
+                                label: const Text(
+                                  'Xoá & nạp lại',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     if (_graphHas) ...[
                       const SizedBox(height: 8),
                       Row(
@@ -1564,6 +1820,58 @@ class _OfflineScreenState extends State<OfflineScreen> {
                             ),
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: !_archiveBuilding
+                                  ? _buildGraphArchive
+                                  : null,
+                              icon: _archiveBuilding
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.archive_outlined,
+                                      size: 16,
+                                    ),
+                              label: const Text(
+                                'Tạo tệp .ghz',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _archiveHas
+                                  ? _exportGraphArchive
+                                  : null,
+                              icon: const Icon(Icons.save_alt, size: 16),
+                              label: const Text(
+                                'Lưu ra Downloads',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _archiveBuilding
+                            ? 'Đang nén graph… ${formatBytes(_archiveDone)} / '
+                                  '${formatBytes(_archiveTotal)}'
+                            : _archiveHas
+                            ? 'Tệp .ghz trên máy: '
+                                  '${formatBytes(_archiveBytes)}'
+                            : 'Chưa có tệp .ghz',
+                        style: TextStyle(fontSize: 11, color: Colors.grey[700]),
                       ),
                     ],
                   ],

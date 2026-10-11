@@ -52,6 +52,37 @@ void main() {
       t.addFix(const LatLng(10.01, 106));
       expect(t.fixCount, 2);
     });
+
+    // ⭐ The recording must be paced by DRIVE time, not wall time, or a
+    // simulation played faster than real time is not the drive it claims to be.
+    // Measured 2026-10-08: a 189-fix drive replayed at 8× reached the log 125 ms
+    // apart, the interval test then measured WALL gaps and thinned it to one fix
+    // per wall second — 24 fixes for 3 minutes of driving, one every ~112 m.
+    test('paces on the fix clock, so a fast run records every second', () {
+      final t = TripLogger(name: 'x');
+      final t0 = DateTime(2026, 10, 8, 14, 36, 26);
+      for (var i = 0; i < 20; i++) {
+        t.addFix(
+          LatLng(10 + i * 0.000125, 106), // ~14 m apart, as at 50 km/h
+          at: t0.add(Duration(seconds: i)),
+        );
+      }
+      expect(t.fixCount, 20);
+      final span = t.fixes.last.time.difference(t.fixes.first.time);
+      expect(span, const Duration(seconds: 19));
+    });
+
+    test('the fix clock also thins, so a stalled receiver does not spam', () {
+      final t = TripLogger(name: 'x');
+      final t0 = DateTime(2026, 10, 8, 14, 36, 26);
+      t.addFix(const LatLng(10, 106), at: t0);
+      // 100 ms later and ~1 m away: too soon AND too close → dropped.
+      t.addFix(
+        const LatLng(10.00001, 106),
+        at: t0.add(const Duration(milliseconds: 100)),
+      );
+      expect(t.fixCount, 1);
+    });
   });
 
   group('serialization', () {

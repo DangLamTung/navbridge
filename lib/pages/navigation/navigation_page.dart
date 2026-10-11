@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
@@ -34,10 +35,12 @@ import 'package:navbridge/services/elevation.dart';
 import 'package:navbridge/services/nav_clock.dart';
 import 'package:navbridge/services/nav_engine.dart';
 import 'package:navbridge/services/nav_sim.dart';
+import 'package:navbridge/services/gps_track_sim.dart';
 import 'package:navbridge/services/trip_replay.dart';
 import 'package:navbridge/services/trip_resume.dart';
 import 'package:navbridge/services/offline_cameras.dart';
 import 'package:navbridge/core/nav_protocol.dart';
+import 'package:navbridge/core/layer_hold.dart';
 import 'package:navbridge/core/limit_change.dart';
 import 'package:navbridge/core/road_match.dart';
 import 'package:navbridge/core/map_protocol.dart';
@@ -61,6 +64,8 @@ import 'package:navbridge/core/outlier_gate.dart';
 import 'package:navbridge/core/route_profile.dart';
 import 'package:navbridge/core/settings.dart';
 import 'package:navbridge/core/sign_limit.dart';
+import 'package:navbridge/pages/settings/settings_save.dart'
+    show saveAllSettings;
 import 'package:navbridge/services/quick_places.dart';
 import 'package:navbridge/services/osm_api.dart';
 import 'package:navbridge/services/search_history.dart';
@@ -75,6 +80,7 @@ import 'package:navbridge/services/trip_logger.dart';
 import 'package:navbridge/services/sound_alerts.dart';
 import 'package:navbridge/core/trip_plan.dart';
 import 'package:navbridge/ui/arrival_card.dart';
+import 'package:navbridge/ui/save_text.dart';
 import 'package:navbridge/ui/cctv_icon.dart';
 import 'package:navbridge/ui/camera_icon.dart';
 import 'package:navbridge/ui/vector_nav_map.dart';
@@ -124,6 +130,7 @@ part 'modules/nav_search.dart';
 part 'modules/nav_signs.dart';
 part 'modules/nav_simple.dart';
 part 'modules/nav_sim_panel.dart';
+part 'modules/nav_track_sim.dart';
 part 'modules/nav_voice.dart';
 part 'modules/nav_weather.dart';
 part 'modules/nav_widgets.dart';
@@ -230,6 +237,9 @@ class _NavigationPageState extends State<NavigationPage>
   /// part is "consumed" (not drawn), Google-Maps style. Updated on every nav
   /// fix from `engine.snappedSegmentIndex`.
   int _routeStartIndex = 0;
+  int _lastWindowStartIndex = -1;
+  OsrmRoute? _lastCachedWindowRoute;
+  List<LatLng> _cachedRouteWindow = const [];
   LatLng? _current;
 
   /// Last-known GPS position, used to open the nav map centered on the
@@ -286,6 +296,34 @@ class _NavigationPageState extends State<NavigationPage>
   StreamSubscription<String>? _mapGpsSub;
   StreamSubscription<Uint8List>? _mapGpsFrameSub;
   bool _navigating = false;
+
+  /// How long to let startup work settle before adding a multi-megabyte
+  /// download: the routing graph, the AI warmup and the first tile fetches are
+  /// all still running when the first frame lands.
+  static const Duration _offlineDataSettle = Duration(seconds: 10);
+
+  /// How long to wait before re-checking whether a trip is under way.
+  static const Duration _offlineDataIdleRetry = Duration(minutes: 5);
+
+  /// Run the offline-data auto-update once the app has loaded and is IDLE.
+  ///
+  /// Deliberately not part of the startup burst: the transfer can be ~17 MB (the
+  /// posted-limit segment layer alone is 14 MB), so it must not race the routing
+  /// graph, the AI warmup or the first tile fetches. It also waits out an
+  /// in-progress navigation rather than stealing bandwidth mid-drive; being
+  /// parked with the app open is the natural window, and a long drive simply
+  /// defers it to the next idle check or the next launch.
+  Future<void> _syncOfflineDataWhenIdle() async {
+    if (!OfflineDataUpdater.instance.enabled) return;
+    await Future<void>.delayed(_offlineDataSettle);
+    while (mounted) {
+      if (!_navigating) {
+        await OfflineDataUpdater.instance.autoUpdate();
+        return;
+      }
+      await Future<void>.delayed(_offlineDataIdleRetry);
+    }
+  }
 
   /// True while the OS Picture-in-Picture window is on screen (nav only). When
   /// set, the page renders a compact PiP layout so the big banner/controls
@@ -344,6 +382,16 @@ class _NavigationPageState extends State<NavigationPage>
   CameraAhead? _nextCamera;
   final _cameraGate = _PerSecondGate(); // 1 Hz per-fix check throttle
   final _cameraDedupe = _ZoneDedupe(); // speak each camera far + near only
+
+  // --- upcoming signs (the "sắp tới" alert bar) ---------------------------
+  /// Signs ahead on the route, NEAREST FIRST — set by the same per-fix scan
+  /// that decides the spoken callout ([_setSignsAhead]), so the bar and the
+  /// voice can never disagree about which sign is next.
+  List<SignAhead> _aheadSigns = const [];
+
+  /// The alert bar collapses to a pill when it is in the way (the chevron on
+  /// the bar). Session UI state, not a setting — the count is the setting.
+  bool _alertBarCollapsed = false;
 
   /// When the last camera sentence was spoken — caps the surveillance kind
   /// ("Camera giám sát giao thông") to one per 20 s so a cluster of them does not
@@ -474,8 +522,6 @@ class _NavigationPageState extends State<NavigationPage>
   /// executor.
   Future<void> _maybeLoadRoutingGraph() async {
     if (OfflineRouter.instance.isLoaded) return;
-    if (!await routingGraphPresent()) return;
-    final path = await routingGraphPath();
     final t0 = DateTime.now();
     debugPrint('ROUTER: graph load scheduled (background preload)');
     // Small defer so it never competes with the first frames of a route
@@ -486,7 +532,10 @@ class _NavigationPageState extends State<NavigationPage>
       'ROUTER: graph load STARTING (t+'
       '${DateTime.now().difference(t0).inMilliseconds}ms)',
     );
-    final ok = await OfflineRouter.instance.load(path);
+    // loadBestGraph clears a half-imported folder first: it cannot be opened, and
+    // it used to win over the .ghz/.pbf beside it, so offline routing stayed dead
+    // with no in-app way out (seen on the itel_P663LN).
+    final ok = await loadBestGraph();
     debugPrint(
       'ROUTER: on-device graph loaded=$ok (load took '
       '${DateTime.now().difference(t0).inMilliseconds - 1000}ms)',
@@ -530,8 +579,16 @@ class _NavigationPageState extends State<NavigationPage>
       _nearCameras = capped;
       // The browse map is an AREA view: repeat speed signs collapse to the one
       // that applies where the car is, so the marker budget goes to the other
-      // kinds (cấm rẽ / quay đầu / cấm vượt / khu dân cư / STOP).
-      final kept = keepNearestSpeedSign(collapseRepeatedSpeedSigns(nearSigns));
+      // kinds (cấm rẽ / quay đầu / cấm vượt / khu dân cư / STOP). Sorted
+      // NEAREST-FIRST like the camera list above, so the density cap keeps the
+      // signs closest to the car rather than an arbitrary slice.
+      final kept = [
+        ...keepNearestSpeedSign(collapseRepeatedSpeedSigns(nearSigns)),
+      ]..sort(
+          (a, b) => d
+              .as(LengthUnit.Meter, pos, a.pos)
+              .compareTo(d.as(LengthUnit.Meter, pos, b.pos)),
+        );
       _nearSigns = kept;
       // SHOW-vs-ANNOUNCE test. A boundary sign that does not survive the query
       // (6 km / 120 records) and this filter is never DRAWN, however loudly it
@@ -621,6 +678,24 @@ class _NavigationPageState extends State<NavigationPage>
   /// Where the last road was published, for the hysteresis distance.
   LatLng? _lastRoadPublishPos;
 
+  /// Confirmation gate for the road's VALUE (class + limit) while the NAME does
+  /// not change — see `_gateValue` in `nav_gps.dart`. Tighter than the name
+  /// gate: 15 m is enough to prove a class change is not one bad fix.
+  final RoadNameHysteresis _roadValueGate =
+      RoadNameHysteresis(confirmFixes: 2, confirmMeters: 15);
+
+  /// Where the road VALUE was last published. Kept separate from
+  /// [_lastRoadPublishPos] because the name gate re-anchors on every publish,
+  /// including the ones that HOLD the value — which would leave the value gate
+  /// measuring metres it never actually confirmed.
+  LatLng? _lastValuePublishPos;
+
+  /// How far the car may drive before a POSTED-LIMIT LAYER value on screen goes
+  /// stale and the road's own limit takes over — see [LayerHold]. Kept here (not
+  /// in the lookup) because the hold is a decision about the DRIVE (which road
+  /// the car is on now), not about the layer.
+  final LayerHold _layerHold = LayerHold();
+
   /// Built-up area (khu đông dân cư) at [_inTownPos], cached per 150 m. The
   /// vehicle ceiling on a Waze value needs the LOCATION's context — see
   /// [NavGps.townAt].
@@ -635,6 +710,10 @@ class _NavigationPageState extends State<NavigationPage>
   // maneuver — see `_ensureNextStreetLimit` in `modules/nav_voice.dart`.
   /// km/h in force on the road being entered. 0 = unknown ⇒ not spoken.
   int _nextStreetLimit = 0;
+  /// The NAME of the road being entered — the engine's step name, or the
+  /// posted-limit layer's name 30 m past the corner when the engine step is
+  /// unnamed (most VN steps are). Spoken as "… vào …".
+  String _nextStreetName = '';
   /// The maneuver it was resolved for (cache key), and the street name the
   /// engine named for it — a different turn means a fresh lookup.
   LatLng? _nextStreetLimitKey;
@@ -651,7 +730,11 @@ class _NavigationPageState extends State<NavigationPage>
   // downloaded regions are keyed by the ACTIVE source; the provider is
   // recreated per switch so each layer caches under its own folder and styles
   // never mix.
-  String _tileSource = 'osm';
+  /// Basemap layer. Defaults to the OFFLINE source: the on-device vector archive
+  /// plus downloaded raster tiles are the map, and nothing is fetched — so the
+  /// first drive with no signal still shows a map instead of a blank one. The
+  /// online layers (OSM / ESRI / topo) are opt-in from the layer picker.
+  String _tileSource = 'offline';
   OfflineTileProvider _tileProvider = OfflineTileProvider(source: 'osm');
 
   bool _offline = false;
@@ -692,6 +775,24 @@ class _NavigationPageState extends State<NavigationPage>
     'vector':
         'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
   };
+
+  /// Raster basemap URL for the active source — NEVER null.
+  ///
+  /// [_tileLayers] deliberately has no `'offline'` entry: that source is the
+  /// on-device data (the vector archive + downloaded raster tiles), so it has
+  /// no online template. The raster [TileLayer] still needs one — flutter_map
+  /// throws "`wmsOptions` or `urlTemplate` must be provided to generate a tile
+  /// URL" on a null template, and [OfflineTileProvider] needs a URL for the
+  /// network fallback of a tile that was never downloaded. So `'offline'` (the
+  /// default) resolves to the OSM template — the drive that used to be the
+  /// `'osm'` default: the provider serves the downloaded tile from disk FIRST
+  /// and only reaches the network for a tile that was never cached (and never
+  /// at all when there is no connection — see [OfflineTileImage._load]).
+  ///
+  /// On web there is no disk store at all, so the online template is the only
+  /// thing that can draw a basemap.
+  String get _basemapRasterUrl =>
+      _tileLayers[_tileSource] ?? _tileLayers['osm']!;
 
   /// Set the active online basemap layer directly (from the "Lớp bản đồ"
   /// menu). The local tile server sends a proper User-Agent and re-encodes
@@ -762,6 +863,16 @@ class _NavigationPageState extends State<NavigationPage>
   // so it can be tested without a widget. See lib/core/limit_change.dart.
   final _limitAnnouncer = LimitChangeAnnouncer();
 
+  /// Road name at the last limit we ANNOUNCED, and the source of that value
+  /// ('sign' | 'road'). Two parallel Waze records of ONE street disagree
+  /// (Cộng Hòa 60 / Cộng Hoà 50, 3 m apart) and the segments layer flips between
+  /// them for 20 s+, which used to be voiced as a real limit change (user,
+  /// 2026-10-07: "the voice say speed limit is not correct"). A change while
+  /// the car stays on the SAME road is now voiced only when a posted SIGN is
+  /// involved (adopting OR releasing one) — a genuine zone change.
+  String _limitRoadName = '';
+  String _limitAnnouncedSrc = '';
+
   /// Posted limit from the last speed-limit sign, but capped by the VEHICLE's
   /// statutory class default. OSM/DATMAP/Waze speed signs carry a CAR limit,
   /// so a motorbike/truck must never inherit a car's 80 km/h posted value
@@ -816,6 +927,17 @@ class _NavigationPageState extends State<NavigationPage>
   bool _autoSimStarted = false;
 
   bool _startedReplay = false;
+
+  /// ── TRACK SIMULATION (`?track=…`, lib/pages/navigation/modules/nav_track_sim.dart).
+  ///
+  /// Separate from the replay on purpose: the replay is handed the recorded
+  /// drive's own answers (`_startedReplay` turns the road chain's own evidence
+  /// OFF and `_applyReplayRoad` injects the recording's road identity), while a
+  /// simulation must work everything out from the GPS points alone. This flag
+  /// says "the simulation owns the fix stream", so the real receiver is not
+  /// opened on top of it, and the fix counter keeps working in the console.
+  bool _trackSimRunning = false;
+  StreamSubscription<Position>? _trackSimSub;
 
   /// The recorded road `_publishReplayRoad` last published, as a comparison key
   /// (name + class + form).
@@ -1131,7 +1253,11 @@ class _NavigationPageState extends State<NavigationPage>
     _signSpeedLimitRoad = null;
     _signAheadM = 0;
     _inTownBySign = false;
+    _aheadSigns = const [];
+    _alertBarCollapsed = false;
     _limitAnnouncer.reset();
+    _limitRoadName = '';
+    _limitAnnouncedSrc = '';
     _speedChangeDedupe.reset();
     _motorwayWarned = false;
   }
@@ -1385,16 +1511,39 @@ class _NavigationPageState extends State<NavigationPage>
     // in the background so the first question in a session answers fast
     // instead of paying for the slow Keystore/asset IO on first ask().
     unawaited(AiAssistant.instance.warmup());
-    // Auto-update the offline camera / road-sign data from the configured
-    // server (DATA_URL) in the background — no APK needed to refresh these
-    // DBs. No-op (and no network) when DATA_URL is not set.
-    unawaited(OfflineDataUpdater.instance.autoUpdate());
+    // NOTE: the offline-data auto-update is deliberately NOT started here. It
+    // can pull the whole set (~17 MB, the posted-limit segment layer being
+    // 14 MB of it), so it runs from the FIRST-FRAME callback instead — once the
+    // app has LOADED and no trip is under way. See [_syncOfflineDataWhenIdle].
     // Emulator-replay harness: with --dart-define=SIM_ROUTE=lat,lng the app
     // plans that route and starts navigation by itself once a GPS fix exists,
     // so tool/emulator_gps_replay.py can exercise the whole limit chain (road
     // lookup, layer lookup, sign adoption, announcements) with no UI driving.
     // No define in a normal build → the constant is empty and this is a no-op.
+    //
+    // ⭐ CALLED EXACTLY ONCE. It used to be called twice, a duplicated line.
+    // With `?trip=` armed that ran `_maybeReplayDrive()` → `_startReplaySession`
+    // twice, and that is not idempotent: two routes, two `TurnByTurnEngine`s
+    // and — because `_startReplayGps` replaced `_gpsSub` without cancelling the
+    // old one — TWO live GPS streams feeding `_onGpsFix`. Every recorded fix
+    // arrived twice in the same instant (`GPS: fix dt=0.00s` on the second one),
+    // the counter ran past the trip (`fix 1062/540`), and the marker was pushed
+    // by both engines so it visibly JUMPED (user, 2026-10-08: "wtf is the
+    // jumping"). Verified from the browser console: the whole start sequence
+    // ("540 track points" / "navigation STARTED" / "540 fixes … 4×") printed
+    // twice per boot.
     _maybeAutoSim();
+    // Track SIMULATION (`?track=…`): GPS points in, a trip out, with the road
+    // chain deciding everything. Mutually exclusive with the replay by
+    // construction — the replay needs `?trip=`, this needs `?track=`. The same
+    // run is reachable from the console's "Mô phỏng GPS" button, which asks for
+    // it over `simTick` (the console holds no reference to this State).
+    simTick.addListener(_onSimTick);
+    unawaited(_maybeSimulateTrack());
+    // GPS-FILE simulation (`?gps=…`): a raw trace in, a trip out, with NO route
+    // planned and no engine installed — the algorithm derives every road, limit,
+    // sign and announcement from the map data.
+    unawaited(_maybeSimulateGps());
     if (kIsWeb) {
       // ?vehicle=car drives the SAME build in another vehicle class. The class
       // is what decides whether a posted limit is capped by that vehicle's
@@ -1484,6 +1633,12 @@ class _NavigationPageState extends State<NavigationPage>
       // camera alerts on. The GraphHopper routing graph, however, is already
       // loading in the background from initState ([_maybeLoadRoutingGraph]),
       // so a forced-offline / graphhopper route is ready without a long wait.
+
+      // Offline-data auto-update. The first frame being on screen is the
+      // earliest point at which the app has LOADED; the sync then waits for an
+      // idle gap of its own before transferring — see
+      // [_syncOfflineDataWhenIdle].
+      unawaited(_syncOfflineDataWhenIdle());
     });
     _connSub = onlineStream().listen((online) {
       _applyConnectivity(online);
@@ -1515,6 +1670,11 @@ class _NavigationPageState extends State<NavigationPage>
       simpleMode = s.simpleMode;
       cameraAlerts = s.cameraAlerts;
       navSpeedStyle = s.navSpeedStyle;
+      alertBarCount = s.alertBarCount;
+      navBannerBottom = s.navBannerBottom;
+      speedIslandX = s.speedIslandX;
+      speedIslandY = s.speedIslandY;
+      carScreenAnchor = s.carScreenAnchor;
       gpsFilter = s.gpsFilter;
       voiceVolume = s.voiceVolume;
       radarOn = s.radar;
@@ -1593,6 +1753,7 @@ class _NavigationPageState extends State<NavigationPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    simTick.removeListener(_onSimTick);
     if (_apiNoticeListener != null) {
       apiNotice.removeListener(_apiNoticeListener!);
       _apiNoticeListener = null;

@@ -70,9 +70,43 @@ Future<int> navMapBytes() async {
 }
 
 /// Install a locally chosen PMTiles file into the app's offline nav-map store.
+/// The 7 ASCII bytes every PMTiles v3 archive starts with.
+const List<int> kPmTilesMagic = [0x50, 0x4D, 0x54, 0x69, 0x6C, 0x65, 0x73];
+
+/// Whether [f] really is a PMTiles archive.
+///
+/// Cheap and worth it: without this, any file the driver picks gets installed as
+/// the nav map and then fails silently at render time — a blank map and no
+/// explanation. Also catches a Git-LFS pointer or a truncated download.
+bool pmtilesLooksValid(File f) {
+  try {
+    if (f.lengthSync() < 127) return false; // header alone is 127 bytes
+    final raf = f.openSync();
+    try {
+      final head = raf.readSync(kPmTilesMagic.length);
+      if (head.length != kPmTilesMagic.length) return false;
+      for (var i = 0; i < kPmTilesMagic.length; i++) {
+        if (head[i] != kPmTilesMagic[i]) return false;
+      }
+      return true;
+    } finally {
+      raf.closeSync();
+    }
+  } catch (_) {
+    return false;
+  }
+}
+
 Future<bool> installNavMapFile(String sourceFilePath) async {
   final src = File(sourceFilePath);
   if (!src.existsSync()) return false;
+  if (!pmtilesLooksValid(src)) {
+    debugPrint(
+      'NAVMAP: refusing $sourceFilePath — not a PMTiles archive '
+      '(${src.lengthSync()} bytes)',
+    );
+    return false;
+  }
   final dir = Directory(await navMapDir());
   if (!dir.existsSync()) dir.createSync(recursive: true);
   final out = File('${dir.path}/$navMapName');

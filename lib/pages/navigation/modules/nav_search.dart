@@ -761,9 +761,14 @@ extension _NavSearch on _NavigationPageState {
       // of just failing (the user wants to choose if needed).
       debugPrint('PLAN: route failed: $e');
       if (!forceOffline) rethrow;
-      final msg = _routeProfile == RouteProfile.car
+      // The on-device graph serves car and motorbike (a bike is routed on the
+      // car graph), so a failure for either means the graph is missing or the
+      // destination is outside the downloaded region — not "unsupported mode".
+      final offlineCapable = _routeProfile == RouteProfile.car ||
+          _routeProfile == RouteProfile.motorbike;
+      final msg = offlineCapable
           ? 'Chưa có bộ dữ liệu chỉ đường ngoại tuyến cho tuyến này.'
-          : 'Bộ dữ liệu ngoại tuyến chỉ hỗ trợ ô tô — cần trực tuyến cho ${_routeProfile.label.toLowerCase()}. ';
+          : 'Bộ dữ liệu ngoại tuyến chỉ hỗ trợ ô tô và xe máy — cần trực tuyến cho ${_routeProfile.label.toLowerCase()}. ';
       final goOnline = await _confirmGoOnline(msg);
       if (!mounted || seq != _planSeq) return;
       if (!goOnline) {

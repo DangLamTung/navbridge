@@ -29,6 +29,22 @@ class GraphHopperRouting {
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
+    /** Context for [exportArchive] (MediaStore needs it), and the sink for
+     *  [buildArchive] progress. Both are wired once by MainActivity when the
+     *  "navbridge/routing" channel is registered. */
+    private var appContext: android.content.Context? = null
+    private var archiveProgress: ((Long, Long) -> Unit)? = null
+
+    fun attach(context: android.content.Context, onArchiveProgress: (Long, Long) -> Unit) {
+        appContext = context
+        archiveProgress = onArchiveProgress
+    }
+
+    private fun postArchiveProgress(done: Long, total: Long) {
+        val cb = archiveProgress ?: return
+        mainHandler.post { cb(done, total) }
+    }
+
     private fun postSuccess(result: MethodChannel.Result, value: Any?) {
         mainHandler.post { result.success(value) }
     }
@@ -78,6 +94,23 @@ class GraphHopperRouting {
                         destDir.deleteRecursively()
                     }
                     gh.setOSMFile(f.absolutePath)
+                } else if (destDir.isDirectory && !graphMarkerPresent(destDir)) {
+                    // A folder with no `GH` marker in `properties` is the debris of
+                    // an interrupted import (the import creates that file first, so
+                    // a killed process leaves it empty). GraphHopper would fail deep
+                    // in its storage layer with "Not a GraphHopper file … Expected
+                    // 'GH'" — a message the UI cannot act on. Refuse it here with a
+                    // code the Offline screen turns into "delete and reload".
+                    android.util.Log.e(
+                        "NavBridgeRouter",
+                        "refusing markerless graph folder: $loc"
+                    )
+                    postError(
+                        result,
+                        "graph_corrupt",
+                        "Dữ liệu chỉ đường trên máy bị hỏng (bản nạp dở) — cần xoá và nạp lại",
+                    )
+                    return@execute
                 }
 
                 gh.init(config)
@@ -94,6 +127,14 @@ class GraphHopperRouting {
                 }
 
                 hopper = gh
+                // Say so out loud: a SUCCESSFUL load used to log nothing, so
+                // "is the graph actually usable?" could only be answered by
+                // inference from silence. One line makes it unambiguous.
+                android.util.Log.i(
+                    "NavBridgeRouter",
+                    "graph loaded: ${gh.baseGraph.nodes} nodes, " +
+                        "profile=${gh.profiles} from $graphPath"
+                )
                 postSuccess(result, true)
             } catch (e: Throwable) {
                 // Catch Errors too (e.g. NoSuchMethodError) so the app never
@@ -112,6 +153,150 @@ class GraphHopperRouting {
             } catch (_: Throwable) {}
             hopper = null
             if (result != null) postSuccess(result, true)
+        }
+    }
+
+    /**
+     * Zip the built graph folder into a portable `.ghz` archive — the exact
+     * counterpart of [load]'s `.ghz` branch, and the same archive
+     * `tools/build_graph.sh` produces on a PC.
+     *
+     * Why on the phone: importing the 311 MB country extract costs minutes of
+     * CPU and GBs of RAM, and the same graph gets rebuilt from scratch after
+     * every reinstall. Building it once and keeping the archive means another
+     * handset only has to UNZIP it (see `prepareLocation`), and `adb pull` can
+     * take the finished graph back to the PC.
+     *
+     * Streamed entry by entry with a 1 MB buffer: the ~450 MB graph folder must
+     * never be held in memory on a low-end device. Progress is reported at most
+     * ~100 times over the whole run, so the platform channel is not flooded.
+     */
+    fun buildArchive(dirPath: String, outPath: String, result: MethodChannel.Result) {
+        executor.execute {
+            try {
+                val src = java.io.File(dirPath)
+                if (!src.isDirectory) {
+                    throw IllegalStateException("Không phải thư mục graph: $dirPath")
+                }
+                val files = src.walkTopDown().filter { it.isFile }.toList()
+                if (files.isEmpty()) {
+                    throw IllegalStateException("Thư mục graph rỗng: $dirPath")
+                }
+                val total = files.sumOf { it.length() }
+                val out = java.io.File(outPath)
+                out.parentFile?.mkdirs()
+                var done = 0L
+                var lastPing = 0L
+                val step = (total / 100).coerceAtLeast(1L)
+                java.util.zip.ZipOutputStream(
+                    java.io.BufferedOutputStream(out.outputStream(), 1 shl 20)
+                ).use { zip ->
+                    for (f in files) {
+                        // Relative entry names, so on-device extraction lands the
+                        // graph files directly in the target folder.
+                        val name = src.toURI().relativize(f.toURI()).path
+                        zip.putNextEntry(java.util.zip.ZipEntry(name))
+                        f.inputStream().use { it.copyTo(zip, 1 shl 20) }
+                        zip.closeEntry()
+                        done += f.length()
+                        if (done - lastPing >= step) {
+                            lastPing = done
+                            postArchiveProgress(done, total)
+                        }
+                    }
+                }
+                postArchiveProgress(total, total)
+                if (out.length() <= 0L) {
+                    out.delete()
+                    throw IllegalStateException("Tệp .ghz tạo ra rỗng")
+                }
+                android.util.Log.i(
+                    "NavBridgeRouter",
+                    "built archive ${out.name}: ${out.length()} bytes from $total bytes"
+                )
+                val res = HashMap<String, Any?>()
+                res["path"] = out.absolutePath
+                res["bytes"] = out.length()
+                res["sourceBytes"] = total
+                postSuccess(result, res)
+            } catch (e: Throwable) {
+                android.util.Log.e("NavBridgeRouter", "buildArchive failed", e)
+                postError(result, "archive_error", e.message ?: "build archive failed")
+            }
+        }
+    }
+
+    /**
+     * Copy a built `.ghz` into shared storage so it survives an uninstall and is
+     * reachable by a file manager, another phone, or `adb pull`.
+     *
+     * API 29+ publishes it through MediaStore.Downloads, which an app may do for
+     * its OWN file with no permission at all. API 26–28 has no Downloads
+     * collection in MediaStore, so it writes the public Downloads folder — that
+     * needs WRITE_EXTERNAL_STORAGE (declared with maxSdkVersion=28); when it is
+     * not granted the call answers `need_permission` so the UI can ask and retry
+     * rather than failing with a bare SecurityException.
+     */
+    fun exportArchive(srcPath: String, result: MethodChannel.Result) {
+        executor.execute {
+            try {
+                val src = java.io.File(srcPath)
+                if (!src.isFile) {
+                    throw IllegalStateException("Không thấy tệp .ghz: $srcPath")
+                }
+                val name = src.name
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    val ctx = appContext
+                        ?: throw IllegalStateException("Không có Context")
+                    val values = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                        put(
+                            android.provider.MediaStore.MediaColumns.MIME_TYPE,
+                            "application/zip"
+                        )
+                        put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download")
+                        put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                    val resolver = ctx.contentResolver
+                    val uri = resolver.insert(
+                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                    ) ?: throw IllegalStateException("MediaStore từ chối tạo tệp")
+                    try {
+                        val outStream = resolver.openOutputStream(uri)
+                            ?: throw IllegalStateException("Không mở được đích Downloads")
+                        outStream.use { o ->
+                            src.inputStream().use { i -> i.copyTo(o, 1 shl 20) }
+                        }
+                        values.clear()
+                        values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                        resolver.update(uri, values, null, null)
+                    } catch (e: Throwable) {
+                        try {
+                            resolver.delete(uri, null, null)
+                        } catch (_: Throwable) {}
+                        throw e
+                    }
+                    postSuccess(result, "Download/$name")
+                } else {
+                    @Suppress("DEPRECATION")
+                    val dir = android.os.Environment.getExternalStoragePublicDirectory(
+                        android.os.Environment.DIRECTORY_DOWNLOADS
+                    )
+                    if (!dir.exists() && !dir.mkdirs()) {
+                        throw IllegalStateException("Không tạo được thư mục Downloads")
+                    }
+                    val dst = java.io.File(dir, name)
+                    dst.outputStream().use { o ->
+                        src.inputStream().use { i -> i.copyTo(o, 1 shl 20) }
+                    }
+                    postSuccess(result, dst.absolutePath)
+                }
+            } catch (e: SecurityException) {
+                postError(result, "need_permission", "Cần quyền ghi bộ nhớ để xuất tệp")
+            } catch (e: Throwable) {
+                android.util.Log.e("NavBridgeRouter", "exportArchive failed", e)
+                postError(result, "export_error", e.message ?: "export failed")
+            }
         }
     }
 
@@ -298,6 +483,56 @@ class GraphHopperRouting {
             } catch (e: Throwable) {
                 postError(result, "snap_error", e.message ?: "snap failed")
             }
+        }
+    }
+
+    /**
+     * Whether [dir] looks like a GraphHopper graph.
+     *
+     * GraphHopper writes the ASCII pair `GH` after a two-byte field — a real
+     * `properties` starts `00 02 47 48`, so the marker is NOT at offset 0. The
+     * first version of this check assumed offset 0 and therefore rejected a
+     * folder it had just extracted itself, then failed on the (already deleted)
+     * archive. The pair is searched in the first 8 bytes instead, and one level
+     * down too, because a `.ghz` whose entries keep a wrapper directory extracts
+     * to `dir/<wrapper>/properties`.
+     */
+    private fun graphMarkerPresent(dir: java.io.File): Boolean {
+        if (hasGraphMarker(java.io.File(dir, "properties"))) return true
+        return try {
+            dir.listFiles()?.any {
+                it.isDirectory && hasGraphMarker(java.io.File(it, "properties"))
+            } == true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun hasGraphMarker(props: java.io.File): Boolean {
+        if (!props.isFile) return false
+        return try {
+            props.inputStream().use { i ->
+                val head = ByteArray(8)
+                var n = 0
+                // A single read() may return fewer bytes than asked for.
+                while (n < head.size) {
+                    val r = i.read(head, n, head.size - n)
+                    if (r <= 0) break
+                    n += r
+                }
+                var found = false
+                for (k in 0 until n - 1) {
+                    if (head[k] == 'G'.code.toByte() &&
+                        head[k + 1] == 'H'.code.toByte()
+                    ) {
+                        found = true
+                        break
+                    }
+                }
+                found
+            }
+        } catch (_: Throwable) {
+            false
         }
     }
 

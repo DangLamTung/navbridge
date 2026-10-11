@@ -83,12 +83,10 @@ from array import array
 DEFAULT_CRAWL = '/Users/tungdl/Documents/Eink/Decode_Waze'
 OUT = 'assets/offline_map/waze_segments.bin'
 CELL_E4 = 50          # 0.005 deg ~ 550 m — a 3x3 query covers ~1.6 km
-# Vietnam's statutory ceiling is 120 km/h (Thông tư 31/2019, Thông tư 38/2024).
-# Anything above it is a corrupt / mistagged community edit: the 2026-09 crawl
-# carried 2,819 directional values > 120 (179x 150, 1,248x 140, 937x 130,
-# 448x 125 on Xa lộ Hà Nội / QL51). They are rejected here so they never enter
-# the shipped binary; the app also caps the value per vehicle class.
-MIN_KMH, MAX_KMH = 5, 120
+# Vietnam's statutory speed limits for motor vehicles range from 40 to 120 km/h
+# (Thông tư 31/2019, Thông tư 38/2024). Anything < 40 km/h (like 5, 10, 20, 30)
+# is noise, alley/parking tags or milepost markers mistakenly parsed as speed.
+MIN_KMH, MAX_KMH = 40, 120
 
 
 def tiles(args) -> list[str]:
@@ -167,9 +165,26 @@ def main() -> int:
                 if sid is not None:
                     skipped_dup += 1
                 continue
-            f_kmh = s.get('fwdMaxSpeed') or 0
-            r_kmh = s.get('revMaxSpeed') or 0
-            if not (MIN_KMH <= f_kmh <= MAX_KMH or MIN_KMH <= r_kmh <= MAX_KMH):
+
+            fwd_dir = s.get('fwdDirection', True)
+            rev_dir = s.get('revDirection', True)
+            f_raw = s.get('fwdMaxSpeed') or 0
+            r_raw = s.get('revMaxSpeed') or 0
+
+            # Only retain speed limits for legally permitted travel directions.
+            # Stale speed values on forbidden directions (e.g. fwd=50 on a rev-only
+            # one-way segment of Lũy Bán Bích) must be ZERO.
+            f_kmh = f_raw if (fwd_dir and MIN_KMH <= f_raw <= MAX_KMH) else 0
+            r_kmh = r_raw if (rev_dir and MIN_KMH <= r_raw <= MAX_KMH) else 0
+
+            # For two-way streets where only one direction was tagged, apply to both
+            if fwd_dir and rev_dir:
+                if f_kmh == 0 and r_kmh > 0:
+                    f_kmh = r_kmh
+                elif r_kmh == 0 and f_kmh > 0:
+                    r_kmh = f_kmh
+
+            if f_kmh == 0 and r_kmh == 0:
                 skipped_speed += 1
                 continue
             g = (s.get('geometry') or {}).get('coordinates') or []
@@ -203,8 +218,8 @@ def main() -> int:
                     min_lat = p_lat
                 if p_lng < min_lng:
                     min_lng = p_lng
-            fwd.append(f_kmh if MIN_KMH <= f_kmh <= MAX_KMH else 0)
-            rev.append(r_kmh if MIN_KMH <= r_kmh <= MAX_KMH else 0)
+            fwd.append(f_kmh)
+            rev.append(r_kmh)
             # --- street identity (v3) ---
             wst = s.get('primaryStreetID')
             if wst is None:

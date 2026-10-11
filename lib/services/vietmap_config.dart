@@ -143,26 +143,33 @@ const String navMapDownloadBaseUrl = String.fromEnvironment('NAVMAP_URL');
 /// is expected at `$GRAPH_URL/graph.ghz` (built with `tools/build_graph.sh`).
 const String graphDownloadBaseUrl = String.fromEnvironment('GRAPH_URL');
 
+/// Default official CDN URL for offline navigation data (GitHub Releases of this repo).
+const String defaultDataUpdateBaseUrl =
+    'https://github.com/DangLamTung/navbridge/releases/download/offline-data-latest';
+
 /// Base URL the app auto-updates the offline point data (traffic cameras +
-/// road signs) from. Empty = auto-update disabled (only the bundled assets are
-/// used). Set at build time via `--dart-define=DATA_URL=http://<host>/`. The
+/// road signs) from. Empty = fallback to [defaultDataUpdateBaseUrl].
+/// Set at build time via `--dart-define=DATA_URL=http://<host>/`. The
 /// server should publish:
 ///   `$DATA_URL/version.json`  → `{"cameras": "123", "signs": "456"}` (version
 ///                               strings, e.g. content hashes / timestamps)
 ///   `$DATA_URL/vietnam_cameras.json`
 ///   `$DATA_URL/vietnam_signs.json`
-/// (same schema as `assets/offline_map/`). A plain `python3 -m http.server`
-/// over the folder works.
+///   `$DATA_URL/waze_speed_limits.json`
+/// (same schema as `assets/offline_map/`).
 const String dataUpdateBaseUrl = String.fromEnvironment('DATA_URL');
 
 /// Dynamic custom URL for offline data auto-updates (can be changed in settings/offline).
 String customDataUpdateUrl = '';
 
 /// The effective base URL for offline data updates (cameras, signs, limits).
+/// Priority: custom entered in UI > build-time DATA_URL > default GitHub CDN.
 String get effectiveDataUpdateUrl {
-  final custom = customDataUpdateUrl.trim();
+  final custom = customDataUpdateUrl.trim().replaceAll(RegExp(r'/+$'), '');
   if (custom.isNotEmpty) return custom;
-  return dataUpdateBaseUrl.trim();
+  final buildTime = dataUpdateBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+  if (buildTime.isNotEmpty) return buildTime;
+  return defaultDataUpdateBaseUrl;
 }
 
 /// CARTO API key — used to authenticate CARTO basemap raster tile requests.

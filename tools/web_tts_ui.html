@@ -1,0 +1,2258 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NavBridge · Gemini 3.8 Flash TTS & Voice Design Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090c12;
+      --card: #121722;
+      --card-hover: #171d2b;
+      --card-active: #1d2538;
+      --border: #20283a;
+      --border-focus: #3b82f6;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --primary: #3b82f6;
+      --primary-glow: rgba(59, 130, 246, 0.25);
+      --purple: #8b5cf6;
+      --purple-glow: rgba(139, 92, 246, 0.25);
+      --green: #10b981;
+      --amber: #f59e0b;
+      --amber-glow: rgba(245, 158, 11, 0.2);
+      --rose: #f43f5e;
+      --rose-glow: rgba(244, 63, 94, 0.25);
+      --radius: 14px;
+      --radius-sm: 8px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: radial-gradient(circle at 50% 0%, #151b2a 0%, var(--bg) 70%);
+      color: var(--text);
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    header {
+      background: rgba(18, 23, 34, 0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      padding: 12px 24px;
+    }
+
+    .header-inner {
+      max-width: 1440px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 20px var(--purple-glow);
+    }
+
+    .brand-title {
+      font-size: 17px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #ffffff 40%, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-subtitle {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Page Switcher Navigation */
+    .nav-tabs-header {
+      display: flex;
+      align-items: center;
+      background: #0d121c;
+      border: 1px solid var(--border);
+      padding: 4px;
+      border-radius: 12px;
+      gap: 4px;
+    }
+
+    .nav-tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .nav-tab-btn:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .nav-tab-btn.active {
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #fff;
+      box-shadow: 0 4px 14px var(--primary-glow);
+    }
+
+    .nav-tab-btn.active.purple-active {
+      background: linear-gradient(135deg, #7c3aed, #6d28d9);
+      box-shadow: 0 4px 14px var(--purple-glow);
+    }
+
+    .nav-tab-badge {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.15);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .status-badges {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      background: #172033;
+      border: 1px solid #23314d;
+      color: #93c5fd;
+    }
+
+    .pill.green {
+      background: rgba(16, 185, 129, 0.12);
+      border-color: rgba(16, 185, 129, 0.3);
+      color: #6ee7b7;
+    }
+
+    .pill.purple {
+      background: rgba(139, 92, 246, 0.15);
+      border-color: rgba(139, 92, 246, 0.35);
+      color: #c084fc;
+      cursor: pointer;
+    }
+
+    .pill-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 8px currentColor;
+    }
+
+    /* Main Container & Page Views */
+    .page-view {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 24px;
+      width: 100%;
+      display: grid;
+      grid-template-columns: 420px 1fr;
+      gap: 24px;
+      flex: 1;
+    }
+
+    @media (max-width: 1080px) {
+      .page-view { grid-template-columns: 1fr; }
+    }
+
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    }
+
+    .section-title {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* Tab Bar */
+    .tab-bar {
+      display: flex;
+      background: #0d121c;
+      border: 1px solid var(--border);
+      padding: 4px;
+      border-radius: 10px;
+      gap: 4px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 8px 10px;
+      border-radius: 7px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .tab-btn.active {
+      background: #1e293b;
+      color: #fff;
+    }
+
+    .tab-btn.active.glow-purple {
+      background: linear-gradient(135deg, #7c3aed, #6d28d9);
+      color: #fff;
+      box-shadow: 0 2px 10px var(--purple-glow);
+    }
+
+    /* Engine toggle */
+    .engine-toggle {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .engine-btn {
+      background: #0e1422;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 3px;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .engine-btn:hover {
+      background: var(--card-hover);
+      border-color: #3b82f6;
+    }
+
+    .engine-btn.active {
+      background: #172338;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 1px var(--primary);
+    }
+
+    .engine-btn .badge {
+      font-size: 10px;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Voice list */
+    .voice-filter-bar {
+      display: flex;
+      gap: 6px;
+    }
+
+    .filter-btn {
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: #0e1422;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .filter-btn:hover, .filter-btn.active {
+      background: #1e293b;
+      color: #fff;
+      border-color: #475569;
+    }
+
+    .voice-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 380px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .voice-card {
+      background: #0e1422;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .voice-card:hover {
+      background: var(--card-hover);
+      border-color: #3b82f6;
+      transform: translateX(2px);
+    }
+
+    .voice-card.active {
+      background: #141f33;
+      border-color: var(--primary);
+      box-shadow: 0 0 12px var(--primary-glow);
+    }
+
+    .voice-card.designed.active {
+      background: #201538;
+      border-color: var(--purple);
+      box-shadow: 0 0 12px var(--purple-glow);
+    }
+
+    .voice-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .voice-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: #1e293b;
+      color: #38bdf8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .voice-avatar.purple {
+      background: #3b1b6d;
+      color: #c084fc;
+    }
+
+    .voice-name {
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .voice-desc {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .voice-gender-tag {
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 5px;
+      background: #141c2c;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    /* Voice Design Card */
+    .design-card {
+      background: linear-gradient(180deg, rgba(139, 92, 246, 0.08) 0%, rgba(15, 23, 42, 0) 100%);
+      border: 1px solid rgba(139, 92, 246, 0.25);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .design-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .design-badge {
+      background: #7c3aed;
+      color: #fff;
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
+    .design-textarea {
+      background: #090c13;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: #fff;
+      font-family: inherit;
+      font-size: 12px;
+      line-height: 1.45;
+      resize: vertical;
+      min-height: 64px;
+      outline: none;
+    }
+
+    .design-textarea:focus {
+      border-color: var(--purple);
+      box-shadow: 0 0 0 2px var(--purple-glow);
+    }
+
+    .design-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .chip-mini {
+      padding: 4px 8px;
+      background: #141a28;
+      border: 1px solid #23304a;
+      border-radius: 6px;
+      font-size: 11px;
+      color: #94a3b8;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .chip-mini:hover {
+      background: #1e293b;
+      color: #c084fc;
+      border-color: #8b5cf6;
+    }
+
+    .design-input {
+      background: #090c13;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: #fff;
+      font-size: 12px;
+      outline: none;
+    }
+
+    .design-input:focus { border-color: var(--purple); }
+
+    .btn-design {
+      background: linear-gradient(135deg, #7c3aed, #6d28d9);
+      color: #fff;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+      box-shadow: 0 4px 14px var(--purple-glow);
+      transition: all 0.18s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn-design:hover:not(:disabled) {
+      background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+      transform: translateY(-1px);
+    }
+
+    .btn-design:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Expression & Emotion Styles */
+    .expr-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(115px, 1fr));
+      gap: 8px;
+    }
+
+    .expr-card {
+      background: #0e1422;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      cursor: pointer;
+      transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+      user-select: none;
+    }
+
+    .expr-card:hover {
+      background: var(--card-hover);
+      border-color: #8b5cf6;
+      transform: translateY(-1px);
+    }
+
+    .expr-card.active {
+      background: #1c1533;
+      border-color: #a855f7;
+      box-shadow: 0 0 12px var(--purple-glow);
+    }
+
+    .expr-card.active.urgent {
+      background: #331018;
+      border-color: #f43f5e;
+      box-shadow: 0 0 12px var(--rose-glow);
+    }
+
+    .expr-card .expr-icon {
+      font-size: 16px;
+    }
+
+    .expr-card .expr-name {
+      font-size: 11px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .expr-card .expr-desc {
+      font-size: 10px;
+      color: var(--text-dim);
+      line-height: 1.25;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .custom-expr-box {
+      margin-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    /* Vocal Tags Toolbar */
+    .vocal-tags-bar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 8px 12px;
+      background: #0b0f19;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+    }
+
+    .vocal-tag-label {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-weight: 600;
+    }
+
+    .tag-chip {
+      background: #151d2e;
+      border: 1px solid #283754;
+      color: #38bdf8;
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .tag-chip:hover {
+      background: #1e2b45;
+      border-color: #38bdf8;
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(56, 189, 248, 0.25);
+    }
+
+    /* Editor Section */
+    .editor-section {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .textarea-wrapper {
+      position: relative;
+    }
+
+    textarea.main-tts-area {
+      width: 100%;
+      background: #090c13;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      color: #fff;
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.6;
+      resize: vertical;
+      outline: none;
+      min-height: 110px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    textarea.main-tts-area.large-area {
+      min-height: 160px;
+    }
+
+    textarea.main-tts-area:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px var(--primary-glow);
+    }
+
+    .textarea-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 6px;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .editor-stats {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .clear-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 11px;
+      cursor: pointer;
+      transition: color 0.15s;
+    }
+
+    .clear-btn:hover { color: #f87171; }
+
+    /* Presets */
+    .preset-categories {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 220px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .preset-group-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .preset-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .chip {
+      padding: 6px 12px;
+      border-radius: 8px;
+      background: #0d121c;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+
+    .chip:hover {
+      background: var(--card-hover);
+      border-color: #3b82f6;
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
+    /* Controls Bar */
+    .controls-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding-top: 6px;
+    }
+
+    .rate-control {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .rate-control input[type="range"] {
+      width: 100px;
+      accent-color: var(--primary);
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border-radius: var(--radius-sm);
+      border: 1px solid transparent;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.18s ease;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #fff;
+      box-shadow: 0 4px 18px var(--primary-glow);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      transform: translateY(-1px);
+    }
+
+    .btn-purple {
+      background: linear-gradient(135deg, #7c3aed, #6d28d9);
+      color: #fff;
+      box-shadow: 0 4px 18px var(--purple-glow);
+    }
+
+    .btn-purple:hover:not(:disabled) {
+      background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: #182236;
+      border-color: #263859;
+      color: #93c5fd;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: #202d47;
+      color: #fff;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Player Card */
+    .player-card {
+      background: #090c13;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .player-card.active-play::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, #3b82f6, #8b5cf6, #10b981);
+      animation: pulse-bar 2s linear infinite;
+    }
+
+    @keyframes pulse-bar {
+      0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; }
+    }
+
+    .player-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .player-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      flex-wrap: wrap;
+    }
+
+    .player-voice-tag {
+      background: #182236;
+      color: #93c5fd;
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .player-expr-tag {
+      background: #2c1a4d;
+      color: #d8b4fe;
+      border: 1px solid #7e22ce;
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 11px;
+    }
+
+    .telemetry {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .telemetry .num { color: #38bdf8; }
+
+    audio {
+      width: 100%;
+      height: 40px;
+      border-radius: 8px;
+      outline: none;
+    }
+
+    /* Comparison Container */
+    .compare-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .compare-box {
+      background: #090c13;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .compare-box.gemini { border-color: rgba(139, 92, 246, 0.4); }
+    .compare-box.chirp { border-color: rgba(59, 130, 246, 0.4); }
+
+    .compare-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    /* History Table */
+    .history-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .history-table th {
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-dim);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+
+    .history-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #141b2b;
+      vertical-align: middle;
+    }
+
+    .history-table tr:hover td {
+      background: #0e1422;
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      z-index: 1000;
+      display: none;
+    }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: inline-block;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+          <line x1="12" y1="19" x2="12" y2="22"></line>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-title">NavBridge · TTS Studio</div>
+        <div class="brand-subtitle">Gemini 3.8 Flash TTS · Voice Design & Expression</div>
+      </div>
+    </div>
+
+    <!-- Center Navigation Tabs -->
+    <nav class="nav-tabs-header">
+      <button class="nav-tab-btn active" id="btn-page-nav" onclick="switchPage('nav')">
+        <span>🚗 NavBridge Alerts</span>
+        <span class="nav-tab-badge">28 câu</span>
+      </button>
+      <button class="nav-tab-btn purple-active" id="btn-page-custom" onclick="switchPage('custom')">
+        <span>✍️ Custom Text to Speech</span>
+        <span class="nav-tab-badge" style="background:#8b5cf6;">Biểu cảm & Studio</span>
+      </button>
+    </nav>
+
+    <div class="status-badges">
+      <div class="pill green">
+        <div class="pill-dot"></div>
+        <span id="proj-badge">Vertex AI: global</span>
+      </div>
+      <div class="pill purple" onclick="switchVoiceMode('design')" title="Tạo giọng nói AI mới bằng văn bản">
+        <div class="pill-dot" style="background:#c084fc;"></div>
+        <span>Voice Design: OK ✓</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- PAGE 1: NAVBRIDGE ALERTS STUDIO -->
+<main id="page-navbridge" class="page-view">
+  <!-- Left Column: Voice Mode Selector -->
+  <aside class="panel">
+    <div>
+      <div class="tab-bar">
+        <button class="tab-btn active" id="tab-prebuilt" onclick="switchVoiceMode('prebuilt')">🎙️ Giọng có sẵn</button>
+        <button class="tab-btn glow-purple" id="tab-design" onclick="switchVoiceMode('design')">✨ Voice Design</button>
+        <button class="tab-btn" id="tab-clone" onclick="switchVoiceMode('clone')">🧬 Voice Clone</button>
+      </div>
+    </div>
+
+    <!-- Prebuilt Section -->
+    <div id="prebuilt-section">
+      <div class="section-title">
+        <span>Động cơ giọng đọc (Engine)</span>
+      </div>
+      <div class="engine-toggle" style="margin: 8px 0 14px;">
+        <button class="engine-btn active" id="btn-engine-gemini" onclick="setEngine('gemini')">
+          <span>✨ Gemini 3.8</span>
+          <span class="badge">Vertex AI · 24kHz</span>
+        </button>
+        <button class="engine-btn" id="btn-engine-chirp" onclick="setEngine('chirp')">
+          <span>⚡ GCP Chirp 3</span>
+          <span class="badge">Cloud TTS · MP3</span>
+        </button>
+      </div>
+
+      <div class="section-title" style="margin-bottom: 8px;">
+        <span>Danh sách giọng đọc</span>
+        <div class="voice-filter-bar">
+          <button class="filter-btn active" onclick="filterGender('ALL')">Tất cả</button>
+          <button class="filter-btn" onclick="filterGender('Nữ')">Nữ</button>
+          <button class="filter-btn" onclick="filterGender('Nam')">Nam</button>
+        </div>
+      </div>
+      <div class="voice-list" id="voice-container"></div>
+    </div>
+
+    <!-- Voice Design Section -->
+    <div id="design-section" style="display: none; display: flex; flex-direction: column; gap: 14px;">
+      <div class="design-card">
+        <div class="design-header">
+          <span style="font-size:13px; font-weight:700; color:#c084fc;">Tạo Voice Persona bằng mô tả</span>
+          <span class="design-badge">Gemini 3.8</span>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted);">
+          Mô tả phong cách, tuổi tác, ngữ điệu, vùng miền bằng tiếng Việt hoặc tiếng Anh.
+        </div>
+        <textarea id="design-prompt-input" class="design-textarea" placeholder="Ví dụ: Một nữ trợ lý dẫn đường người Việt Nam, giọng miền Bắc ấm áp, tự nhiên, nhã nhặn và phát âm rõ ràng từng từ..."></textarea>
+        
+        <div style="font-size:11px; font-weight:600; color:var(--text-dim);">Gợi ý nhanh:</div>
+        <div class="design-chips">
+          <div class="chip-mini" onclick="fillDesignPrompt('Một nữ trợ lý dẫn đường người Việt Nam, giọng miền Bắc ấm áp, tự nhiên, nhã nhặn và phát âm rõ ràng từng từ.')">🚗 Nữ miền Bắc dịu dàng</div>
+          <div class="chip-mini" onclick="fillDesignPrompt('A young Vietnamese female car navigation assistant speaking with a friendly Southern Vietnamese accent, lively and clear.')">🏙️ Nữ miền Nam tươi trẻ</div>
+          <div class="chip-mini" onclick="fillDesignPrompt('Một nam biên tập viên người Việt Nam, giọng miền Bắc trầm ấm, dứt khoát, điềm đạm và chuẩn xác.')">🛡️ Nam trầm ấm uy quyền</div>
+          <div class="chip-mini" onclick="fillDesignPrompt('Giọng phát thanh viên đài truyền hình Việt Nam, ngữ điệu truyền cảm, êm tai và chuyên nghiệp.')">🎙️ Phát thanh viên VN</div>
+        </div>
+
+        <input type="text" id="design-name-input" class="design-input" placeholder="Tên hiển thị (Ví dụ: Thảo Nhi NavBridge, Nam Dẫn Đường...)">
+
+        <button class="btn-design" id="btn-create-design" onclick="handleCreateDesignedVoice()">
+          <span>✨ Tạo Voice Persona Mới</span>
+        </button>
+      </div>
+
+      <!-- Created Designed Voices List -->
+      <div>
+        <div class="section-title" style="margin-bottom: 8px;">
+          <span>Giọng AI đã thiết kế (<span id="designed-count">0</span>)</span>
+          <button class="clear-btn" onclick="loadDesignedVoices()">Làm mới</button>
+        </div>
+        <div class="voice-list" id="designed-voice-container"></div>
+      </div>
+    </div>
+
+    <!-- Voice Clone Section -->
+    <div id="clone-section" style="display: none; display: flex; flex-direction: column; gap: 14px;">
+      <div style="background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.25); border-radius:10px; padding:12px; font-size:12px; color:#fde68a;">
+        <div style="font-weight:700; margin-bottom:4px; color:#fbbf24;">🔒 Tình trạng cấp phép Voice Clone:</div>
+        <div id="clone-approval-details">Đang kiểm tra kết nối...</div>
+        <button class="filter-btn" onclick="recheckApproval()" style="margin-top:8px;">🔄 Kiểm tra lại quyền</button>
+      </div>
+
+      <div style="background:#090c13; border:1px solid var(--border); border-radius:8px; padding:10px; font-size:11px; color:#94a3b8; line-height:1.45;">
+        <b>Kịch bản tuyên thệ bản quyền bắt buộc:</b>
+        <code style="color:#38bdf8; display:block; margin-top:4px;">"Tôi là chủ sở hữu giọng nói này và tôi đồng ý cho Google sử dụng giọng nói này để tạo mô hình giọng nói tổng hợp."</code>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <label style="font-size:11px; color:var(--text-muted); font-weight:600;">Mã Voice ID / Key:</label>
+        <input type="text" id="custom-voice-input" class="design-input" placeholder="e.g. voice_... hoặc key...">
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <label style="font-size:11px; color:var(--text-muted); font-weight:600;">Động cơ nhân bản:</label>
+        <select id="clone-engine-select" class="design-input">
+          <option value="gemini">Gemini 3.8 Flash (replicatedVoiceConfig)</option>
+          <option value="chirp">Chirp 3 Instant Custom Voice (voice_clone)</option>
+        </select>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Right Column: Navigation Phrases & Controls -->
+  <section class="panel editor-section">
+    <!-- Expression Selector on Nav Page -->
+    <div>
+      <div class="section-title" style="margin-bottom: 6px;">
+        <span>Biểu cảm & Ngữ điệu (Gemini 3.8 Expression)</span>
+        <span id="nav-expr-badge" class="player-expr-tag">Tự nhiên & Chuẩn mực</span>
+      </div>
+      <div class="expr-grid" id="nav-expr-container"></div>
+    </div>
+
+    <!-- Text to Speak -->
+    <div>
+      <div class="section-title" style="margin-bottom: 8px;">
+        <span>Nội dung câu dẫn đường (Text to Speak)</span>
+        <span id="char-count" style="color: var(--text-dim); font-size: 11px;">0 ký tự</span>
+      </div>
+      <div class="textarea-wrapper">
+        <textarea id="tts-input" class="main-tts-area" placeholder="Nhập câu tiếng Việt muốn đọc hoặc bấm một trong các mẫu bên dưới..."></textarea>
+      </div>
+      <div class="textarea-footer">
+        <span>Nhấn <b>Ctrl+Enter</b> hoặc <b>Cmd+Enter</b> để phát âm thanh ngay lập tức</span>
+        <button class="clear-btn" onclick="clearText('tts-input', 'char-count')">Xóa văn bản</button>
+      </div>
+    </div>
+
+    <!-- Presets -->
+    <div>
+      <div class="section-title" style="margin-bottom: 8px;">
+        <span>Mẫu câu NavBridge thông dụng (Speed Limit & Alerts)</span>
+      </div>
+      <div class="preset-categories" id="preset-container"></div>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls-bar">
+      <div class="rate-control">
+        <span>Tốc độ đọc:</span>
+        <input type="range" id="rate-slider" min="0.5" max="1.5" step="0.05" value="1.0" oninput="updateRateLabel(this.value, 'rate-val')">
+        <span id="rate-val" style="font-family:'JetBrains Mono',monospace; color:#38bdf8; font-weight:600;">1.0x</span>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-secondary" id="btn-compare" onclick="compareEngines()">
+          <span>⚖️ So sánh A/B (Gemini vs Chirp)</span>
+        </button>
+        <button class="btn btn-primary" id="btn-synth" onclick="synthesizeNav()">
+          <span id="btn-synth-icon">🔊</span>
+          <span id="btn-synth-text">Tạo giọng nói</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Live Audio Player -->
+    <div class="player-card" id="main-player-card">
+      <div class="player-header">
+        <div class="player-meta">
+          <span class="player-voice-tag" id="player-voice-badge">Gacrux (Gemini 3.8)</span>
+          <span class="player-expr-tag" id="player-active-expr">Tự nhiên</span>
+          <span id="player-status-text" style="color:var(--text-dim)">Chưa có audio</span>
+        </div>
+        <div class="telemetry" id="player-telemetry" style="display:none;">
+          <span>Độ trễ: <b class="num" id="tel-latency">0ms</b></span>
+          <span>Thời lượng: <b class="num" id="tel-duration">0s</b></span>
+          <span>Dung lượng: <b class="num" id="tel-size">0KB</b></span>
+        </div>
+      </div>
+
+      <audio id="main-audio" controls preload="auto"></audio>
+
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button class="filter-btn" id="btn-download" style="display:none;" onclick="downloadAudio(currentAudioUrl, 'navbridge')">
+          ⬇ Tải file Audio
+        </button>
+        <button class="filter-btn" id="btn-save-pack" style="display:none;" onclick="saveToNavBridgePack('tts-input')">
+          💾 Lưu vào Pack NavBridge
+        </button>
+      </div>
+    </div>
+
+    <!-- Comparison Section -->
+    <div id="compare-section" style="display: none;">
+      <div class="section-title" style="margin-bottom: 8px;">
+        <span>Kết quả so sánh trực tiếp (A/B Test)</span>
+      </div>
+      <div class="compare-container">
+        <div class="compare-box gemini">
+          <div class="compare-title">
+            <span style="color:#c084fc;">✨ Gemini 3.8 Flash TTS</span>
+            <span class="pill green" id="cmp-gemini-lat" style="font-size:11px; padding:2px 8px;">0ms</span>
+          </div>
+          <div style="font-size:11px; color:var(--text-dim);" id="cmp-gemini-info">WAV 24kHz</div>
+          <audio id="cmp-gemini-audio" controls></audio>
+        </div>
+        <div class="compare-box chirp">
+          <div class="compare-title">
+            <span style="color:#60a5fa;">⚡ GCP Chirp 3: HD</span>
+            <span class="pill" id="cmp-chirp-lat" style="font-size:11px; padding:2px 8px;">0ms</span>
+          </div>
+          <div style="font-size:11px; color:var(--text-dim);" id="cmp-chirp-info">MP3</div>
+          <audio id="cmp-chirp-audio" controls></audio>
+        </div>
+      </div>
+    </div>
+
+    <!-- History -->
+    <div>
+      <div class="section-title" style="margin-bottom: 8px;">
+        <span>Lịch sử phát âm thanh</span>
+        <button class="clear-btn" onclick="clearNavHistory()">Xóa lịch sử</button>
+      </div>
+      <div style="max-height: 180px; overflow-y: auto;">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Giọng</th>
+              <th>Biểu cảm</th>
+              <th>Nội dung</th>
+              <th>Độ trễ</th>
+              <th>Phát</th>
+            </tr>
+          </thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+
+<!-- PAGE 2: CUSTOM TEXT TO SPEECH STUDIO -->
+<main id="page-custom" class="page-view" style="display: none;">
+  <!-- Left Column: Custom Studio Settings & Expressions -->
+  <aside class="panel">
+    <!-- Active Voice Selector in Custom Mode -->
+    <div>
+      <div class="section-title" style="margin-bottom: 8px;">
+        <span>Giọng đọc được chọn (Voice Actor)</span>
+      </div>
+      <div class="voice-card active" id="custom-active-voice-card" style="padding: 10px 12px;">
+        <div class="voice-left">
+          <div class="voice-avatar purple" id="custom-voice-avatar">G</div>
+          <div>
+            <div class="voice-name" id="custom-voice-title">Gacrux</div>
+            <div class="voice-desc" id="custom-voice-sub">Gemini 3.8 Flash TTS · Nữ ấm áp</div>
+          </div>
+        </div>
+        <button class="filter-btn" onclick="switchPage('nav'); showToast('Chọn giọng đọc mong muốn trong danh sách bên trái!');">Đổi giọng</button>
+      </div>
+    </div>
+
+    <!-- Full Expression & Delivery Studio -->
+    <div>
+      <div class="section-title" style="margin-bottom: 8px;">
+        <span>🎭 Biểu cảm & Cảm xúc (Expression & Delivery)</span>
+      </div>
+      <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 8px;">
+        Gemini 3.8 Flash TTS hiểu hướng dẫn phong cách biểu cảm qua <code>speech_metadata.style</code>.
+      </div>
+      <div class="expr-grid" id="custom-expr-container"></div>
+
+      <!-- Custom Expression Input Box (Shown if 'custom' selected) -->
+      <div class="custom-expr-box" id="custom-expr-input-group" style="display: none;">
+        <label style="font-size: 11px; color: #c084fc; font-weight: 700;">Nhập phong cách diễn xuất tự do:</label>
+        <input type="text" id="custom-style-input" class="design-input" placeholder="Ví dụ: giọng MC gameshow hài hước, giọng ma mị rùng rợn, giọng trẻ con hớn hở...">
+      </div>
+    </div>
+
+    <!-- Additional Controls -->
+    <div>
+      <div class="section-title" style="margin-bottom: 8px;">
+        <span>Tùy chỉnh tốc độ & Âm thanh</span>
+      </div>
+      <div class="rate-control" style="margin-bottom: 10px;">
+        <span>Tốc độ:</span>
+        <input type="range" id="custom-rate-slider" min="0.5" max="1.5" step="0.05" value="1.0" oninput="updateRateLabel(this.value, 'custom-rate-val')">
+        <span id="custom-rate-val" style="font-family:'JetBrains Mono',monospace; color:#38bdf8; font-weight:600;">1.0x</span>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <label style="font-size:11px; color:var(--text-muted); font-weight:600;">Tên file xuất:</label>
+        <input type="text" id="custom-filename-input" class="design-input" value="custom_speech.wav" placeholder="custom_speech.wav">
+      </div>
+    </div>
+  </aside>
+
+  <!-- Right Column: Rich Text Editor & Live Studio Player -->
+  <section class="panel editor-section">
+    <!-- Sample Templates -->
+    <div>
+      <div class="section-title" style="margin-bottom: 8px;">
+        <span>Mẫu văn bản gợi ý phong phú</span>
+      </div>
+      <div class="preset-chips" id="custom-sample-chips"></div>
+    </div>
+
+    <!-- Inline Vocal Effects Toolbar -->
+    <div>
+      <div class="vocal-tags-bar">
+        <span class="vocal-tag-label">Chèn hiệu ứng vocal trực tiếp:</span>
+        <button class="tag-chip" onclick="insertVocalTag('<short pause>', 'custom-tts-input')" title="Nghỉ nhịp ngắn">+ &lt;short pause&gt;</button>
+        <button class="tag-chip" onclick="insertVocalTag('<pause>', 'custom-tts-input')" title="Dừng ngắt câu dài hơn">+ &lt;pause&gt;</button>
+        <button class="tag-chip" onclick="insertVocalTag('<laugh>', 'custom-tts-input')" title="Cười nhẹ tự nhiên">+ &lt;laugh&gt;</button>
+        <button class="tag-chip" onclick="insertVocalTag('<sigh>', 'custom-tts-input')" title="Thở dài thườn thượt">+ &lt;sigh&gt;</button>
+        <button class="tag-chip" onclick="insertVocalTag('<gasp>', 'custom-tts-input')" title="Thở hắt / Giật mình kinh ngạc">+ &lt;gasp&gt;</button>
+        <button class="tag-chip" onclick="insertVocalTag('<pant>', 'custom-tts-input')" title="Thở gấp gáp">+ &lt;pant&gt;</button>
+      </div>
+    </div>
+
+    <!-- Large Custom Text Area -->
+    <div>
+      <div class="section-title" style="margin-bottom: 8px;">
+        <span>Văn bản tùy chỉnh (Custom Text / Script)</span>
+        <div class="editor-stats">
+          <span id="custom-char-count">0 ký tự</span>
+          <span>•</span>
+          <span id="custom-word-count">0 từ</span>
+          <span>•</span>
+          <span id="custom-time-est">~0s</span>
+        </div>
+      </div>
+      <div class="textarea-wrapper">
+        <textarea id="custom-tts-input" class="main-tts-area large-area" placeholder="Nhập bất kỳ đoạn văn bản, truyện ngắn, tin tức, thông báo hoặc kịch bản hội thoại bạn muốn đọc..."></textarea>
+      </div>
+      <div class="textarea-footer">
+        <span>Nhấn <b>Ctrl+Enter</b> hoặc <b>Cmd+Enter</b> để phát âm thanh ngay lập tức</span>
+        <div style="display:flex; gap:10px;">
+          <button class="clear-btn" onclick="pasteClipboard('custom-tts-input')">📋 Dán Clipboard</button>
+          <button class="clear-btn" onclick="clearText('custom-tts-input', 'custom-char-count')">🧹 Xóa văn bản</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Button Bar -->
+    <div style="display:flex; justify-content:flex-end;">
+      <button class="btn btn-purple" id="btn-custom-synth" onclick="synthesizeCustom()" style="padding:12px 28px; font-size:14px;">
+        <span id="btn-custom-icon">🔊</span>
+        <span id="btn-custom-text">Tạo giọng nói biểu cảm (Ctrl+Enter)</span>
+      </button>
+    </div>
+
+    <!-- Custom Studio Audio Player Card -->
+    <div class="player-card" id="custom-player-card">
+      <div class="player-header">
+        <div class="player-meta">
+          <span class="player-voice-tag" id="custom-player-voice-badge">Gacrux (Gemini 3.8 Flash)</span>
+          <span class="player-expr-tag" id="custom-player-expr-badge">Tự nhiên & Chuẩn mực</span>
+          <span id="custom-player-status" style="color:var(--text-dim)">Sẵn sàng tạo âm thanh</span>
+        </div>
+        <div class="telemetry" id="custom-telemetry" style="display:none;">
+          <span>Độ trễ: <b class="num" id="custom-tel-latency">0ms</b></span>
+          <span>Thời lượng: <b class="num" id="custom-tel-duration">0s</b></span>
+          <span>Dung lượng: <b class="num" id="custom-tel-size">0KB</b></span>
+        </div>
+      </div>
+
+      <audio id="custom-audio" controls preload="auto"></audio>
+
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button class="filter-btn" id="btn-custom-download" style="display:none;" onclick="downloadAudio(currentCustomAudioUrl, document.getElementById('custom-filename-input').value.trim() || 'custom_speech')">
+          ⬇ Tải file Audio
+        </button>
+        <button class="filter-btn" id="btn-custom-save-pack" style="display:none;" onclick="saveToNavBridgePack('custom-tts-input')">
+          💾 Lưu vào Voice Pack
+        </button>
+      </div>
+    </div>
+
+    <!-- Custom History Table -->
+    <div>
+      <div class="section-title" style="margin-bottom: 8px;">
+        <span>Lịch sử tổng hợp văn bản tùy chỉnh</span>
+        <button class="clear-btn" onclick="clearCustomHistory()">Xóa lịch sử</button>
+      </div>
+      <div style="max-height: 200px; overflow-y: auto;">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Giọng</th>
+              <th>Biểu cảm</th>
+              <th>Nội dung</th>
+              <th>Độ trễ</th>
+              <th>Phát</th>
+            </tr>
+          </thead>
+          <tbody id="custom-history-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // State variables
+  let currentActivePage = 'nav'; // 'nav' or 'custom'
+  let currentEngine = 'gemini';
+  let currentVoiceMode = 'prebuilt';
+  let currentVoice = 'Gacrux';
+  let selectedDesignedVoice = null;
+  let currentFilter = 'ALL';
+
+  let currentNavExpression = 'neutral';
+  let currentCustomExpression = 'neutral';
+
+  let voicesList = [];
+  let presetsList = [];
+  let expressionsList = [];
+  let customSamplesList = [];
+  let designedVoicesList = [];
+
+  let navHistoryItems = [];
+  let customHistoryItems = [];
+
+  let currentAudioUrl = null;
+  let currentAudioFormat = 'wav';
+  let currentCustomAudioUrl = null;
+  let currentCustomAudioFormat = 'wav';
+
+  const ttsInput = document.getElementById('tts-input');
+  const customTtsInput = document.getElementById('custom-tts-input');
+  const mainAudio = document.getElementById('main-audio');
+  const customAudio = document.getElementById('custom-audio');
+  const toast = document.getElementById('toast');
+
+  // Input listeners
+  ttsInput.addEventListener('input', () => {
+    document.getElementById('char-count').textContent = `${ttsInput.value.length} ký tự`;
+  });
+
+  customTtsInput.addEventListener('input', () => {
+    updateCustomEditorStats();
+  });
+
+  // Global Keyboard shortcut (Ctrl+Enter / Cmd+Enter)
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      if (currentActivePage === 'nav') {
+        synthesizeNav();
+      } else {
+        synthesizeCustom();
+      }
+    }
+  });
+
+  function updateCustomEditorStats() {
+    const text = customTtsInput.value;
+    const chars = text.length;
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const estSec = Math.round(words / 2.5);
+    document.getElementById('custom-char-count').textContent = `${chars} ký tự`;
+    document.getElementById('custom-word-count').textContent = `${words} từ`;
+    document.getElementById('custom-time-est').textContent = `~${estSec}s`;
+  }
+
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.style.display = 'block';
+    clearTimeout(toast._timeout);
+    toast._timeout = setTimeout(() => { toast.style.display = 'none'; }, 2800);
+  }
+
+  function switchPage(page) {
+    currentActivePage = page;
+    window.location.hash = page;
+    document.getElementById('btn-page-nav').classList.toggle('active', page === 'nav');
+    document.getElementById('btn-page-custom').classList.toggle('active', page === 'custom');
+
+    document.getElementById('page-navbridge').style.display = (page === 'nav') ? 'grid' : 'none';
+    document.getElementById('page-custom').style.display = (page === 'custom') ? 'grid' : 'none';
+
+    updateCustomVoiceActorDisplay();
+  }
+
+  function updateRateLabel(val, labelId) {
+    document.getElementById(labelId).textContent = parseFloat(val).toFixed(2) + 'x';
+  }
+
+  function clearText(inputId, countId) {
+    const el = document.getElementById(inputId);
+    el.value = '';
+    if (countId) {
+      document.getElementById(countId).textContent = '0 ký tự';
+    }
+    if (inputId === 'custom-tts-input') {
+      updateCustomEditorStats();
+    }
+    el.focus();
+  }
+
+  async function pasteClipboard(inputId) {
+    try {
+      const text = await navigator.clipboard.readText();
+      const el = document.getElementById(inputId);
+      el.value = (el.value ? el.value + ' ' : '') + text;
+      updateCustomEditorStats();
+      showToast('Đã dán văn bản từ Clipboard!');
+    } catch (e) {
+      alert('Không thể truy cập Clipboard: ' + e.message);
+    }
+  }
+
+  function insertVocalTag(tag, inputId) {
+    const el = document.getElementById(inputId);
+    const start = el.selectionStart || el.value.length;
+    const end = el.selectionEnd || el.value.length;
+    const val = el.value;
+    el.value = val.substring(0, start) + ' ' + tag + ' ' + val.substring(end);
+    el.focus();
+    el.selectionStart = el.selectionEnd = start + tag.length + 2;
+    updateCustomEditorStats();
+    showToast(`Đã chèn thẻ: ${tag}`);
+  }
+
+  function switchVoiceMode(mode) {
+    currentVoiceMode = mode;
+    document.getElementById('tab-prebuilt').classList.toggle('active', mode === 'prebuilt');
+    document.getElementById('tab-design').classList.toggle('active', mode === 'design');
+    document.getElementById('tab-clone').classList.toggle('active', mode === 'clone');
+
+    document.getElementById('prebuilt-section').style.display = (mode === 'prebuilt') ? 'block' : 'none';
+    document.getElementById('design-section').style.display = (mode === 'design') ? 'flex' : 'none';
+    document.getElementById('clone-section').style.display = (mode === 'clone') ? 'flex' : 'none';
+
+    if (mode === 'design') {
+      loadDesignedVoices();
+    } else if (mode === 'clone') {
+      recheckApproval();
+    }
+    updateCustomVoiceActorDisplay();
+  }
+
+  function setEngine(engine) {
+    currentEngine = engine;
+    document.getElementById('btn-engine-gemini').classList.toggle('active', engine === 'gemini');
+    document.getElementById('btn-engine-chirp').classList.toggle('active', engine === 'chirp');
+    renderVoices();
+    updateCustomVoiceActorDisplay();
+  }
+
+  function filterGender(gender) {
+    currentFilter = gender;
+    document.querySelectorAll('.voice-filter-bar .filter-btn').forEach(b => {
+      b.classList.toggle('active', b.textContent === (gender === 'ALL' ? 'Tất cả' : gender));
+    });
+    renderVoices();
+  }
+
+  function selectVoice(voiceId) {
+    currentVoice = voiceId;
+    renderVoices();
+    updateCustomVoiceActorDisplay();
+    showToast(`Đã chọn giọng: ${voiceId}`);
+  }
+
+  function selectDesignedVoice(v) {
+    selectedDesignedVoice = v;
+    renderDesignedVoices();
+    updateCustomVoiceActorDisplay();
+    showToast(`Đã chọn Voice Design: ${v.display_name || v.id}`);
+  }
+
+  function updateCustomVoiceActorDisplay() {
+    let name = currentVoice;
+    let desc = 'Gemini 3.8 Flash TTS';
+    let av = currentVoice.charAt(0);
+
+    if (currentVoiceMode === 'design' && selectedDesignedVoice) {
+      name = selectedDesignedVoice.display_name || 'Gemini Voice Persona';
+      desc = selectedDesignedVoice.id;
+      av = '✨';
+    } else if (currentVoiceMode === 'clone') {
+      name = 'Custom Cloned Voice';
+      desc = document.getElementById('custom-voice-input').value.trim() || 'Chưa nhập Voice Key';
+      av = '🧬';
+    } else {
+      const vObj = voicesList.find(x => x.id === currentVoice);
+      if (vObj) {
+        desc = `${vObj.gender} · ${vObj.style}`;
+      }
+    }
+
+    document.getElementById('custom-voice-avatar').textContent = av;
+    document.getElementById('custom-voice-title').textContent = name;
+    document.getElementById('custom-voice-sub').textContent = desc;
+  }
+
+  function fillDesignPrompt(text) {
+    document.getElementById('design-prompt-input').value = text;
+  }
+
+  async function handleCreateDesignedVoice() {
+    const prompt = document.getElementById('design-prompt-input').value.trim();
+    const name = document.getElementById('design-name-input').value.trim();
+    if (!prompt) {
+      showToast('Vui lòng nhập mô tả phong cách giọng nói!');
+      return;
+    }
+
+    const btn = document.getElementById('btn-create-design');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Đang tạo Voice Persona...';
+
+    try {
+      const res = await fetch('/api/create-voice-design', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({prompt: prompt, display_name: name || 'Giọng AI NavBridge'}),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      showToast(`Đã tạo thành công giọng: ${data.voice_id}`);
+      await loadDesignedVoices();
+      if (designedVoicesList.length > 0) {
+        selectDesignedVoice(designedVoicesList[0]);
+      }
+      if (data.sample_audio) {
+        mainAudio.src = 'data:audio/wav;base64,' + data.sample_audio;
+        mainAudio.play();
+        document.getElementById('player-voice-badge').textContent = `${data.display_name || data.voice_id} (Mẫu thử)`;
+        document.getElementById('player-status-text').textContent = 'Đang phát âm thanh mẫu từ Gemini';
+      }
+    } catch (e) {
+      alert('Lỗi tạo Voice Design: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<span>✨ Tạo Voice Persona Mới</span>';
+    }
+  }
+
+  async function handleDeleteDesignedVoice(voiceId) {
+    if (!confirm('Bạn có chắc muốn xóa giọng thiết kế này không?')) return;
+    try {
+      const res = await fetch('/api/delete-voice-design', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({voice_id: voiceId}),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      showToast('Đã xóa giọng thiết kế khỏi GCP!');
+      if (selectedDesignedVoice && selectedDesignedVoice.id === voiceId) {
+        selectedDesignedVoice = null;
+      }
+      await loadDesignedVoices();
+    } catch (e) {
+      alert('Lỗi xóa giọng: ' + e.message);
+    }
+  }
+
+  async function loadDesignedVoices() {
+    try {
+      const res = await fetch('/api/designed-voices');
+      const data = await res.json();
+      designedVoicesList = data.voices || [];
+      document.getElementById('designed-count').textContent = designedVoicesList.length;
+      if (!selectedDesignedVoice && designedVoicesList.length > 0) {
+        selectedDesignedVoice = designedVoicesList[0];
+      }
+      renderDesignedVoices();
+      updateCustomVoiceActorDisplay();
+    } catch (e) {
+      console.error('Failed to load designed voices', e);
+    }
+  }
+
+  function renderDesignedVoices() {
+    const container = document.getElementById('designed-voice-container');
+    container.innerHTML = '';
+    if (designedVoicesList.length === 0) {
+      container.innerHTML = '<div style="font-size:12px; color:var(--text-dim); text-align:center; padding:12px;">Chưa có Voice Design nào. Hãy tạo một giọng ở trên!</div>';
+      return;
+    }
+
+    designedVoicesList.forEach(v => {
+      const isActive = selectedDesignedVoice && selectedDesignedVoice.id === v.id;
+      const card = document.createElement('div');
+      card.className = `voice-card designed ${isActive ? 'active' : ''}`;
+      card.onclick = () => selectDesignedVoice(v);
+
+      const dName = v.display_name || 'Gemini Designed Voice';
+      const promptSnippet = (v.prompted && v.prompted.input) ? v.prompted.input.substring(0, 48) + '...' : v.id;
+
+      card.innerHTML = `
+        <div class="voice-left">
+          <div class="voice-avatar purple">✨</div>
+          <div>
+            <div class="voice-name">
+              <span>${dName}</span>
+              <span class="design-badge" style="font-size:10px;">Persona</span>
+            </div>
+            <div class="voice-desc">${promptSnippet}</div>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="voice-gender-tag" style="color:#c084fc;">${isActive ? 'Đang chọn' : 'Chọn'}</span>
+          <button class="clear-btn" style="color:#ef4444; padding:2px 6px; font-size:12px; border-radius:4px;" title="Xóa giọng này" onclick="event.stopPropagation(); handleDeleteDesignedVoice('${v.id}')">🗑️</button>
+        </div>
+      `;
+      container.appendChild(card);
+    });
+  }
+
+  function renderVoices() {
+    const container = document.getElementById('voice-container');
+    container.innerHTML = '';
+    const filtered = voicesList.filter(v => currentFilter === 'ALL' || v.gender === currentFilter);
+
+    filtered.forEach(v => {
+      const isActive = v.id === currentVoice;
+      const card = document.createElement('div');
+      card.className = `voice-card ${isActive ? 'active' : ''}`;
+      card.onclick = () => selectVoice(v.id);
+
+      card.innerHTML = `
+        <div class="voice-left">
+          <div class="voice-avatar">${v.id.charAt(0)}</div>
+          <div>
+            <div class="voice-name">
+              <span>${v.id}</span>
+              ${v.recommended ? '<span style="font-size:9px; background:#10b981; color:#fff; padding:1px 5px; border-radius:4px;">Khuyên dùng</span>' : ''}
+            </div>
+            <div class="voice-desc">${v.style}</div>
+          </div>
+        </div>
+        <div class="voice-gender-tag">${v.gender}</div>
+      `;
+      container.appendChild(card);
+    });
+  }
+
+  function renderExpressions() {
+    // 1. Render in Nav Page
+    const navContainer = document.getElementById('nav-expr-container');
+    navContainer.innerHTML = '';
+    expressionsList.forEach(exp => {
+      const isAct = exp.id === currentNavExpression;
+      const card = document.createElement('div');
+      card.className = `expr-card ${isAct ? 'active' : ''} ${exp.id === 'urgent' ? 'urgent' : ''}`;
+      card.onclick = () => selectNavExpression(exp.id);
+      card.innerHTML = `
+        <span class="expr-icon">${exp.icon}</span>
+        <span class="expr-name">${exp.name}</span>
+      `;
+      navContainer.appendChild(card);
+    });
+
+    // 2. Render in Custom Page
+    const customContainer = document.getElementById('custom-expr-container');
+    customContainer.innerHTML = '';
+    expressionsList.forEach(exp => {
+      const isAct = exp.id === currentCustomExpression;
+      const card = document.createElement('div');
+      card.className = `expr-card ${isAct ? 'active' : ''} ${exp.id === 'urgent' ? 'urgent' : ''}`;
+      card.onclick = () => selectCustomExpression(exp.id);
+      card.innerHTML = `
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span class="expr-icon">${exp.icon}</span>
+          <span class="expr-name">${exp.name}</span>
+        </div>
+        <span class="expr-desc">${exp.desc}</span>
+      `;
+      customContainer.appendChild(card);
+    });
+  }
+
+  function selectNavExpression(id) {
+    currentNavExpression = id;
+    const expObj = expressionsList.find(x => x.id === id);
+    document.getElementById('nav-expr-badge').textContent = expObj ? expObj.name : id;
+    renderExpressions();
+  }
+
+  function selectCustomExpression(id) {
+    currentCustomExpression = id;
+    const isCustomPrompt = id === 'custom';
+    document.getElementById('custom-expr-input-group').style.display = isCustomPrompt ? 'flex' : 'none';
+    renderExpressions();
+  }
+
+  function renderPresets() {
+    const container = document.getElementById('preset-container');
+    container.innerHTML = '';
+    presetsList.forEach(cat => {
+      const grp = document.createElement('div');
+      grp.innerHTML = `<div class="preset-group-title" style="margin-bottom:6px;">${cat.category}</div>`;
+      const chipContainer = document.createElement('div');
+      chipContainer.className = 'preset-chips';
+      cat.items.forEach(it => {
+        const c = document.createElement('div');
+        c.className = 'chip';
+        c.textContent = it.label;
+        c.title = it.text;
+        c.onclick = () => {
+          ttsInput.value = it.text;
+          document.getElementById('char-count').textContent = `${it.text.length} ký tự`;
+        };
+        chipContainer.appendChild(c);
+      });
+      grp.appendChild(chipContainer);
+      container.appendChild(grp);
+    });
+  }
+
+  function renderCustomSamples() {
+    const container = document.getElementById('custom-sample-chips');
+    container.innerHTML = '';
+    customSamplesList.forEach(s => {
+      const c = document.createElement('div');
+      c.className = 'chip';
+      c.innerHTML = `<span>${s.icon}</span> <span>${s.category}</span>`;
+      c.onclick = () => {
+        customTtsInput.value = s.text;
+        updateCustomEditorStats();
+        // If urgent sample, preselect urgent emotion
+        if (s.category.includes('Cảnh báo')) {
+          selectCustomExpression('urgent');
+        } else if (s.category.includes('Kể chuyện')) {
+          selectCustomExpression('storyteller');
+        } else if (s.category.includes('Bản tin')) {
+          selectCustomExpression('formal');
+        }
+      };
+      container.appendChild(c);
+    });
+  }
+
+  function getExpressionStyle(exprId, customStyleInputId) {
+    if (exprId === 'custom') {
+      const val = document.getElementById(customStyleInputId).value.trim();
+      return val;
+    }
+    const expObj = expressionsList.find(x => x.id === exprId);
+    return expObj ? expObj.style : '';
+  }
+
+  // Synthesize for Navigation Page
+  async function synthesizeNav() {
+    const text = ttsInput.value.trim();
+    if (!text) {
+      showToast('Vui lòng nhập câu cần đọc!');
+      return;
+    }
+
+    const btn = document.getElementById('btn-synth');
+    const btnIcon = document.getElementById('btn-synth-icon');
+    const btnText = document.getElementById('btn-synth-text');
+    const rate = parseFloat(document.getElementById('rate-slider').value);
+    const style = getExpressionStyle(currentNavExpression, 'custom-style-input');
+
+    btn.disabled = true;
+    btnIcon.innerHTML = '<span class="spinner"></span>';
+    btnText.textContent = 'Đang tạo...';
+    document.getElementById('player-status-text').textContent = 'Đang gọi API Google...';
+
+    const t0 = performance.now();
+    try {
+      let payload = {
+        text: text,
+        rate: rate,
+        mode: currentVoiceMode,
+        style: style,
+      };
+
+      if (currentVoiceMode === 'prebuilt') {
+        payload.engine = currentEngine;
+        payload.voice = currentVoice;
+      } else if (currentVoiceMode === 'design') {
+        if (!selectedDesignedVoice) {
+          throw new Error('Chưa chọn Voice Design nào!');
+        }
+        payload.engine = 'gemini';
+        payload.voice = selectedDesignedVoice.id;
+      } else {
+        const customVoice = document.getElementById('custom-voice-input').value.trim();
+        const cloneEngine = document.getElementById('clone-engine-select').value;
+        if (!customVoice) throw new Error('Vui lòng nhập Voice ID / Key trong tab Voice Clone!');
+        payload.engine = cloneEngine;
+        payload.custom_voice = customVoice;
+      }
+
+      const res = await fetch('/api/synthesize', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+      const result = await res.json();
+      const latency = Math.round(performance.now() - t0);
+
+      currentAudioUrl = result.audio_uri;
+      currentAudioFormat = result.format;
+      mainAudio.src = result.audio_uri;
+      mainAudio.play();
+
+      let labelVoice = currentVoice;
+      if (currentVoiceMode === 'design') {
+        labelVoice = `Design (${selectedDesignedVoice ? (selectedDesignedVoice.display_name || selectedDesignedVoice.id) : 'Custom'})`;
+      }
+
+      const expObj = expressionsList.find(x => x.id === currentNavExpression);
+      document.getElementById('player-voice-badge').textContent = `${labelVoice} (${result.engine === 'gemini' ? 'Gemini 3.8' : 'Chirp 3'})`;
+      document.getElementById('player-active-expr').textContent = expObj ? expObj.name : 'Biểu cảm';
+      document.getElementById('player-status-text').textContent = 'Sẵn sàng phát';
+
+      document.getElementById('player-telemetry').style.display = 'flex';
+      document.getElementById('tel-latency').textContent = `${result.latency_ms || latency}ms`;
+      document.getElementById('tel-duration').textContent = `${result.duration_s || '?'}s`;
+      document.getElementById('tel-size').textContent = `${(result.size_bytes / 1024).toFixed(1)} KB`;
+
+      document.getElementById('btn-download').style.display = 'inline-block';
+      document.getElementById('btn-save-pack').style.display = 'inline-block';
+
+      addNavHistory({
+        voice: labelVoice,
+        expr: expObj ? expObj.name : 'Tự nhiên',
+        text: text,
+        latency: result.latency_ms || latency,
+        uri: result.audio_uri,
+      });
+
+    } catch (e) {
+      alert('Lỗi tổng hợp giọng nói: ' + e.message);
+      document.getElementById('player-status-text').textContent = 'Lỗi phát sinh';
+    } finally {
+      btn.disabled = false;
+      btnIcon.textContent = '🔊';
+      btnText.textContent = 'Tạo giọng nói';
+    }
+  }
+
+  // Synthesize for Custom Studio Page
+  async function synthesizeCustom() {
+    const text = customTtsInput.value.trim();
+    if (!text) {
+      showToast('Vui lòng nhập văn bản muốn đọc!');
+      return;
+    }
+
+    const btn = document.getElementById('btn-custom-synth');
+    const btnIcon = document.getElementById('btn-custom-icon');
+    const btnText = document.getElementById('btn-custom-text');
+    const rate = parseFloat(document.getElementById('custom-rate-slider').value);
+    const style = getExpressionStyle(currentCustomExpression, 'custom-style-input');
+
+    btn.disabled = true;
+    btnIcon.innerHTML = '<span class="spinner"></span>';
+    btnText.textContent = 'Đang tổng hợp kịch bản...';
+    document.getElementById('custom-player-status').textContent = 'Đang gọi Gemini 3.8 Flash TTS...';
+
+    const t0 = performance.now();
+    try {
+      let payload = {
+        text: text,
+        rate: rate,
+        mode: currentVoiceMode,
+        engine: 'gemini',
+        style: style,
+      };
+
+      if (currentVoiceMode === 'prebuilt') {
+        payload.voice = currentVoice;
+      } else if (currentVoiceMode === 'design') {
+        if (!selectedDesignedVoice) throw new Error('Chưa chọn Voice Design nào!');
+        payload.voice = selectedDesignedVoice.id;
+      } else {
+        const customVoice = document.getElementById('custom-voice-input').value.trim();
+        if (!customVoice) throw new Error('Vui lòng nhập Voice Key trong tab Voice Clone!');
+        payload.custom_voice = customVoice;
+      }
+
+      const res = await fetch('/api/synthesize', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+      const result = await res.json();
+      const latency = Math.round(performance.now() - t0);
+
+      currentCustomAudioUrl = result.audio_uri;
+      currentCustomAudioFormat = result.format;
+      customAudio.src = result.audio_uri;
+      customAudio.play();
+
+      let labelVoice = currentVoice;
+      if (currentVoiceMode === 'design') {
+        labelVoice = `Design (${selectedDesignedVoice ? (selectedDesignedVoice.display_name || selectedDesignedVoice.id) : 'Custom'})`;
+      }
+
+      const expObj = expressionsList.find(x => x.id === currentCustomExpression);
+      const exprLabel = (currentCustomExpression === 'custom') ? `Tùy chỉnh: ${style.substring(0,20)}` : (expObj ? expObj.name : 'Chuẩn');
+
+      document.getElementById('custom-player-voice-badge').textContent = `${labelVoice} (Gemini 3.8 Flash)`;
+      document.getElementById('custom-player-expr-badge').textContent = exprLabel;
+      document.getElementById('custom-player-status').textContent = 'Phát thành công';
+
+      document.getElementById('custom-telemetry').style.display = 'flex';
+      document.getElementById('custom-tel-latency').textContent = `${result.latency_ms || latency}ms`;
+      document.getElementById('custom-tel-duration').textContent = `${result.duration_s || '?'}s`;
+      document.getElementById('custom-tel-size').textContent = `${(result.size_bytes / 1024).toFixed(1)} KB`;
+
+      document.getElementById('btn-custom-download').style.display = 'inline-block';
+      document.getElementById('btn-custom-save-pack').style.display = 'inline-block';
+
+      addCustomHistory({
+        voice: labelVoice,
+        expr: exprLabel,
+        text: text,
+        latency: result.latency_ms || latency,
+        uri: result.audio_uri,
+      });
+
+    } catch (e) {
+      alert('Lỗi tổng hợp giọng nói: ' + e.message);
+      document.getElementById('custom-player-status').textContent = 'Lỗi phát sinh';
+    } finally {
+      btn.disabled = false;
+      btnIcon.textContent = '🔊';
+      btnText.textContent = 'Tạo giọng nói biểu cảm (Ctrl+Enter)';
+    }
+  }
+
+  async function compareEngines() {
+    const text = ttsInput.value.trim();
+    if (!text) {
+      showToast('Vui lòng nhập câu cần so sánh!');
+      return;
+    }
+
+    const btn = document.getElementById('btn-compare');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Đang tạo cả 2 giọng...';
+    document.getElementById('compare-section').style.display = 'block';
+
+    try {
+      const res = await fetch('/api/compare', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          text: text,
+          voice: currentVoice,
+          rate: parseFloat(document.getElementById('rate-slider').value),
+          style: getExpressionStyle(currentNavExpression, 'custom-style-input'),
+        }),
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+
+      const gemAudio = document.getElementById('cmp-gemini-audio');
+      gemAudio.src = data.gemini.audio_uri;
+      document.getElementById('cmp-gemini-lat').textContent = `${data.gemini.latency_ms}ms`;
+      document.getElementById('cmp-gemini-info').textContent =
+        `${(data.gemini.size_bytes/1024).toFixed(1)} KB · ${(data.gemini.duration_s||0).toFixed(2)}s · WAV 24kHz`;
+
+      const chAudio = document.getElementById('cmp-chirp-audio');
+      chAudio.src = data.chirp.audio_uri;
+      document.getElementById('cmp-chirp-lat').textContent = `${data.chirp.latency_ms}ms`;
+      document.getElementById('cmp-chirp-info').textContent =
+        `${(data.chirp.size_bytes/1024).toFixed(1)} KB · ${(data.chirp.duration_s||0).toFixed(2)}s · MP3`;
+
+      gemAudio.play();
+      showToast('Đã tải cả 2 bản thu xong! Bấm nghe để so sánh.');
+    } catch (e) {
+      alert('Lỗi so sánh: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '⚖️ So sánh A/B (Gemini vs Chirp)';
+    }
+  }
+
+  function downloadAudio(url, filenamePrefix) {
+    if (!url) return;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filenamePrefix}_${Date.now()}.wav`;
+    a.click();
+  }
+
+  async function saveToNavBridgePack(sourceInputId) {
+    const url = (currentActivePage === 'nav') ? currentAudioUrl : currentCustomAudioUrl;
+    if (!url) return;
+    const text = document.getElementById(sourceInputId).value.trim();
+    const packName = prompt('Nhập tên voice pack muốn lưu (ví dụ: voice_vn_gemini hoặc voice_vn_gcp):', 'voice_vn_gemini');
+    if (!packName) return;
+
+    const fileName = prompt('Nhập tên file (không cần đuôi .mp3):', 'custom_clip');
+    if (!fileName) return;
+
+    try {
+      const res = await fetch('/api/save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          pack: packName,
+          filename: fileName,
+          audio_uri: url,
+          text: text,
+          voice: currentVoice,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast(`Đã lưu thành công vào: assets/audio/${packName}/${data.file}`);
+      } else {
+        alert('Lỗi khi lưu: ' + data.error);
+      }
+    } catch (err) {
+      alert('Không thể lưu: ' + err.message);
+    }
+  }
+
+  function addNavHistory(item) {
+    navHistoryItems.unshift(item);
+    if (navHistoryItems.length > 20) navHistoryItems.pop();
+    renderNavHistory();
+  }
+
+  function clearNavHistory() {
+    navHistoryItems = [];
+    renderNavHistory();
+  }
+
+  function renderNavHistory() {
+    const tbody = document.getElementById('history-body');
+    if (navHistoryItems.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-dim);">Chưa có lượt phát nào trong phiên này</td></tr>';
+      return;
+    }
+    tbody.innerHTML = '';
+    navHistoryItems.forEach(h => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><b>${h.voice}</b></td>
+        <td><span class="player-expr-tag" style="font-size:10px;">${h.expr}</span></td>
+        <td style="max-width:240px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${h.text}</td>
+        <td><span class="pill" style="font-size:10px; padding:2px 6px;">${h.latency}ms</span></td>
+        <td><button class="filter-btn" onclick="mainAudio.src='${h.uri}'; mainAudio.play();">▶ Nghe</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function addCustomHistory(item) {
+    customHistoryItems.unshift(item);
+    if (customHistoryItems.length > 20) customHistoryItems.pop();
+    renderCustomHistory();
+  }
+
+  function clearCustomHistory() {
+    customHistoryItems = [];
+    renderCustomHistory();
+  }
+
+  function renderCustomHistory() {
+    const tbody = document.getElementById('custom-history-body');
+    if (customHistoryItems.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-dim);">Chưa có kịch bản tùy chỉnh nào</td></tr>';
+      return;
+    }
+    tbody.innerHTML = '';
+    customHistoryItems.forEach(h => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><b>${h.voice}</b></td>
+        <td><span class="player-expr-tag" style="font-size:10px;">${h.expr}</span></td>
+        <td style="max-width:260px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${h.text}</td>
+        <td><span class="pill" style="font-size:10px; padding:2px 6px;">${h.latency}ms</span></td>
+        <td><button class="filter-btn" onclick="customAudio.src='${h.uri}'; customAudio.play();">▶ Nghe</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function recheckApproval() {
+    const detailsEl = document.getElementById('clone-approval-details');
+    detailsEl.textContent = 'Đang kiểm tra allow-list Google Cloud...';
+    try {
+      const res = await fetch('/api/check-clone-approval');
+      const data = await res.json();
+      detailsEl.innerHTML = `
+        <div style="color:#10b981; font-weight:600; margin-bottom:2px;">✨ Gemini Voice Design: SẴN SÀNG 100% ✓</div>
+        <div style="color:#f87171; font-weight:600; margin-bottom:2px;">🔒 Voice Clone từ file: Chưa cấp phép</div>
+        <div>• <b>Chirp 3 ICV:</b> ${data.chirp_status.message}</div>
+      `;
+    } catch (e) {
+      detailsEl.textContent = 'Lỗi: ' + e.message;
+    }
+  }
+
+  async function loadInitialData() {
+    try {
+      const res = await fetch('/api/init');
+      const data = await res.json();
+      voicesList = data.voices || [];
+      presetsList = data.presets || [];
+      expressionsList = data.expressions || [];
+      customSamplesList = data.custom_samples || [];
+
+      if (data.project) {
+        document.getElementById('proj-badge').textContent = `Dự án: ${data.project}`;
+      }
+
+      renderVoices();
+      renderPresets();
+      renderExpressions();
+      renderCustomSamples();
+
+      ttsInput.value = 'Tốc độ giới hạn hiện tại là 50 km/h';
+      document.getElementById('char-count').textContent = `${ttsInput.value.length} ký tự`;
+
+      if (customSamplesList.length > 0) {
+        customTtsInput.value = customSamplesList[0].text;
+        updateCustomEditorStats();
+      }
+
+      loadDesignedVoices();
+
+      // Check initial URL hash
+      if (window.location.hash === '#custom') {
+        switchPage('custom');
+      } else {
+        switchPage('nav');
+      }
+    } catch (err) {
+      console.error('Failed to load initial data', err);
+    }
+  }
+
+  loadInitialData();
+</script>
+</body>
+</html>

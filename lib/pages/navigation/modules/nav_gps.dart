@@ -63,6 +63,10 @@ extension _NavGps on _NavigationPageState {
       unawaited(_startReplayGps());
       return;
     }
+    // A track SIMULATION owns the fix stream: opening the real receiver on top
+    // of it would put two sources on `_onGpsFix` — the double-feed that made a
+    // replay's marker jump (2026-10-08). See nav_track_sim.dart.
+    if (_trackSimRunning) return;
     // Seed the position quickly: a one-shot network-assisted fix (fast, via
     // the fused provider) so the map centers on the user right away instead
     // of waiting for the stream's first satellite fix — which is slow on the
@@ -127,7 +131,17 @@ extension _NavGps on _NavigationPageState {
     _startedReplay = true;
     TripReplay.running = true;
     _replayRoadKey = ''; // a new run must publish its first recorded road
+    _layerHold.forget(); // and must not inherit the last run's held limit
     if (from > 0) _current = fixes[from].point;
+    // ⭐ Cancel whatever this page was already listening to, BEFORE replacing
+    // the handle. `_startGps()` cancels its own subscription, but the replay
+    // branch enters here from several places and this method awaits the trip
+    // load first, so two overlapping calls both got past that cancel and the
+    // second one just overwrote `_gpsSub` — leaving the first stream alive and
+    // feeding `_onGpsFix` forever (the double-feed behind `fix 1062/540` and
+    // the jumping marker, 2026-10-08).
+    await _gpsSub?.cancel();
+    _gpsSub = null;
     _gpsSub = replayPositionStream(fixes, speed: x, from: from).listen(
       _onGpsFix,
       onError: (Object e) => debugPrint('REPLAY: stream error: $e'),
@@ -263,10 +277,17 @@ extension _NavGps on _NavigationPageState {
 
   /// Shared GPS-fix handler (stream fixes + the fast seed + ESP NMEA). Updates
   /// the map, the engine and (in nav mode) the ETA/voice/clock.
-  void _onGpsFix(Position p, {bool fromEsp = false}) {
+  ///
+  /// [fromSim] marks the SIMULATED drive's own synthesised feed. Without it the
+  /// guard below swallowed the whole simulation: the sim owns the route, so real
+  /// fixes are dropped while it runs — including the fixes the sim itself was
+  /// pushing through here, which is why a simulation produced a trip with ZERO
+  /// fixes (2026-10-08). The guard's purpose is unchanged: the phone's stationary
+  /// GPS must not yank the car back off the simulated route.
+  void _onGpsFix(Position p, {bool fromEsp = false, bool fromSim = false}) {
     // Simulated drive drives the route itself — ignore real (stationary) GPS
     // so it can't yank the car back to the phone's location (T9).
-    if (_simulating) return;
+    if (_simulating && !fromSim) return;
     // ESP-first: while the receiver has a fresh valid fix, ignore the phone's
     // GPS (its antenna is worse). The phone resumes when the ESP fix goes stale.
     if (!fromEsp && _espActive()) return;
@@ -286,8 +307,14 @@ extension _NavGps on _NavigationPageState {
     // chip — a single GPS burst (e.g. a 130 km/h reading) must never move the
     // arrow or flash the speed. Skipped when the user turns the GPS filter
     // off in Settings (raw mode — no fixes dropped).
-    if (gpsFilter &&
-        !_outlierGate.accept(
+    //
+    // NOTE the gate can only DROP a fix, never move one: it decides between
+    // "use this position" and "keep the previous one". So a run that looks
+    // like it is on the wrong road cannot be caused by the filter — either the
+    // raw position was already there, or the road lookup chose wrongly.
+    final accepted =
+        !gpsFilter ||
+        _outlierGate.accept(
           pos,
           accuracy: p.accuracy,
           dt: dt,
@@ -295,24 +322,65 @@ extension _NavGps on _NavigationPageState {
           // cold (see OutlierGate.accept), so a drive that starts already
           // moving is not rejected forever.
           speedMps: p.speed.isFinite ? p.speed : null,
-        )) {
+        );
+    if (!accepted) {
+      // A rejected fix is the ONLY case where the app deliberately ignores the
+      // receiver — so it is the first thing to record when a drive's position
+      // looks wrong. Previously these were dropped without a trace.
+      _trip?.addRawFix(
+        time: fixTime,
+        lat: p.latitude,
+        lng: p.longitude,
+        accuracyM: p.accuracy,
+        speedMps: p.speed.isFinite ? p.speed : 0,
+        heading: p.heading,
+        accepted: false,
+        filterOn: true,
+        rejectReason: _outlierGate.lastReason,
+        jumpM: _outlierGate.lastJumpM,
+        allowedM: _outlierGate.lastAllowedM,
+        fromEsp: fromEsp,
+      );
+      final why = _outlierGate.lastReason == 'jump'
+          ? 'jump=${_outlierGate.lastJumpM?.toStringAsFixed(0)}m>'
+                '${_outlierGate.lastAllowedM?.toStringAsFixed(0)}m'
+          : 'accuracy>${_outlierGate.lastAllowedM ?? ''}';
       debugPrint(
-        'GPS: REJECTED acc=${p.accuracy}m '
-        'dt=${dt == null ? '-' : dt.toStringAsFixed(2)}s',
+        'GPS: REJECTED $why acc=${p.accuracy}m '
+        'dt=${dt == null ? '-' : dt.toStringAsFixed(2)}s '
+        'at ${p.latitude.toStringAsFixed(7)},${p.longitude.toStringAsFixed(7)}',
       );
       return;
     }
     _lastGpsFixTime = fixTime;
+    // ⭐ The RAW fix, as the receiver gave it, for EVERY accepted fix too: the
+    // coordinates the whole decision chain started from. Without this a
+    // "the GPS was totally wrong on Trường Chinh" report could only be checked
+    // against the road name the app itself published.
+    _trip?.addRawFix(
+      time: fixTime,
+      lat: p.latitude,
+      lng: p.longitude,
+      accuracyM: p.accuracy,
+      speedMps: p.speed.isFinite ? p.speed : 0,
+      heading: p.heading,
+      accepted: true,
+      filterOn: gpsFilter,
+      fromEsp: fromEsp,
+    );
     debugPrint(
       'GPS${fromEsp ? '/ESP' : ''}: fix dt=${(dt ?? 0).toStringAsFixed(2)}s '
       'acc=${p.accuracy}m '
-      'spd=${p.speed.isNaN ? 0 : p.speed.toStringAsFixed(0)}',
+      'spd=${p.speed.isNaN ? 0 : p.speed.toStringAsFixed(0)} '
+      'at ${p.latitude.toStringAsFixed(7)},${p.longitude.toStringAsFixed(7)}',
     );
     _current = pos;
-    if (_startedReplay) {
+    if (_startedReplay || _trackSimRunning) {
       simNoteFix(roadKnown: (_roadInfo?.speedLimit ?? 0) > 0);
-      _applyReplayRoad(fixTime);
     }
+    // ⛔ The recorded road is injected ONLY for a replay. A simulation's whole
+    // point is that the road has to be worked out from the map data.
+    if (_startedReplay) _applyReplayRoad(fixTime);
     final spd = p.speed.isNaN ? 0.0 : p.speed;
     // Filtered heading: holds while stationary, only applies a big change
     // after two agreeing fixes (see [StrictHeading]).
@@ -449,6 +517,16 @@ extension _NavGps on _NavigationPageState {
   /// never causes the puck to bounce off/on the route (the old flicker).
   Future<void> _maybeSnapToRoad() async {
     if (forceOffline || _gpsWindow.length < 3 || !_navigating) return;
+    // ⭐ Not during a SIMULATION, and this is a scope limit, not an optimisation
+    // — the run says so in its log. `/match` is a REMOTE call on a 5 s cadence;
+    // a drive fed at 8× issues one every ~0.6 s of wall clock, and the service
+    // took 76 s per call when the relay first exposed it (2026-10-08), so the
+    // run could never finish. It is also the one step whose result the
+    // simulation cannot be missing: it only nudges the puck onto the road, and
+    // simulated points are ON the route by construction ([synthesiseTrack]).
+    // Everything else — outlier gate, heading filter, road lookup, limit layer,
+    // signs, built-up verdict, voice, trip log — runs exactly as on a phone.
+    if (_trackSimRunning) return;
     final now = DateTime.now();
     if (_lastGpsMatch != null &&
         now.difference(_lastGpsMatch!) < const Duration(seconds: 5)) {
@@ -477,9 +555,23 @@ extension _NavGps on _NavigationPageState {
 
   void _applyReplayRoad(DateTime fixTime) {
     final f = TripReplay.streetAt(fixTime);
-    if (f == null) return;
+    if (f == null) {
+      // Silent before, which made "the replay never published a road"
+      // indistinguishable from "the trip has no street" or "the layer missed".
+      debugPrint('REPLAY: no recorded fix at $fixTime — road not published');
+      return;
+    }
     final street = f.street.trim();
-    if (street.isEmpty) return;
+    if (street.isEmpty) {
+      // A trip whose fixes carry no `street` gets NO road on screen at all, so
+      // no built-up verdict is ever evaluated and the dial stays '-'. Every
+      // real recording has it (`TripLogger.addFix(streetName:)`), but a
+      // hand-made fixture must set it (found 2026-10-08 on a synthetic QL20
+      // trip: zero ROAD lines and no explanation).
+      debugPrint('REPLAY: recorded street is EMPTY — road not published; the '
+          'trip needs a `street` per fix');
+      return;
+    }
     final hw = f.highway.trim().isEmpty ? 'unclassified' : f.highway.trim();
     // NOTE: `_roadOsm` is NOT refreshed here any more. It is the OSM/STATUTORY
     // baseline the layer falls back to, and the road on screen may be a
@@ -510,6 +602,8 @@ extension _NavGps on _NavigationPageState {
       // published — clear the key _applyReplayRoad set optimistically, or the
       // rest of the drive skips this road (the key is the whole comparison).
       _replayRoadKey = '';
+      debugPrint('REPLAY: road publish skipped — the fix moved on before '
+          '"$street" was published');
       return;
     }
     final base = RoadInfo(
@@ -563,7 +657,7 @@ extension _NavGps on _NavigationPageState {
         '${info.src.isEmpty ? '' : ', src=${info.src}'})');
     _lastRoadPublishPos = at;
     _roadNameGate.reset();
-    setNavState(() => _roadInfo = info);
+    setNavState(() => _roadInfo = _gateValue(info, at: at));
   }
 
   /// Restart the GPS stream shortly after it ends/errors — some devices
@@ -775,8 +869,69 @@ extension _NavGps on _NavigationPageState {
       _roadNameGate.reset();
     }
     final out = name == next.name ? next : next.copyWith(name: name);
-    setNavState(() => _roadInfo = out);
+    setNavState(() => _roadInfo = _gateValue(out, at: at));
     _lastRoadPublishPos = at;
+  }
+
+  /// The value/class signature the [_roadValueGate] confirms: the number on the
+  /// chip, the class its label shows, and where both came from.
+  String _valueSig(RoadInfo r) =>
+      '${r.speedLimit}|${r.highway}|${r.urban}|${r.src}';
+
+  /// Hold the road's CLASS/limit when it changes but the NAME does not.
+  ///
+  /// The name-change path has had hysteresis for a long time
+  /// ([RoadNameHysteresis]); the VALUE had none, so a road that briefly resolves
+  /// with another road's class repaints the limit for exactly one fix. Measured
+  /// on the 2026-10-09 00:12 sim: `fix 77 hw=trunk lim=60 src=city` and straight
+  /// back to `hw=unclassified lim=50` on fix 78 (same at 103/172/248) — the car's
+  /// road momentarily resolving as the trunk road it was crossing. The driver
+  /// sees the NUMBER on the chip jump (user, 2026-10-11: "when in intersection we
+  /// have speed jumping").
+  ///
+  /// ⛔ LAYER values are never gated: a Waze/VietMap answer is the value the
+  /// driver trusts and must land immediately — gating it would re-open the
+  /// 2026-09-24 "the limit changes too slowly" bug. Only a non-layer
+  /// (city / class / osm) change is confirmed, and only while the road NAME is
+  /// unchanged, because a name change is a real move and is gated above.
+  RoadInfo _gateValue(RoadInfo next, {LatLng? at}) {
+    final cur = _roadInfo;
+    if (cur == null) {
+      _roadValueGate.reset();
+      _lastValuePublishPos = at;
+      return next;
+    }
+    // A different road, or either side from the layer: no gate.
+    if (!sameRoadSpelling(next.name, cur.name) ||
+        cur.fromLayer ||
+        next.fromLayer) {
+      _roadValueGate.reset();
+      _lastValuePublishPos = at;
+      return next;
+    }
+    final a = _valueSig(cur);
+    final b = _valueSig(next);
+    if (a == b) {
+      _roadValueGate.reset();
+      _lastValuePublishPos = at;
+      return next;
+    }
+    final lastPos = _lastValuePublishPos;
+    final moved = (at == null || lastPos == null)
+        ? 0.0
+        : distanceMeters(lastPos, at);
+    if (_roadValueGate.accept(
+      current: a,
+      candidate: b,
+      movedM: moved,
+      at: navNow(),
+      same: (x, y) => x == y,
+    )) {
+      _lastValuePublishPos = at;
+      return next;
+    }
+    // Not confirmed yet: keep the number that is already on screen.
+    return cur;
   }
 
   /// Floor between queries so GPS jitter while stationary can't spin.
@@ -900,10 +1055,19 @@ extension _NavGps on _NavigationPageState {
     // LAYER already gave for THIS road when there is one, else [road] (the
     // class rule). Hoisted out of the try so a thrown lookup keeps it too.
     final cur = _roadInfo;
-    final keptLayerValue =
-        (cur != null && sameRoad(cur.name, road.name) && cur.fromLayer)
-            ? cur
-            : road;
+    // ⭐ The value already on screen is held over a MISS (the layer has nothing
+    // within 25 m on this fix) — but only for as far as [LayerHold] allows.
+    // Unbounded, it held the road we had LEFT over the one we are on: measured
+    // 2026-10-10, the 60 of a Waze-covered stretch stayed on the chip after the
+    // car had driven out of the layer's coverage (user: "move from 60 km have
+    // waze segment to no waze segment still not correct, last trip still have
+    // the 60 even after moved to new place").
+    final held = (cur != null &&
+            sameRoad(cur.name, road.name) &&
+            cur.fromLayer &&
+            _layerHold.fresh(cur.name, pos))
+        ? cur
+        : road;
     try {
       // Keep the value on screen while two parallel records of the SAME road
       // disagree (see _pickWithContinuity): without it the chip swapped 60/50
@@ -923,7 +1087,7 @@ extension _NavGps on _NavigationPageState {
         keepKmh: keep,
         expectStreet: _vetoStreet,
       );
-      if (hit == null) return keptLayerValue;
+      if (hit == null) return held;
       // Limit, layer kind and street name all come from THIS result.
       final layerKind = hit.source;
       final layerName = hit.streetName;
@@ -939,8 +1103,11 @@ extension _NavGps on _NavigationPageState {
       // value flickered between the two. This path is not simulator-only: the
       // 8 m graph refresh and the replay publisher both come through here.
       if (!_layerNameAgrees(layerName, ridden: hit.aligned)) {
-        return keptLayerValue;
+        return held;
       }
+      // The layer answered for THIS road from HERE: that is the anchor the hold
+      // is measured from (see [LayerHold]).
+      _layerHold.note(layerName ?? road.name, pos);
       return applyPostedLayer(
         road,
         kmh: hit.limit,
@@ -950,7 +1117,7 @@ extension _NavGps on _NavigationPageState {
         inTown: await _townAt(pos),
       );
     } catch (_) {
-      return keptLayerValue; // no layer data → keep what the layer last said
+      return held; // no layer data → keep what the layer last said
     }
   }
 
@@ -1114,6 +1281,11 @@ extension _NavGps on _NavigationPageState {
           'ROAD: no road lookup yet — segment says ${only.speedLimit} km/h'
           '${(wazeName ?? '').isEmpty ? '' : ' on "$wazeName"'}',
         );
+        // An UNNAMED segment cannot anchor the hold (there is no road name to
+        // match against later), so only a named one is remembered.
+        if (wazeName != null && wazeName.trim().isNotEmpty) {
+          _layerHold.note(wazeName, pos);
+        }
         _publishRoad(only);
       }
       return;
@@ -1138,6 +1310,12 @@ extension _NavGps on _NavigationPageState {
     // 'Độc Lập'; display 'Thống Nhất' with a 60 from 'Lũy Bán Bích'). Only the
     // NAME went through the veto — the value travelled with the segment record.
     final limitUsable = _layerNameAgrees(wazeName, ridden: hit?.aligned ?? false);
+    // ⭐ The layer just answered for the road on screen, from HERE: that is the
+    // anchor a later MISS is measured from (see [LayerHold]). Noted BEFORE the
+    // "nothing changed, return" shortcut below, or a value the layer keeps
+    // re-confirming would never refresh its anchor — and the hold would then
+    // look stale 150 m into a stretch the layer covers perfectly.
+    if (lim != null && limitUsable) _layerHold.note(name, pos);
     if (lim == null || !limitUsable) {
       if (lim != null) {
         debugPrint('ROAD: dropped layer limit $lim from "$wazeName" — the road '
@@ -1145,6 +1323,11 @@ extension _NavGps on _NavigationPageState {
       }
       final osm = _roadOsm;
       RoadInfo fallbackRoad;
+      // ⭐ Did the road we are falling back to come from the HEADING-CHECKED
+      // graph lookup? If so it is the road the car is riding, which is exactly
+      // the evidence the route veto must not overrule (see the `ridden:`
+      // argument below).
+      var fallbackRidden = false;
       if (osm != null && sameRoad(osm.name, name)) {
         fallbackRoad = osm;
       } else {
@@ -1157,6 +1340,14 @@ extension _NavGps on _NavigationPageState {
         final graphRoad = await _roadInfoFromGraph(pos);
         if (graphRoad != null && graphRoad.name.trim().isNotEmpty) {
           fallbackRoad = graphRoad;
+          // `_roadInfoFromGraph` calls `OfflineRouter.roadInfo(pos, headingDeg:
+          // _heading)`, which REJECTS an edge running across the car's path —
+          // the same alignment test the Waze path passes as `hit.aligned`. A
+          // named road that survived it is the road under the car, so its name
+          // is riding evidence. (A same-key spelling variant still loses to the
+          // spelling on screen — `_publishRoad` keeps it either way, so this
+          // cannot re-open the Cộng Hòa ⇄ Cộng Hoà churn.)
+          fallbackRidden = true;
         } else {
           final urban = await _townAt(pos);
           fallbackRoad = RoadInfo(
@@ -1174,12 +1365,51 @@ extension _NavGps on _NavigationPageState {
         }
         _roadOsm = fallbackRoad;
       }
+      // If we are still on the SAME road and already hold a valid posted limit
+      // from the layer (e.g. 60 km/h on Lũy Bán Bích), a momentary segment lookup
+      // miss (e.g. at an intersection or GPS jitter) must NOT immediately demote
+      // the speed to the uninformative statutory default (50 km/h)!
+      //
+      // ⛔ But "momentary" has to be BOUNDED, and the test for "still on the
+      // same road" has to be able to fail. `name` is `cur.name` on a miss (there
+      // is no segment to name the road), so `sameRoad(cur.name, name)` was a
+      // TAUTOLOGY: once a layer value was on screen this returned early on every
+      // miss, for the rest of the drive, and the fallback below it could never
+      // run — which is exactly the case it exists for (user, 2026-10-10: "move
+      // from 60 km have waze segment to no waze segment still not correct, last
+      // trip still have the 60 even after moved to new place"). The hold now
+      // expires once the car has driven past [LayerHold.maxMeters] since the
+      // layer last answered, and the road's own (OSM / statutory) limit takes
+      // over there.
+      if (cur.fromLayer &&
+          sameRoad(cur.name, name) &&
+          cur.speedLimit > 0 &&
+          _layerHold.fresh(cur.name, pos)) {
+        return;
+      }
+
       if (cur.fromLayer ||
           cur.speedLimit != fallbackRoad.speedLimit ||
           cur.src != fallbackRoad.src) {
         debugPrint('ROAD: layer has nothing for "${fallbackRoad.name}" — back to '
-            '${fallbackRoad.src} ${fallbackRoad.speedLimit} (was ${cur.src} ${cur.speedLimit})');
-        _publishRoad(fallbackRoad, at: pos);
+            '${fallbackRoad.src} ${fallbackRoad.speedLimit} (was ${cur.src} ${cur.speedLimit})'
+            '${fallbackRidden ? ' [ridden]' : ''}');
+        // ⭐ [ridden]: this publish was ADOPTING a new road (the layer had
+        // nothing for the one under the car), and when that road came from the
+        // heading-checked graph the car is demonstrably riding it — so the
+        // route veto must not overrule it.
+        //
+        // ⛔ Without it the veto pinned the road we had LEFT: it holds
+        // `current` whenever the route's step names contain the old road and
+        // not the new one, which is exactly the state at a junction where the
+        // route's step still spans the road being left. Measured on the
+        // 2026-10-08 17:40 drive — the Waze Lũy Bán Bích segment (60) ends at
+        // the Thống Nhất corner, this fallback ran from fix 10:52:05, and the
+        // chip published "Lũy Bán Bích / residential / two-way / 50" for TEN
+        // fixes: the new road's class, form and limit, wearing the old road's
+        // name (user: "thống nhất is still luỹ bán bích"). Thống Nhất has no
+        // Waze segment at all, so this path IS the one that has to name it.
+        _publishRoad(fallbackRoad, at: pos, ridden: fallbackRidden);
         return;
       }
       // No posted limit for THIS road: still adopt a better name when the layer
@@ -1335,6 +1565,17 @@ extension _NavGps on _NavigationPageState {
       // hdop is not that high that we need 15m?"). 0 (not yet known) keeps the
       // logger's default.
       accuracyM: _lastGpsAccuracy > 0 ? _lastGpsAccuracy : 10,
+      // ⭐ The FIX's time, not the wall clock: `navNow()` is the drive clock
+      // (`nav_clock.dart`), which the replay and the simulated drive both point
+      // at the fix stream. Without it a run played at 8× wrote one fix per
+      // WALL second — 24 fixes for a 189-fix drive (2026-10-08).
+      at: navNow(),
+      // The ROUTE's own name for the step the car is in, logged beside the
+      // matcher's [streetName]. When they disagree the driver was on one road
+      // while the chip/voice named another — the "on Trường Chinh it said
+      // Hẻm 415" report — and this is the only field that can prove which
+      // side was wrong from a recording.
+      routeName: _routeCurrentName.isEmpty ? null : _routeCurrentName,
     );
   }
 

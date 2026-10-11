@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""Put the toll booths and railway crossings where they actually are.
+"""Put the railway crossings where they actually are.
 
     python3 tools/signs/merge_osm_points.py --fetch            # refresh the points
     python3 tools/signs/merge_osm_points.py                    # dry run
     python3 tools/signs/merge_osm_points.py --write            # backup + rewrite
 
-WHY: `toll_booth` and `railway_crossing` in `vietnam_signs.json` come from the
-VietMap E-DOG ZONE dump, whose point is a polygon vertex — measured 2026-09-24,
-a median 70-80 m off the carriageway, and for only ~29 % / 39 % of the rows is
-there even a qualifying road to snap them onto. Overpass has the real features as
-POINTS on the road, and they are good: of 1,547 `barrier=toll_booth` nodes 59 %
-are within 20 m of a road in the segment layer (median 4 m), and of 8,703
-`railway=level_crossing` nodes 41 % (median 9 m) — the rest are on minor roads the
-segment layer does not carry, which is a limit of the MEASURE, not of the point.
+WHY: `railway_crossing` in `vietnam_signs.json` came from the VietMap E-DOG ZONE
+dump, whose point is a polygon vertex — measured 2026-09-24, a median 70-80 m off
+the carriageway, and for only ~39 % of the rows is there even a qualifying road to
+snap them onto. Overpass has the real features as POINTS on the road: of 8,703
+`railway=level_crossing` nodes 41 % are within 20 m of a road in the segment
+layer (median 9 m) — the rest are on minor roads the segment layer does not
+carry, which is a limit of the MEASURE, not of the point.
+
+TOLL BOOTHS USED TO BE MERGED HERE TOO, AND THEY ARE NOT COMING BACK. The
+`barrier=toll_booth` import was removed on 2026-10-03 after measuring the live
+elements: 0 of 1548 carried `toll=yes` or any highway tag — the tags were
+`fee`/`charge`/`building`/`tourism`, i.e. park and attraction ENTRANCE fee
+booths, spread across Cambodia/Laos/Thailand/China because the bbox spills over
+the border. The real Vietnamese stations come from E-DOG and were never this
+tool's to fix. See the QUERY comment below for the full numbers.
 
 WHAT IT DOES — one record per feature, and nothing is thrown away silently:
 
@@ -63,10 +70,24 @@ SIGNS = ROOT / "assets/offline_map/vietnam_signs.json"
 DEFAULT_POINTS = Path("/tmp/vn_toll_crossing.json")
 MIRROR = "https://overpass.kumi.systems/api/interpreter"
 BBOX = "8.2,102.1,23.4,109.5"
+# ⭐ TOLL BOOTHS ARE GONE FROM THIS QUERY (2026-10-03). They were imported here
+# on 2026-09-24 and are out again, because the Overpass tag does not mean a road
+# toll station in this part of the world. Measured against the live elements:
+#   * 0 of 1548 `barrier=toll_booth` elements in this bbox carry `toll=yes` or
+#     ANY highway tag. The tags are `fee` (70), `charge` (46), `building` (223),
+#     `tourism` — PARK / ATTRACTION ENTRANCE fee booths;
+#   * 258 of the rows it added were `barrier=toll_booth` with no other tag at
+#     all, and 141 of those had no road within 150 m — a toll booth with no road;
+#   * the bbox spills into Cambodia / Laos / Thailand / China, and the country
+#     gate (km-level polygon error) let some through — `charge=3000 riels`,
+#     `20000 LAK`, "Bokor Road Entrance";
+#   * the REAL Vietnamese stations (`Trạm Thu Phí Cai Lậy`, `Trạm phu phí T3 -
+#     QL.51`) come from VietMap E-DOG and are unaffected by this tool.
+# Removed with `--write` on 2026-10-03 (976 rows, asset 59,681 → 58,705). Do NOT
+# re-add the toll_booth clauses without tag evidence (`name`/`fee`/`charge`)
+# AND a road within ~25 m — see navbridge-sign-data memory.
 QUERY = f"""[out:json][timeout:300];
 (
-  node["barrier"="toll_booth"]({BBOX});
-  way["barrier"="toll_booth"]({BBOX});
   node["railway"="level_crossing"]({BBOX});
 );
 out center;"""
@@ -74,8 +95,7 @@ out center;"""
 # kind -> the Vietnamese label the app shows and speaks. These are the labels the
 # dataset already uses (`tool/merge_edog_vietmap.py` maps E-DOG 6/8 to them), so a
 # record's name does not betray which source produced it.
-NAMES = {"toll_booth": "Trạm thu phí",
-         "railway_crossing": "Đường ngang giao với đường sắt"}
+NAMES = {"railway_crossing": "Đường ngang giao với đường sắt"}
 
 CELL = 0.001  # ~111 m — one cell + its neighbours safely covers DUP_M
 
@@ -96,9 +116,7 @@ def osm_points(path: Path) -> list[tuple[str, float, float]]:
     out: list[tuple[str, float, float]] = []
     for e in doc.get("elements", []):
         t = e.get("tags", {})
-        if t.get("barrier") == "toll_booth":
-            kind = "toll_booth"
-        elif t.get("railway") == "level_crossing":
+        if t.get("railway") == "level_crossing":
             kind = "railway_crossing"
         else:
             continue

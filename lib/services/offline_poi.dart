@@ -9,7 +9,6 @@ library;
 
 import 'dart:convert';
 
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 
 import 'offline_loader.dart';
@@ -106,10 +105,14 @@ final OfflineListLoader<OfflinePoiCategory> _categories =
 /// Load the bundled POI index once (idempotent, returns the cached result).
 Future<List<OfflinePoiCategory>> loadOfflinePois() => _categories.load();
 
+/// Drop the cached POI index so the next load re-reads the file — called after
+/// an auto-update replaced `vietnam_pois.json`.
+void reloadOfflinePois() => _categories.reload();
+
 Future<List<OfflinePoiCategory>> _fetchCategories() async {
-  final raw = await rootBundle.loadString(
-    'assets/offline_map/vietnam_pois.json',
-  );
+  // readOfflineText prefers a downloaded copy over the bundled asset, so the
+  // POI index can be refreshed over the air like the signs and cameras.
+  final raw = await readOfflineText('vietnam_pois.json');
   final data = jsonDecode(raw) as Map<String, dynamic>;
   return [
     for (final e in data.entries)

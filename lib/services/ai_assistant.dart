@@ -1225,6 +1225,12 @@ class AiAssistant {
   @visibleForTesting
   bool shouldWebSearchForTest(String q) => _shouldWebSearch(q);
 
+  @visibleForTesting
+  List<Map<String, dynamic>> toGeminiContentsForTest(
+    List<Map<String, dynamic>> messages,
+  ) =>
+      _toGeminiContents(messages);
+
   /// One DeepSeek chat round. Streams text via [onToken] and returns whatever
   /// text it produced plus any tool (function) calls it requested. The caller
   /// executes the tools and re-calls with the results for the final answer.
@@ -1390,14 +1396,30 @@ class AiAssistant {
             'functionCall': {'name': fnName, 'args': fnArgs},
           });
         }
-        contents.add({'role': 'model', 'parts': parts});
+        if (parts.isEmpty) parts.add({'text': ' '});
+        // Gemini: first turn must be user; cannot have model as first message
+        if (contents.isEmpty) continue;
+        if (contents.last['role'] == 'model') {
+          (contents.last['parts'] as List).addAll(parts);
+        } else {
+          contents.add({'role': 'model', 'parts': parts});
+        }
         continue;
       }
-      contents.add({
-        'role': role == 'assistant' ? 'model' : (role == 'model' ? 'model' : 'user'),
-        'parts': [
-          {'text': (m['content'] ?? '') as String},
-        ],
+      final text = (m['content'] ?? '') as String;
+      if (text.trim().isEmpty) continue;
+      final parts = [{'text': text}];
+      if (contents.isNotEmpty && contents.last['role'] == 'user') {
+        (contents.last['parts'] as List).addAll(parts);
+      } else {
+        contents.add({'role': 'user', 'parts': parts});
+      }
+    }
+    // Safety check: Gemini requires at least one turn from the user
+    if (contents.isEmpty || contents.first['role'] != 'user') {
+      contents.insert(0, {
+        'role': 'user',
+        'parts': [{'text': 'Xin chào'}],
       });
     }
     return contents;
