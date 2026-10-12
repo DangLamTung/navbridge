@@ -10,17 +10,24 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:navbridge/services/offline_links.dart';
 import 'package:navbridge/services/offline_router.dart'
-    show graphDefaultUrl, resolveGraphUrl;
+    show graphDefaultUrl, graphGhUrl, resolveGraphUrl;
 
 void main() {
   group('resolveGraphUrl', () {
-    test('falls back to the built-in default when nothing is configured', () {
+    test('falls back to the hosted prebuilt archive when nothing is configured', () {
       // No GRAPH_URL in a plain `flutter test`, so all three agree.
-      expect(resolveGraphUrl(), graphDefaultUrl);
-      expect(resolveGraphUrl(''), graphDefaultUrl);
-      expect(resolveGraphUrl(null), graphDefaultUrl);
-      expect(graphDefaultUrl, startsWith('https://'));
-      expect(graphDefaultUrl, contains('vietnam'));
+      expect(resolveGraphUrl(), graphGhUrl);
+      expect(resolveGraphUrl(''), graphGhUrl);
+      expect(resolveGraphUrl(null), graphGhUrl);
+      expect(graphGhUrl, startsWith('https://'));
+      expect(graphGhUrl, contains('vietnam'));
+      // The default MUST be an extract-only archive. The old `.osm.pbf` default
+      // forced an on-phone graph build that Android could kill halfway, and the
+      // corpse it left behind shadowed the good archive forever — which is what
+      // made offline routing look permanently broken.
+      expect(graphGhUrl, endsWith('.ghz'));
+      // The Geofabrik extract is still shipped as the alternative source.
+      expect(graphDefaultUrl, endsWith('.osm.pbf'));
     });
 
     test('a custom URL wins verbatim', () {
@@ -36,7 +43,7 @@ void main() {
       expect(links.first.title, contains('GraphHopper'));
       // The GraphHopper link always resolves to a real, openable URL — this is
       // the link the request asked to be in the app.
-      expect(links.first.url, graphDefaultUrl);
+      expect(links.first.url, graphGhUrl);
       expect(links.first.openable, isTrue);
       // Every kind of offline source is represented exactly once.
       for (final needle in [

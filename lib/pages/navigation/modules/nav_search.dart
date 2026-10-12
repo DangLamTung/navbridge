@@ -761,28 +761,44 @@ extension _NavSearch on _NavigationPageState {
       // of just failing (the user wants to choose if needed).
       debugPrint('PLAN: route failed: $e');
       if (!forceOffline) rethrow;
-      // The on-device graph serves car and motorbike (a bike is routed on the
-      // car graph), so a failure for either means the graph is missing or the
-      // destination is outside the downloaded region — not "unsupported mode".
-      final offlineCapable = _routeProfile == RouteProfile.car ||
+      // Report WHY offline routing failed. The on-device graph serves car and
+      // motorbike (a bike rides the car graph), so for those two a failure is
+      // never "unsupported mode" — and it is NOT necessarily "no data for
+      // this region" either. Ask the actual state instead of guessing.
+      final offlineCapable =
+          _routeProfile == RouteProfile.car ||
           _routeProfile == RouteProfile.motorbike;
-      final msg = offlineCapable
-          ? 'Chưa có bộ dữ liệu chỉ đường ngoại tuyến cho tuyến này.'
-          : 'Bộ dữ liệu ngoại tuyến chỉ hỗ trợ ô tô và xe máy — cần trực tuyến cho ${_routeProfile.label.toLowerCase()}. ';
+      final (String msg, String hint) = !offlineCapable
+          ? (
+              'Bộ dữ liệu ngoại tuyến chỉ hỗ trợ ô tô và xe máy — cần trực tuyến cho ${_routeProfile.label.toLowerCase()}.',
+              'Bật trực tuyến để tiếp tục.',
+            )
+          : switch (await offlineGraphState()) {
+              GraphState.absent => (
+                'Chưa tải bộ dữ liệu chỉ đường ngoại tuyến.',
+                'Mở Cài đặt ngoại tuyến (⚙) và tải bộ dữ liệu chỉ đường.',
+              ),
+              GraphState.corrupt => (
+                'Bộ dữ liệu chỉ đường ngoại tuyến bị hỏng.',
+                'Vào Cài đặt ngoại tuyến (⚙) và bấm "Xoá & nạp lại".',
+              ),
+              GraphState.notLoaded => (
+                'Chưa nạp được bộ dữ liệu chỉ đường ngoại tuyến.',
+                'Vào Cài đặt ngoại tuyến (⚙) và bấm "Nạp lại".',
+              ),
+              GraphState.ready => (
+                'Không tìm được tuyến ngoại tuyến cho điểm đến này.',
+                'Điểm đến có thể nằm ngoài vùng dữ liệu đã tải — hãy bật trực tuyến.',
+              ),
+            };
       final goOnline = await _confirmGoOnline(msg);
       if (!mounted || seq != _planSeq) return;
       if (!goOnline) {
-        // Clear feedback instead of silently doing nothing: offline routing
-        // only covers the downloaded region (the HCMC graph) — a searched
-        // place outside it can't be routed without the network.
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Chưa có dữ liệu chỉ đường ngoại tuyến cho khu vực này.\n'
-              'Hãy tải bộ dữ liệu cho khu vực (⚙) hoặc bật trực tuyến.',
-            ),
-          ),
-        );
+        // Clear feedback instead of silently doing nothing — and name the
+        // actual fix rather than always blaming the region.
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$msg\n$hint')));
         return;
       }
       route = await fetchOsrmRoute(

@@ -4,6 +4,54 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
+## 1.1.5 — 2026-10-12 (build 4012)
+
+**Offline routing works on a fresh install.** A route planned in the first
+second after launch could see the on-device graph as "not loaded" and fail with
+*"chưa tải bộ dữ liệu chỉ đường"* — for a graph that was installed and finished
+loading a moment later. The boot preload runs in the background and had not
+reached `loadBestGraph()` yet; the provider's readiness gate did not cover it.
+Measured on a TB331FC: the route failed at t+0.17 s, and the graph reported
+loaded at t+1.35 s. The provider now waits for the load. Same device afterwards:
+a 4.66 km / 7-step offline route in 2.5 s, with no network.
+
+**The graph downloads ready-made.** The default was a 329 MB Geofabrik
+`.osm.pbf` that had to be imported into a graph *on the phone* — minutes of CPU
+that Android can kill halfway, and the corpse it leaves behind shadows the good
+archive. It is now a prebuilt `.ghz` (on the `routing-latest` release) that
+only has to be extracted: ~4 s measured, 258 MB at ~2.5 MB/s.
+
+**Offline routing says why it failed.** One string covered every cause and it
+named "this region" — the one thing the code has never measured, since no
+coverage test exists. It now separates *not downloaded* / *not loaded* /
+*corrupt* / *loaded but no path*, each with the action that fixes it.
+
+**An interrupted download resumes.** The partial file was deleted at the start
+of every attempt, so any interruption cost the entire transfer. It is kept now
+and continued with a `Range` request (`206`), and discarded only when provably
+unusable.
+
+**Less clutter on the navigation screen.** The compass is gone from the nav
+map; the fuel (⛽) and car-icon buttons are gone from the controls column; and
+the POI category chips are no longer drawn over the ETA panel while navigating
+(search and voice results still render). `Nhà riêng` / `Cơ quan` now flow in
+the top column instead of a hardcoded offset, so a collapsed directions bar can
+no longer end up beneath them.
+
+**The 1.1.4 one-way signs are withdrawn.** Those 17,805 rows were wrong — 82.5%
+of the signal sat on two-way arterials, because WME stores a divided road as two
+one-way carriageways, so QL1, Trường Chinh and Cộng Hòa all qualified. They were
+removed from the pack, and are not coming back until the predicate is rewritten
+against local carriageway proximity.
+
+### Internal
+
+- Device test hooks `TEST_ROUTE`, `TEST_GRAPH_DOWNLOAD` and `FORCE_OFFLINE`
+  (build-time defines, inert otherwise). The camera-bearing diagnostic is now
+  opt-in via `DEBUG_BEARING` rather than always-on.
+- The one-way generator is deliberately **not** in this release: it still holds
+  the rejected whole-street predicate.
+
 ## 1.1.4 — 2026-10-11 (build 4011)
 
 **A one-way street with one lane is 50, not 60.** Thông tư 38/2024 names

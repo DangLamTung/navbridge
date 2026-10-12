@@ -1924,7 +1924,7 @@ class _OfflineScreenState extends State<OfflineScreen> {
                     style: const TextStyle(fontSize: 12),
                     decoration: InputDecoration(
                       isDense: true,
-                      hintText: graphDefaultUrl,
+                      hintText: graphGhUrl,
                       hintStyle: const TextStyle(fontSize: 11),
                       border: const OutlineInputBorder(),
                       suffixIcon: IconButton(

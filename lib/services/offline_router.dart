@@ -612,7 +612,9 @@ Future<String?> adoptExternalGraphSource(String dir) async {
             target.existsSync() && target.lengthSync() == f.lengthSync();
         final usable = !isArchive || zipComplete(target);
         if (!copied || !usable) {
-          debugPrint('ROUTER: adoption of $p did not verify; keeping the source');
+          debugPrint(
+            'ROUTER: adoption of $p did not verify; keeping the source',
+          );
           return f.path;
         }
         try {
@@ -698,7 +700,9 @@ Future<String> exportGraphArchive([String? srcPath]) async {
     throw StateError('Chưa có tệp .ghz để xuất.');
   }
   try {
-    final where = await _channel.invokeMethod<String>('exportArchive', {'src': src});
+    final where = await _channel.invokeMethod<String>('exportArchive', {
+      'src': src,
+    });
     return where ?? '';
   } on PlatformException catch (e) {
     if (e.code == 'need_permission') throw GraphExportNeedsPermission();
@@ -719,8 +723,9 @@ Future<bool> loadBestGraph({bool heal = true}) {
     debugPrint('ROUTER: graph load already in flight — joining it');
     return running;
   }
-  final attempt = _loadBestGraph(heal: heal)
-      .whenComplete(() => _bestLoadInFlight = null);
+  final attempt = _loadBestGraph(
+    heal: heal,
+  ).whenComplete(() => _bestLoadInFlight = null);
   _bestLoadInFlight = attempt;
   return attempt;
 }
@@ -773,14 +778,64 @@ Future<bool> routingGraphPresent() async {
   return false;
 }
 
-/// Built-in source for the offline routing graph: the Geofabrik Việt Nam OSM
-/// extract. It is an `.osm.pbf`, converted to a GraphHopper graph on the phone
-/// by [downloadGraph]; no separately hosted `.ghz` is required.
+/// Why the on-device routing graph could not answer — the REAL reason, for the
+/// UI to report.
 ///
-/// 329 MB, verified live (application/octet-stream, `OSMHeader` magic). It is
-/// the whole country in one file, which on a low-end phone means a 3-minute
-/// import that Android can kill halfway — see the region presets for the faster
-/// route, and [graphFolderCorrupt] for what a killed import leaves behind.
+/// The navigation screen used to print ONE message for every offline-routing
+/// failure ("Chưa có dữ liệu chỉ đường ngoại tuyến cho khu vực này"), which
+/// named the region as the cause. Nothing ever measured that: there is no
+/// coverage/bbox test for the graph, so a missing graph, a graph that never
+/// loaded, and a genuinely out-of-extract destination were all reported as
+/// "no data for this region" — and the driver could not tell which to fix.
+enum GraphState {
+  /// Installed AND loaded, so routing was attempted for real: a failure here
+  /// is a genuine "no path" (off-network, or outside the downloaded extract).
+  ready,
+
+  /// No graph file or folder on the device at all.
+  absent,
+
+  /// Present but unloadable (half-imported / markerless folder) — the
+  /// `graph_corrupt` case, which needs the delete-and-reload repair.
+  corrupt,
+
+  /// Present and not known to be corrupt, but the native engine never loaded
+  /// it — a reload may still fix it.
+  notLoaded,
+}
+
+/// Classify the on-device graph for user-facing messages.
+///
+/// Cheap: in-memory flags plus one directory listing. Order matters — a
+/// corrupt folder IS present, so [GraphState.corrupt] must be tested before
+/// [GraphState.notLoaded].
+Future<GraphState> offlineGraphState() async {
+  if (OfflineRouter.instance.isLoaded) return GraphState.ready;
+  if (OfflineRouter.instance.graphCorrupt) return GraphState.corrupt;
+  if (!await routingGraphPresent()) return GraphState.absent;
+  return GraphState.notLoaded;
+}
+
+/// The graph the app downloads by DEFAULT: a prebuilt GraphHopper archive
+/// (`.ghz`) hosted on the project's `routing-latest` release.
+///
+/// 258.7 MB, and it only has to be EXTRACTED — measured at ~4 s on a
+/// Snapdragon 685 tablet, which is why this is the default instead of
+/// [graphDefaultUrl]. A `.ghz` also avoids the failure that made offline
+/// routing look permanently broken: an on-phone `.pbf` import is minutes of
+/// CPU, Android can kill it halfway, and the corpse it leaves behind (an
+/// unloadable graph folder) shadows the good archive forever — see
+/// [graphFolderCorrupt] and [GraphState.corrupt].
+const String graphGhUrl =
+    'https://github.com/DangLamTung/navbridge/releases/download/routing-latest/vietnam_graph.ghz';
+
+/// Alternative source: the Geofabrik Việt Nam OSM extract (`.osm.pbf`).
+///
+/// Kept for when the hosted archive is unavailable. 329 MB, converted to a
+/// GraphHopper graph ON THE PHONE by [downloadGraph]; on a low-end phone that is
+/// a multi-minute import that Android can kill halfway — see the region presets
+/// for the faster route, and [graphFolderCorrupt] for what a killed import
+/// leaves behind.
 const String graphDefaultUrl =
     'https://download.geofabrik.de/asia/vietnam-latest.osm.pbf';
 
@@ -820,20 +875,22 @@ const List<GraphRegionPreset> kGraphRegionPresets = [
   GraphRegionPreset(
     id: 'vietnam',
     name: 'Toàn Việt Nam',
-    description: '~314 MB PBF (Geofabrik), toàn quốc — nạp lâu trên máy yếu',
-    url: 'https://download.geofabrik.de/asia/vietnam-latest.osm.pbf',
+    description:
+        '~247 MB, tải sẵn (.ghz) — giải nén ~4 giây, không xử lý trên máy',
+    url: graphGhUrl,
   ),
 ];
 
 /// The URL [downloadGraph] actually fetches: [customUrl] when given, else the
 /// build-time `GRAPH_URL` (with `/graph.ghz` appended unless it already names
-/// an archive), else the built-in [graphDefaultUrl].
+/// an archive), else the built-in [graphGhUrl] — a ready-made `.ghz` that only
+/// needs extracting, NOT an on-phone graph build.
 ///
 /// Shared with the in-app link list (`offline_links.dart`) so the Offline
 /// screen can show the same URL the download would use.
 String resolveGraphUrl([String? customUrl]) {
   if (customUrl != null && customUrl.isNotEmpty) return customUrl;
-  if (graphDownloadBaseUrl.isEmpty) return graphDefaultUrl;
+  if (graphDownloadBaseUrl.isEmpty) return graphGhUrl;
   if (graphDownloadBaseUrl.endsWith('.ghz') ||
       graphDownloadBaseUrl.endsWith('.pbf')) {
     return graphDownloadBaseUrl;
@@ -852,8 +909,8 @@ enum GraphPhase { downloading, processing }
 /// Install the offline routing graph: **download it, then convert it on the
 /// phone**.
 ///
-/// ONE region on purpose — Việt Nam. The default source is the Geofabrik Việt Nam
-/// extract ([graphDefaultUrl]), i.e. the whole country in one `.osm.pbf`; a
+/// ONE region on purpose — Việt Nam. The default source is the prebuilt
+/// [graphGhUrl] archive (a `.ghz`, extract-only); a
 /// per-province or per-tile scheme would need a different converter and a
 /// different storage layout, and the phone has to hold the extract AND the built
 /// graph at once. `--dart-define=GRAPH_URL` (or a URL typed on the Offline
@@ -922,13 +979,25 @@ Future<bool> downloadToFile(
   final part = File('$target.part');
   final client = http.Client();
   try {
+    // RESUME: a previous attempt's partial file is KEPT (see `finally`) so a
+    // stalled 258 MB transfer does not start over. Measured 2026-10-12: the
+    // hosted graph reached 20% (51.7 MB) and then stopped with no error — and
+    // the old code discarded the partial, so every stall cost the whole
+    // transfer and a flaky link could never finish.
+    final resumeFrom = part.existsSync() ? part.lengthSync() : 0;
     final req = http.Request('GET', Uri.parse(url));
     req.headers['User-Agent'] =
         'navbridge/1.0 (BLE portable navigation; graph)';
+    if (resumeFrom > 0) {
+      debugPrint('DL: resuming at $resumeFrom bytes for $url');
+      req.headers['Range'] = 'bytes=$resumeFrom-';
+    }
     final streamed = await client
         .send(req)
         .timeout(const Duration(seconds: 30));
-    if (streamed.statusCode != 200) {
+    // 206 = the server honoured the Range; 200 = it ignored it (full restart).
+    final resuming = streamed.statusCode == 206 && resumeFrom > 0;
+    if (streamed.statusCode != 200 && !resuming) {
       debugPrint('DL: HTTP ${streamed.statusCode} for $url');
       return false;
     }
@@ -938,14 +1007,28 @@ Future<bool> downloadToFile(
     // the server says HTML, the link is gone — say so.
     final ctype = streamed.headers['content-type']?.toLowerCase() ?? '';
     if (ctype.contains('text/html')) {
-      debugPrint('DL: $url returned HTML, not map data (link moved or expired)');
+      debugPrint(
+        'DL: $url returned HTML, not map data (link moved or expired)',
+      );
+      _deleteQuietly(part.path); // never resume onto an error page
       return false;
     }
-    final total = streamed.contentLength ?? 0;
+    // Total size: a 200 carries the whole length; a 206 carries the range's
+    // TOTAL in Content-Range ("bytes a-b/total"), not just this chunk's size.
+    var total = streamed.contentLength ?? 0;
+    if (resuming) {
+      final cr = streamed.headers['content-range'] ?? '';
+      final slash = cr.lastIndexOf('/');
+      final t = slash >= 0 ? int.tryParse(cr.substring(slash + 1)) : null;
+      total = t ?? (resumeFrom + (streamed.contentLength ?? 0));
+    }
     part.parent.createSync(recursive: true);
-    if (part.existsSync()) part.deleteSync();
-    final sink = part.openWrite();
-    var done = 0;
+    // `FileMode.append` continues the partial; `openWrite()` (FileMode.write)
+    // truncates, which is what a clean restart needs.
+    final sink = resuming
+        ? part.openWrite(mode: FileMode.append)
+        : part.openWrite();
+    var done = resuming ? resumeFrom : 0;
     var complete = false;
     try {
       // `.timeout` on the STREAM, not on the send: it fires per gap between
@@ -967,6 +1050,10 @@ Future<bool> downloadToFile(
       // A proxy or a dropped connection that closes early looks exactly like a
       // clean end of stream, so compare against the declared length.
       debugPrint('DL: short read $done/$total for $url');
+      // While RESUMING, a mismatch means the partial is unusable (the remote
+      // archive changed, or the splice is bad). Drop it so the next attempt
+      // starts clean instead of failing forever on a poisoned `.part`.
+      if (resuming) _deleteQuietly(part.path);
       return false;
     }
     // A 200 carrying an HTML error page or a captive-portal login is not an
@@ -977,6 +1064,7 @@ Future<bool> downloadToFile(
     raf.closeSync();
     if (magic.isNotEmpty && magic[0] == 0x3C) {
       debugPrint('DL: got a text page, not a graph archive: $url');
+      _deleteQuietly(part.path); // never resume onto an error page
       return false;
     }
     final out = File(target);
@@ -987,9 +1075,10 @@ Future<bool> downloadToFile(
     debugPrint('DL: failed $url: $e');
     return false;
   } finally {
-    // After a successful rename `part` is already gone, so this only ever removes
-    // a FAILED transfer's leftovers.
-    _deleteQuietly(part.path);
+    // Deliberately do NOT delete `part` here: an interrupted transfer keeps the
+    // bytes it did receive, and the next attempt resumes from them via the
+    // Range request above. The provably-garbage cases (HTML page, text magic, a
+    // poisoned resume) delete it explicitly instead.
     client.close();
   }
 }
@@ -1067,6 +1156,77 @@ List<OsrmRoute> rankByPreference(List<OsrmRoute> routes, RoutePreference pref) {
       break;
   }
   return ranked;
+}
+
+/// TEMPORARY DIAGNOSTIC — `--dart-define=TEST_ROUTE="lat,lng;lat,lng"` plans
+/// ONE route through the REAL provider chain (never a synthetic track) and logs
+/// the outcome. It exists because the replay rig builds its route with
+/// `routeFromTrack()` and therefore never exercises [fetchAnyRoutes] — so
+/// without this there is no way to verify the offline path on a device without
+/// driving the UI. Remove it once offline routing is confirmed.
+Future<void> debugTestRoute(String spec) async {
+  final parts = spec.split(';');
+  if (parts.length != 2) {
+    debugPrint('TESTROUTE: bad spec (need "lat,lng;lat,lng"): $spec');
+    return;
+  }
+  final pts = <LatLng>[];
+  for (final p in parts) {
+    final xy = p.split(',');
+    if (xy.length != 2) {
+      debugPrint('TESTROUTE: bad point "$p"');
+      return;
+    }
+    pts.add(LatLng(double.parse(xy[0].trim()), double.parse(xy[1].trim())));
+  }
+  final sw = Stopwatch()..start();
+  try {
+    final r = await fetchAnyRoute(pts, profile: RouteProfile.motorbike);
+    sw.stop();
+    debugPrint(
+      'TESTROUTE: OK dist=${r.distance.toStringAsFixed(1)}m '
+      'dur=${r.duration.toStringAsFixed(0)}s steps=${r.steps.length} '
+      'in ${sw.elapsedMilliseconds}ms',
+    );
+  } catch (e) {
+    sw.stop();
+    debugPrint('TESTROUTE: FAILED after ${sw.elapsedMilliseconds}ms — $e');
+  }
+}
+
+/// TEMPORARY DIAGNOSTIC — the DOWNLOAD counterpart of [debugTestRoute].
+///
+/// Runs the real [downloadGraph] path (hosted `.ghz` -> HTTP -> extract ->
+/// native load) and logs progress, so the flow a user actually taps can be
+/// verified on a device. The existing evidence for it was indirect: the URL was
+/// byte-checked with curl and an identical archive was side-loaded with
+/// `adb push` — neither of which exercises this code.
+Future<void> debugTestGraphDownload() async {
+  final sw = Stopwatch()..start();
+  final url = resolveGraphUrl();
+  debugPrint('TESTDL: starting $url');
+  var lastPct = -100;
+  try {
+    final ok = await downloadGraph(
+      onProgress: (done, total) {
+        final pct = total > 0 ? (done * 100 ~/ total) : -1;
+        if (pct >= lastPct + 10) {
+          lastPct = pct;
+          debugPrint('TESTDL: $pct% ($done/$total)');
+        }
+      },
+      onPhase: (p) => debugPrint('TESTDL: phase=$p'),
+    );
+    sw.stop();
+    debugPrint(
+      'TESTDL: finished ok=$ok loaded=${OfflineRouter.instance.isLoaded} '
+      'corrupt=${OfflineRouter.instance.graphCorrupt} '
+      'in ${sw.elapsedMilliseconds}ms',
+    );
+  } catch (e) {
+    sw.stop();
+    debugPrint('TESTDL: FAILED after ${sw.elapsedMilliseconds}ms — $e');
+  }
 }
 
 /// Throws when no source is available (fully offline without a graph).
@@ -1220,6 +1380,21 @@ Future<List<OsrmRoute>> _routeVia(
       // Wait for the on-device graph if it's still loading at startup (it can
       // take ~60 s on low-end phones), so offline routing doesn't fail early.
       await OfflineRouter.instance.ready;
+      if (!OfflineRouter.instance.isLoaded) {
+        // `ready` does NOT cover the BOOT preload: that runs in the background
+        // and only reaches `loadBestGraph()` about a second after launch, so a
+        // route planned inside that window saw `isLoaded == false`, gave up,
+        // and reported "chưa tải bộ dữ liệu chỉ đường" for a graph that WAS
+        // installed and finished loading a moment later. Measured 2026-10-12:
+        // route failed at t+0.170 s, graph reported loaded at t+1.348 s.
+        // `loadBestGraph()` is serialised (concurrent callers join the
+        // in-flight future), so this waits for the boot preload rather than
+        // starting a second one.
+        await loadBestGraph().timeout(
+          const Duration(seconds: 20),
+          onTimeout: () => false,
+        );
+      }
       if (!OfflineRouter.instance.isLoaded) return const [];
       return OfflineRouter.instance.route(
         points,

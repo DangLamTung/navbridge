@@ -2,6 +2,12 @@ part of '../navigation_page.dart';
 
 extension _NavPoi on _NavigationPageState {
   Widget _poiArea() {
+    // While NAVIGATING the category chip bar (Xăng / Sạc điện / Ăn uống / …)
+    // sat directly on top of the ETA panel — pure clutter, and it is
+    // browse-time discovery: the driver has the search box and voice instead.
+    // POI RESULTS still render here in both modes, so a text/voice search
+    // ("trạm xăng") keeps working from the nav screen.
+    if (_pois.isEmpty && _navigating) return const SizedBox.shrink();
     return _pois.isEmpty ? _poiTypeBar() : _poiResults();
   }
 
@@ -22,7 +28,12 @@ extension _NavPoi on _NavigationPageState {
                 borderRadius: BorderRadius.circular(20),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(20),
-                  onTap: () => _searchPoi(t),
+                  // Fuel keeps its dedicated corridor search (offline bundle +
+                  // Overpass + Vietmap + Google, ranked along the route ahead)
+                  // now that the ⛽ button left the nav controls column. The
+                  // text/voice path still goes through [_searchPoi].
+                  onTap: () =>
+                      t == PoiType.fuel ? _findNearestGas() : _searchPoi(t),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,

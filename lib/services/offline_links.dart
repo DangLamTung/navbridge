@@ -52,12 +52,13 @@ class OfflineLink {
 /// Every offline download link, in the order the Offline screen shows them.
 List<OfflineLink> offlineDownloadLinks() => [
   // 1. On-device turn-by-turn routing (GraphHopper). Always resolvable: the
-  //    built-in Geofabrik PBF is converted to a graph on the phone.
+  //    prebuilt `.ghz` archive is downloaded and EXTRACTED on the phone — no
+  //    on-phone OSM import.
   OfflineLink(
     title: 'Bộ dữ liệu chỉ đường (GraphHopper)',
     description: graphDownloadBaseUrl.isEmpty
-        ? 'Liên kết mặc định: tải .osm.pbf của Việt Nam rồi chuyển thành graph '
-              'trên máy — cần cho chỉ đường ngoại tuyến.'
+        ? 'Liên kết mặc định: tải sẵn (.ghz) ~247 MB, máy chỉ cần giải nén '
+              '(~4 giây) — cần cho chỉ đường ngoại tuyến.'
         : 'GRAPH_URL đã đặt khi build; tệp phải là .ghz hoặc .pbf.',
     url: resolveGraphUrl(),
   ),
@@ -85,7 +86,8 @@ List<OfflineLink> offlineDownloadLinks() => [
   // 4. Offline 3D terrain (Terrarium DEM) — free, no key, downloaded per region.
   OfflineLink(
     title: 'Địa hình 3D (Terrarium DEM)',
-    description: 'Nguồn độ cao miễn phí, không cần khoá. Tải theo vùng trong '
+    description:
+        'Nguồn độ cao miễn phí, không cần khoá. Tải theo vùng trong '
         'màn hình này ({z}/{x}/{y} là ô bản đồ).',
     url: kTerrainTileUrl,
     template: true,
@@ -93,7 +95,8 @@ List<OfflineLink> offlineDownloadLinks() => [
   // 5. Raster basemap tiles — cached automatically while browsing online.
   OfflineLink(
     title: 'Nền bản đồ (raster tiles)',
-    description: 'Ô bản đồ được lưu tự động khi bạn xem trực tuyến (nguồn OSM); '
+    description:
+        'Ô bản đồ được lưu tự động khi bạn xem trực tuyến (nguồn OSM); '
         'vùng đã tải bên dưới cũng ghi vào cùng bộ nhớ đệm.',
     url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     template: true,

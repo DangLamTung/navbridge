@@ -211,6 +211,12 @@ extension _NavBuild on _NavigationPageState {
                   // the follow camera looks past the car so the arrow rides
                   // lower on screen and more road stays visible ahead.
                   carAnchor: carScreenAnchor,
+                  // No compass on the nav map. In heading-up mode the camera
+                  // bearing is essentially never 0, so MapLibre kept the
+                  // compass pinned to the top-right corner for the whole drive
+                  // — clutter next to the right-hand controls, offering a
+                  // re-orient action nobody asked for. Same call as the PiP map.
+                  showCompass: false,
                 )
               : _buildMap(route, current),
           Positioned.fill(
@@ -278,6 +284,32 @@ extension _NavBuild on _NavigationPageState {
                                           ),
                                         )
                                       : const SizedBox.shrink()),
+                          ),
+                        // One-tap quick places (🏠 Nhà riêng / 💼 Cơ quan) +
+                        // the offline POI category chips. These used to be a
+                        // separate overlay at a HARDCODED `top: _overlayTop`,
+                        // which is why the collapsed directions bar ended up
+                        // under them — the offset guessed the bar's height. In
+                        // this Column they flow below whatever the bar actually
+                        // renders, so no bar shape (collapsed, expanded, long
+                        // destination, large font scale) can be covered.
+                        if (!_navigating &&
+                            _searchCtrl.text.isEmpty &&
+                            _suggestions.isEmpty &&
+                            _stops.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 6, 66, 0),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _quickPlacesRow(),
+                                if (_offline) ...[
+                                  const SizedBox(height: 6),
+                                  _offlinePoiBar(),
+                                ],
+                              ],
+                            ),
                           ),
                         if (_navigating)
                           Padding(
@@ -500,7 +532,8 @@ extension _NavBuild on _NavigationPageState {
                                               Icons.layers,
                                               'Bản đồ Vector + nền CARTO',
                                               _tileSource == 'vector',
-                                            ),                                            const PopupMenuDivider(height: 12),
+                                            ),
+                                            const PopupMenuDivider(height: 12),
                                             _layerHeader('Lớp phủ & Hiệu ứng'),
                                             _layerItem(
                                               '3d',
@@ -577,12 +610,6 @@ extension _NavBuild on _NavigationPageState {
                                           onTap: _toggleStatusBar,
                                         ),
                                         const SizedBox(height: 8),
-                                        RoundActionButton(
-                                          icon: Icons.emoji_emotions_outlined,
-                                          color: const Color(0xFFF4B400),
-                                          onTap: _cycleCarIcon,
-                                        ),
-                                        const SizedBox(height: 8),
                                         // Picture-in-Picture (Part C): shrink the
                                         // nav into a floating window (Google-Maps
                                         // style). Only shown on capable devices.
@@ -605,12 +632,6 @@ extension _NavBuild on _NavigationPageState {
                                         ),
                                         const SizedBox(height: 8),
                                         _micButton(),
-                                        const SizedBox(height: 8),
-                                        RoundActionButton(
-                                          icon: Icons.local_gas_station,
-                                          color: const Color(0xFFF4B400),
-                                          onTap: _findNearestGas,
-                                        ),
                                         const SizedBox(height: 8),
                                         RoundActionButton(
                                           icon: Icons.directions_car,
@@ -813,31 +834,10 @@ extension _NavBuild on _NavigationPageState {
                         ],
                       ),
                     ),
-                  // One-tap quick places (🏠 Nhà riêng / 💼 Cơ quan) RIGHT
-                  // below the search bar, with the offline POI category chips
-                  // stacked under them — one column, so nothing overlaps.
-                  // Shown while browsing with an EMPTY search box. Chips are
-                  // draggable to reorder.
-                  if (!_navigating &&
-                      _searchCtrl.text.isEmpty &&
-                      _suggestions.isEmpty &&
-                      _stops.isEmpty)
-                    Positioned(
-                      left: 12,
-                      right: 66,
-                      top: _overlayTop,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _quickPlacesRow(),
-                          if (_offline) ...[
-                            const SizedBox(height: 6),
-                            _offlinePoiBar(),
-                          ],
-                        ],
-                      ),
-                    ),
+                  // (Quick places + offline POI chips moved INTO the top
+                  // Column — see the `_quickPlacesRow()` block above. They were
+                  // a hardcoded-offset overlay here, which put them on top of
+                  // the collapsed directions bar.)
                   // Weather-layer time scrubbers (browse): rain radar +
                   // weather satellite — drag to watch the storm / clouds move.
                   if (!_navigating)
@@ -1006,40 +1006,36 @@ extension _NavBuild on _NavigationPageState {
                 child: Material(
                   elevation: 6,
                   color: const Color(0xF2181A22),
-                borderRadius: BorderRadius.circular(20),
-                child: InkWell(
                   borderRadius: BorderRadius.circular(20),
-                  onTap: () => setNavState(() => _showSimConsole = true),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 8,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.bug_report,
-                          size: 15,
-                          color: Colors.white,
-                        ),
-                        SizedBox(width: 5),
-                        Text(
-                          'Mô phỏng',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: () => setNavState(() => _showSimConsole = true),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.bug_report, size: 15, color: Colors.white),
+                          SizedBox(width: 5),
+                          Text(
+                            'Mô phỏng',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
-        );
+      ),
+    );
   }
 
   /// The draggable auto-center ("my_location") button shown while navigating.
@@ -1051,6 +1047,11 @@ extension _NavBuild on _NavigationPageState {
     // Default: pinned to the LEFT edge, raised above the bottom action bar /
     // route card so it never overlaps them (it's draggable if the driver wants
     // it elsewhere).
+    //
+    // NOTE: this position is CORRECT as-is (user-confirmed 2026-10-12) — do not
+    // "fix" it for the open info bar. The overlap reported against the info bar
+    // is a DIFFERENT control and was never reproduced on screen (the tablet was
+    // locked at the time); see the session notes before touching this again.
     final pos = _centerBtnOffset ?? Offset(14, size.height - 330 - button);
     return Positioned(
       left: pos.dx,

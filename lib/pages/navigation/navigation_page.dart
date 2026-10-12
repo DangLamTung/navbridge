@@ -288,7 +288,9 @@ class _NavigationPageState extends State<NavigationPage>
   bool _headingUp = !const bool.fromEnvironment(
     'FORCE_NORTH',
   ); // rotate map so travel direction points up
-  String _carIcon = 'arrow';
+  /// Car-arrow sprite. No longer user-cyclable: the emoji-cycle button was
+  /// removed from the nav controls column as clutter, so this stays constant.
+  final String _carIcon = 'arrow';
   RouteProfile _routeProfile = RouteProfile.car; // road type for routing
   NavProgress? _progress;
   StreamSubscription<Position>? _gpsSub;
@@ -504,11 +506,13 @@ class _NavigationPageState extends State<NavigationPage>
           s.kind == RoadSignKind.populated ||
           s.kind == RoadSignKind.populatedEnd;
       final routeB = keptRoute.where(isBoundary);
-      debugPrint('SIM/NAVMAP: signs=${keptRoute.length} '
-          'boundary=${routeB.length} '
-          'shown=${routeB.map((s) => '${s.kind.name}@'
-              '${s.pos.latitude.toStringAsFixed(5)},'
-              '${s.pos.longitude.toStringAsFixed(5)}').join('|')}');
+      debugPrint(
+        'SIM/NAVMAP: signs=${keptRoute.length} '
+        'boundary=${routeB.length} '
+        'shown=${routeB.map((s) => '${s.kind.name}@'
+            '${s.pos.latitude.toStringAsFixed(5)},'
+            '${s.pos.longitude.toStringAsFixed(5)}').join('|')}',
+      );
     });
   }
 
@@ -582,13 +586,13 @@ class _NavigationPageState extends State<NavigationPage>
       // kinds (cấm rẽ / quay đầu / cấm vượt / khu dân cư / STOP). Sorted
       // NEAREST-FIRST like the camera list above, so the density cap keeps the
       // signs closest to the car rather than an arbitrary slice.
-      final kept = [
-        ...keepNearestSpeedSign(collapseRepeatedSpeedSigns(nearSigns)),
-      ]..sort(
-          (a, b) => d
-              .as(LengthUnit.Meter, pos, a.pos)
-              .compareTo(d.as(LengthUnit.Meter, pos, b.pos)),
-        );
+      final kept =
+          [...keepNearestSpeedSign(collapseRepeatedSpeedSigns(nearSigns))]
+            ..sort(
+              (a, b) => d
+                  .as(LengthUnit.Meter, pos, a.pos)
+                  .compareTo(d.as(LengthUnit.Meter, pos, b.pos)),
+            );
       _nearSigns = kept;
       // SHOW-vs-ANNOUNCE test. A boundary sign that does not survive the query
       // (6 km / 120 records) and this filter is never DRAWN, however loudly it
@@ -598,12 +602,14 @@ class _NavigationPageState extends State<NavigationPage>
           s.kind == RoadSignKind.populated ||
           s.kind == RoadSignKind.populatedEnd;
       final keptB = kept.where(boundary);
-      debugPrint('SIM/LAYER: signs query=${nearSigns.length} '
-          'boundary=${nearSigns.where(boundary).length} '
-          'kept=${kept.length} boundary=${keptB.length} '
-          'shown=${keptB.map((s) => '${s.kind.name}@'
-              '${s.pos.latitude.toStringAsFixed(5)},'
-              '${s.pos.longitude.toStringAsFixed(5)}').join('|')}');
+      debugPrint(
+        'SIM/LAYER: signs query=${nearSigns.length} '
+        'boundary=${nearSigns.where(boundary).length} '
+        'kept=${kept.length} boundary=${keptB.length} '
+        'shown=${keptB.map((s) => '${s.kind.name}@'
+            '${s.pos.latitude.toStringAsFixed(5)},'
+            '${s.pos.longitude.toStringAsFixed(5)}').join('|')}',
+      );
     });
   }
 
@@ -681,8 +687,10 @@ class _NavigationPageState extends State<NavigationPage>
   /// Confirmation gate for the road's VALUE (class + limit) while the NAME does
   /// not change — see `_gateValue` in `nav_gps.dart`. Tighter than the name
   /// gate: 15 m is enough to prove a class change is not one bad fix.
-  final RoadNameHysteresis _roadValueGate =
-      RoadNameHysteresis(confirmFixes: 2, confirmMeters: 15);
+  final RoadNameHysteresis _roadValueGate = RoadNameHysteresis(
+    confirmFixes: 2,
+    confirmMeters: 15,
+  );
 
   /// Where the road VALUE was last published. Kept separate from
   /// [_lastRoadPublishPos] because the name gate re-anchors on every publish,
@@ -710,14 +718,17 @@ class _NavigationPageState extends State<NavigationPage>
   // maneuver — see `_ensureNextStreetLimit` in `modules/nav_voice.dart`.
   /// km/h in force on the road being entered. 0 = unknown ⇒ not spoken.
   int _nextStreetLimit = 0;
+
   /// The NAME of the road being entered — the engine's step name, or the
   /// posted-limit layer's name 30 m past the corner when the engine step is
   /// unnamed (most VN steps are). Spoken as "… vào …".
   String _nextStreetName = '';
+
   /// The maneuver it was resolved for (cache key), and the street name the
   /// engine named for it — a different turn means a fresh lookup.
   LatLng? _nextStreetLimitKey;
   String _nextStreetLimitName = '';
+
   /// Lookup in flight, awaited by the announcement so the first callout already
   /// carries the right number.
   Future<void>? _nextStreetLimitJob;
@@ -971,9 +982,11 @@ class _NavigationPageState extends State<NavigationPage>
     _debugSegTimer?.cancel();
     _debugSegTimer = Timer(const Duration(milliseconds: 400), () {
       if (!mounted || !simShowSegments) return;
-      unawaited(_refreshDebugSegments().then((_) {
-        if (mounted) setNavState(() {});
-      }));
+      unawaited(
+        _refreshDebugSegments().then((_) {
+          if (mounted) setNavState(() {});
+        }),
+      );
     });
   }
 
@@ -1079,7 +1092,9 @@ class _NavigationPageState extends State<NavigationPage>
     final from = route.geometry.first;
     final to = route.geometry.last;
     simBeginRun(
-      label: ref == TripReplay.inlineRef ? TripReplay.inlineLabel : ref.split('/').last,
+      label: ref == TripReplay.inlineRef
+          ? TripReplay.inlineLabel
+          : ref.split('/').last,
       ref: ref,
       speed: speed,
       fixes: fixes.length,
@@ -1113,7 +1128,8 @@ class _NavigationPageState extends State<NavigationPage>
         ..clear()
         ..add(
           TripStop(
-            name: 'replay ${to.latitude.toStringAsFixed(4)},'
+            name:
+                'replay ${to.latitude.toStringAsFixed(4)},'
                 '${to.longitude.toStringAsFixed(4)}',
             lat: to.latitude,
             lng: to.longitude,
@@ -1154,7 +1170,9 @@ class _NavigationPageState extends State<NavigationPage>
     final wall = simStartedAt == null
         ? null
         : DateTime.now().difference(simStartedAt!);
-    if (state == SimRunState.done && simFixesTotal > 0 && total >= simFixesTotal) {
+    if (state == SimRunState.done &&
+        simFixesTotal > 0 &&
+        total >= simFixesTotal) {
       TripReplay.clearResume(TripReplay.source);
     }
     debugPrint(
@@ -1311,10 +1329,8 @@ class _NavigationPageState extends State<NavigationPage>
       final cur = _current ?? _origin;
       if (cur != null) {
         try {
-          final raw = await speedLimitAt(
-            cur,
-            expectStreet: _roadInfo?.name,
-          ) ?? 0;
+          final raw =
+              await speedLimitAt(cur, expectStreet: _roadInfo?.name) ?? 0;
           limit = vehicleType == 'car'
               ? raw
               : raw > 0
@@ -1623,7 +1639,9 @@ class _NavigationPageState extends State<NavigationPage>
         '${DateTime.now().difference(_appStart).inMilliseconds}ms',
       );
       if (TripReplay.armed) {
-        debugPrint('REPLAY: armed (${TripReplay.source}) — GPS permission gate skipped');
+        debugPrint(
+          'REPLAY: armed (${TripReplay.source}) — GPS permission gate skipped',
+        );
       } else if (await _requestPermission()) {
         _startGps();
       }
@@ -1652,13 +1670,19 @@ class _NavigationPageState extends State<NavigationPage>
     // camera).
     loadSettings().then((s) {
       if (!mounted) return;
-      forceOffline = s.forceOffline;
+      // `--dart-define=FORCE_OFFLINE=true` forces offline for a test run — it
+      // mirrors the FORCE_NORTH hook and exists so the offline routing chain
+      // can be exercised on a device without toggling the UI by hand.
+      forceOffline =
+          s.forceOffline || const bool.fromEnvironment('FORCE_OFFLINE');
       dataSource = s.dataSource;
       vehicleType = s.vehicleType;
       // ...unless the served page asked for another class in the URL. This has
       // to be here as well as at boot: the persisted settings land AFTER
       // initState and would otherwise silently undo ?vehicle=car.
-      final vehUrl = kIsWeb ? Uri.base.queryParameters['vehicle']?.trim() : null;
+      final vehUrl = kIsWeb
+          ? Uri.base.queryParameters['vehicle']?.trim()
+          : null;
       if (vehUrl != null && vehUrl.isNotEmpty) vehicleType = vehUrl;
       _routeProfile = switch (vehicleType) {
         'motorbike' => RouteProfile.motorbike,

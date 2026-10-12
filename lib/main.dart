@@ -8,7 +8,12 @@ import 'package:navbridge/overlay/overlay_main.dart';
 import 'package:navbridge/pages/navigation/navigation_page.dart';
 import 'package:navbridge/services/nav_foreground.dart';
 import 'package:navbridge/services/offline_router.dart'
-    show loadBestGraph, routingGraphPresent;
+    show
+        debugTestGraphDownload,
+        debugTestRoute,
+        loadBestGraph,
+        routingGraphPresent;
+import 'package:navbridge/services/offline_tiles.dart' show forceOffline;
 import 'package:navbridge/services/osrm.dart' show osrmBaseOverride;
 import 'package:navbridge/services/trip_logger.dart';
 
@@ -30,6 +35,19 @@ Future<void> main() async {
     unawaited(NavForegroundService.instance.init());
     unawaited(recoverSpooledTrips());
     unawaited(_preloadRoutingGraph());
+  }
+  // TEMPORARY DIAGNOSTIC — `--dart-define=TEST_ROUTE="lat,lng;lat,lng"` plans
+  // one route through the REAL provider chain and logs the outcome, so the
+  // offline path can be verified on a device without driving the UI. Forced
+  // offline so the answer is about the on-device graph, not the network.
+  const testRoute = String.fromEnvironment('TEST_ROUTE');
+  if (testRoute.isNotEmpty) {
+    forceOffline = true;
+    unawaited(debugTestRoute(testRoute));
+  }
+  if (const bool.fromEnvironment('TEST_GRAPH_DOWNLOAD')) {
+    forceOffline = true;
+    unawaited(debugTestGraphDownload());
   }
   runApp(const NavBridgeApp());
 }

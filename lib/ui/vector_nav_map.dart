@@ -955,7 +955,9 @@ class _VectorNavMapState extends State<VectorNavMap>
     // Offline with nothing downloaded: a plain background beats an invalid
     // raster source with an empty tile list.
     if (tiles.isEmpty) {
-      debugPrint('VECTORMAP: raster fallback has no tiles (offline) — background only');
+      debugPrint(
+        'VECTORMAP: raster fallback has no tiles (offline) — background only',
+      );
       return jsonEncode(<String, dynamic>{
         'version': 8,
         'sources': sources,
@@ -968,14 +970,12 @@ class _VectorNavMapState extends State<VectorNavMap>
       'tileSize': 256,
       'attribution': '© OpenStreetMap contributors © CARTO',
     };
-    layers.add(
-      <String, dynamic>{
-        'id': 'basemap',
-        'type': 'raster',
-        'source': 'basemap',
-        'paint': <String, dynamic>{'raster-opacity': 1.0},
-      },
-    );
+    layers.add(<String, dynamic>{
+      'id': 'basemap',
+      'type': 'raster',
+      'source': 'basemap',
+      'paint': <String, dynamic>{'raster-opacity': 1.0},
+    });
 
     if (widget.showRadar && widget.radarUrl != null) {
       sources['radar'] = <String, dynamic>{
@@ -1523,8 +1523,7 @@ class _VectorNavMapState extends State<VectorNavMap>
     if (cur == null) return items.take(max).toList();
     final s = [...items]
       ..sort(
-        (a, b) =>
-            _distMeters(cur, at(a)).compareTo(_distMeters(cur, at(b))),
+        (a, b) => _distMeters(cur, at(a)).compareTo(_distMeters(cur, at(b))),
       );
     return s.take(max).toList();
   }
@@ -1669,7 +1668,9 @@ class _VectorNavMapState extends State<VectorNavMap>
     final visible = car == null || bearing <= 0
         ? signs
         : signsAheadOfDriver(signs, car: car, headingDeg: bearing);
-    return _zoom < 13.0 ? visible.where((s) => s.isImportant).toList() : visible;
+    return _zoom < 13.0
+        ? visible.where((s) => s.isImportant).toList()
+        : visible;
   }
 
   /// Why nothing was drawn: the car's heading, and how far along it the
@@ -1690,7 +1691,7 @@ class _VectorNavMapState extends State<VectorNavMap>
       'bearing=${b.toStringAsFixed(1)} car='
       '${c?.latitude.toStringAsFixed(5)},${c?.longitude.toStringAsFixed(5)} '
       'along=${lo.isFinite ? '${lo.toStringAsFixed(0)}..'
-          '${hi.toStringAsFixed(0)}m' : 'n/a'}',
+                '${hi.toStringAsFixed(0)}m' : 'n/a'}',
     );
   }
 
@@ -1993,7 +1994,8 @@ class _VectorNavMapState extends State<VectorNavMap>
     final moved = lastTarget == null || _distMeters(lastTarget, ahead) > 1.0;
     final turned =
         last == null ||
-        ((bearing - last.bearing) % 360).abs() > (widget.smoothCamera ? 0.2 : 1.0);
+        ((bearing - last.bearing) % 360).abs() >
+            (widget.smoothCamera ? 0.2 : 1.0);
     final zoomChanged = last == null || (want.zoom - last.zoom).abs() > 0.01;
     final tiltChanged = last == null || (want.tilt - last.tilt).abs() > 0.5;
     if (moved || turned || zoomChanged || tiltChanged) {
@@ -2043,6 +2045,22 @@ class _VectorNavMapState extends State<VectorNavMap>
       _camBearingDeg = wantBearing; // (re)snap: first frame / north-up toggle
     } else {
       _camBearingDeg = easeBearingDeg(curBearing, wantBearing, dtS);
+    }
+    // Diagnostic: heading-up rotation cannot be judged by eye (a 15° error
+    // looks like a crooked street), so the numbers that drive it can be logged.
+    // OPT-IN via `--dart-define=DEBUG_BEARING=true`: it fires every 2 s while
+    // driving, and an unconditional debugPrint is just log spam in a release
+    // (and logcat spam evicts the lines you actually need).
+    if (const bool.fromEnvironment('DEBUG_BEARING') &&
+        now.difference(_lastBearingLog) > const Duration(seconds: 2)) {
+      _lastBearingLog = now;
+      debugPrint(
+        'VECTORMAP: bearing=${_camBearingDeg?.toStringAsFixed(1) ?? '-'} '
+        'route=${_routeBearing().toStringAsFixed(1)} '
+        'headingUp=${widget.headingUp} follow=$_followEnabled '
+        'camMoving=${_controller?.isCameraMoving} '
+        'speed=${_drSpeedMps.toStringAsFixed(2)}',
+      );
     }
     // Dead-reckon the complementary filter between fixes (~30 fps) so the
     // camera keeps gliding smoothly; snap the predicted position back onto
@@ -2107,6 +2125,9 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// static center dot). Throttled to ~10/s to keep platform-channel calls
   /// cheap.
   DateTime _lastProject = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Throttle for the heading-up camera-bearing diagnostic ([_onCamTick]).
+  DateTime _lastBearingLog = DateTime.fromMillisecondsSinceEpoch(0);
 
   void _onCamMove(CameraPosition cam) {
     if (widget.current == null || _controller == null) return;

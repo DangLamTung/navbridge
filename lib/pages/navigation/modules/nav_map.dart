@@ -30,12 +30,6 @@ extension _NavMap on _NavigationPageState {
     );
   }
 
-  /// Cycle the car marker icon (arrow → fun emojis).
-  void _cycleCarIcon() {
-    final i = kCarIcons.indexOf(_carIcon);
-    setNavState(() => _carIcon = kCarIcons[(i + 1) % kCarIcons.length]);
-  }
-
   /// Marker color for a camera's focus: speed = red, red-light = amber,
   /// general enforcement = blue (matches the nav-map layer in
   /// `ui/vector_nav_map.dart`).
@@ -414,9 +408,7 @@ extension _NavMap on _NavigationPageState {
               // startup, then thousands of times per second while navigating).
               urlTemplate: _basemapRasterUrl,
               userAgentPackageName: 'com.navbridge.app',
-              tileProvider: kIsWeb
-                  ? NetworkTileProvider()
-                  : _tileProvider,
+              tileProvider: kIsWeb ? NetworkTileProvider() : _tileProvider,
             ),
             // Rain radar (RainViewer) — a translucent live rain map above the
             // basemap, below the route. Online-only (fresh data every frame).
@@ -507,8 +499,8 @@ extension _NavMap on _NavigationPageState {
                           color: i == 0
                               ? Colors.green
                               : (i == simEditorWaypoints.length - 1
-                                  ? Colors.red
-                                  : const Color(0xFF673AB7)),
+                                    ? Colors.red
+                                    : const Color(0xFF673AB7)),
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white, width: 2),
                           boxShadow: const [
@@ -680,11 +672,7 @@ extension _NavMap on _NavigationPageState {
           ],
         ),
         // Basemap layer switcher, floating on the map (Google Maps style).
-        Positioned(
-          left: 12,
-          bottom: 20,
-          child: _layerMenuButton(),
-        ),
+        Positioned(left: 12, bottom: 20, child: _layerMenuButton()),
       ],
     );
   }
@@ -746,12 +734,13 @@ extension _NavMap on _NavigationPageState {
     // convention the posted-limit lookups use), otherwise every sign south of
     // the car would vanish.
     final car = _current;
-    final heading =
-        (_route != null && _routeBearing != 0) ? _routeBearing : _heading;
+    final heading = (_route != null && _routeBearing != 0)
+        ? _routeBearing
+        : _heading;
     List<RoadSign> aheadOf(List<RoadSign> list) =>
         car == null || heading == null || heading == 0
-            ? list
-            : signsAheadOfDriver(list, car: car, headingDeg: heading);
+        ? list
+        : signsAheadOfDriver(list, car: car, headingDeg: heading);
 
     if (_route != null) {
       final ahead = aheadOf(_routeSigns);
@@ -774,9 +763,7 @@ extension _NavMap on _NavigationPageState {
     // turn-plate icons. `signal` (traffic lights) is deliberately NOT
     // "important" — there are 379 of them within 6 km of HCMC centre, so they
     // would take the whole budget — and appears as soon as the driver zooms in.
-    final pool = zoom < 14.5
-        ? list.where((s) => s.isImportant).toList()
-        : list;
+    final pool = zoom < 14.5 ? list.where((s) => s.isImportant).toList() : list;
     return pool.length > n ? pool.sublist(0, n) : pool;
   }
 
