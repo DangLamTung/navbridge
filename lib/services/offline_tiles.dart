@@ -1054,17 +1054,9 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
       }
     }
 
-    // 2. Local disk cache hit (1-2 ms).
-    // Look in the active source dir first; if missing, check 'carto' (for OSM)
-    // and bundled 'overview'.
-    var file = await tileFile(z, x, y, source: source);
-    if (!await file.exists() && source == 'osm') {
-      file = await tileFile(z, x, y, source: 'carto');
-    }
-    if (!await file.exists() && source != 'overview') {
-      final of = await tileFile(z, x, y, source: 'overview');
-      if (await of.exists()) file = of;
-    }
+    // 2. The SELECTED source's own disk cache (1-2 ms): same provider, so the
+    // same look as a live tile — serving it costs nothing and saves the request.
+    final file = await tileFile(z, x, y, source: source);
     if (await file.exists()) {
       try {
         final b = await file.readAsBytes();
@@ -1075,7 +1067,7 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
       }
     }
 
-    // 3. Online fetch (only when missing on disk and connected).
+    // 3. Online fetch (only when the tile is missing on disk and connected).
     if (!forceOffline && await isOnline()) {
       final res = await _fetchTile(z, x, y, options.urlTemplate ?? '', source);
       if (res != null &&
@@ -1094,7 +1086,30 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
       }
     }
 
-    // 4. Missing tile fallback: cached synthesized tile, or a parent-tile
+    // 4. ⭐ CROSS-SOURCE disk caches — only NOW, after the network.
+    //
+    // Both hold imagery from a DIFFERENT provider than the selected one: bulk
+    // region downloads are written to 'carto' (`RegionDownloader(source:'carto')`)
+    // and the bundled `overview` pack was captured from CARTO. Serving them
+    // ahead of the live tile is what made an OSM selection show CARTO whenever
+    // there was a connection (reported 2026-10-14) — the disk cache beat the
+    // network for EVERY source. They stay the offline / fetch-failed fallback,
+    // which is what they exist for.
+    for (final alt in <File>[
+      if (source == 'osm') await tileFile(z, x, y, source: 'carto'),
+      if (source != 'overview') await tileFile(z, x, y, source: 'overview'),
+    ]) {
+      if (!await alt.exists()) continue;
+      try {
+        final b = await alt.readAsBytes();
+        _putToMem(keyStr, b);
+        return await _decode(decode, b);
+      } catch (_) {
+        // corrupt tile on disk — try the next fallback
+      }
+    }
+
+    // 5. Missing tile fallback: cached synthesized tile, or a parent-tile
     // upsample (crop + upscale the nearest available ancestor). This keeps a
     // large-zoom/offline map from going blank: instead of a transparent tile,
     // we zoom into the closest tile we DO have. Works at ANY zoom (not just

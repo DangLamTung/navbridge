@@ -96,3 +96,27 @@ crontab -e
 # Thêm dòng sau để tự động kiểm tra và đẩy lên GitHub Release lúc 3h sáng hàng ngày:
 0 3 * * * cd /Users/tungdl/Documents/Eink/navbridge && export GITHUB_TOKEN=ghp_... && export UPLOAD_TARGET=github && ./tools/cron_update_vietmap.sh
 ```
+
+---
+
+## 4. Tạo lại gói ô bản đồ nền (overview tiles)
+
+`assets/offline_map/overview_tiles.tar.gz` là gói ô bản đồ phủ toàn quốc ở mức
+thu nhỏ (z0–z8, 171 ô). App chỉ dùng nó khi **ngoại tuyến** hoặc khi nguồn bản
+đồ đang chọn tải lỗi — mạng có sẵn thì nguồn đang chọn luôn thắng.
+
+Gói đang phát hành được lấy từ CARTO, và CARTO hiện đóng dấu
+"API KEY REQUIRED" lên mọi ô không kèm khoá (đo 2026-10-14: 2 049 B không khoá
+so với 20 325 B có khoá), nên trong ảnh bản đồ hiện ra có vệt mờ. Tạo lại bằng:
+
+```bash
+python3 tool/build_overview_tiles.py                              # xem trước
+python3 tool/build_overview_tiles.py --provider carto --write     # dùng CARTO_API_KEY trong .env
+python3 tool/build_overview_tiles.py --provider esri-street --write  # không cần khoá
+```
+
+Công cụ đọc **đúng danh sách (z,x,y) của gói cũ** (chỉ đổi nguồn ảnh, không đổi
+độ phủ), và tự huỷ — không ghi gì — nếu gặp trang chặn của nhà cung cấp (OSM trả
+HTTP 200 kèm ảnh "Access blocked", xem `KNOWN_BLOCK_IMAGES`) hoặc nếu dưới 90%
+số ô là ảnh khác nhau. Sau khi tạo, **mở thử một ô** để chắc chắn không còn vệt
+mờ, rồi mới phát hành qua `tools/update_server.py`.

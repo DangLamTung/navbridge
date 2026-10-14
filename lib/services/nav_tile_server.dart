@@ -268,27 +268,12 @@ class NavTileServer {
   // ---- tile resolution ------------------------------------------------
   Future<Uint8List> _resolve(int z, int x, int y, {String? source}) async {
     final activeSource = source ?? _sourceName;
-    // 1. Local disk cache hit (bundled overview tiles + region downloads + auto-cached tiles).
-    try {
-      final cacheFile = await tileFile(z, x, y, source: activeSource);
-      if (await cacheFile.exists()) {
-        final b = await cacheFile.readAsBytes();
-        if (_isPng(b)) return b;
-        final png = await _normalizePng(b);
-        if (png != null) return png;
-      }
-      if (activeSource != 'overview') {
-        final of = await tileFile(z, x, y, source: 'overview');
-        if (await of.exists()) {
-          final b = await of.readAsBytes();
-          if (_isPng(b)) return b;
-          final png = await _normalizePng(b);
-          if (png != null) return png;
-        }
-      }
-    } catch (e) {
-      debugPrint('TILESRV: cache read error $z/$x/$y: $e');
-    }
+
+    // 1. The SELECTED source's OWN cache (auto-cached online tiles + region
+    //    downloads for that source). Same provider as the live tile, so serving
+    //    it costs nothing in look and saves the request.
+    final own = await _cachedTile(z, x, y, activeSource);
+    if (own != null) return own;
 
     // 2. Online fetch when connected — and NOT when the platform already says
     //    there is no connection: `isOnline()` always returns true on purpose
@@ -303,8 +288,38 @@ class NavTileServer {
       debugPrint('TILESRV: offline — serving cached tiles only');
     }
 
-    // 3. Transparent fallback (keeps MapLibre from erroring out).
+    // 3. ⭐ The bundled BULK OVERVIEW pack — only NOW, after the network.
+    //
+    // It is a DIFFERENT provider from the selected source: `overview_tiles
+    // .tar.gz` was captured from CARTO. Serving it from the disk cache AHEAD of
+    // the online fetch (which is what this used to do, for every source) meant
+    // an OSM / vector selection rendered CARTO tiles at the pack's zooms
+    // (z0-z8) even with a working connection — reported 2026-10-14: "my map
+    // still fallback to using the carto even when have the network". It is a
+    // last resort for offline / failed fetches, which is what it is for.
+    if (activeSource != 'overview') {
+      final ov = await _cachedTile(z, x, y, 'overview');
+      if (ov != null) return ov;
+    }
+
+    // 4. Transparent fallback (keeps MapLibre from erroring out).
     return await _transparentPng();
+  }
+
+  /// One cached tile from [source]'s store, normalised to a decodable PNG, or
+  /// null when it is not on disk / cannot be decoded. [source] is nullable to
+  /// match [tileFile] (a null source is the store's root, as before).
+  Future<Uint8List?> _cachedTile(int z, int x, int y, String? source) async {
+    try {
+      final f = await tileFile(z, x, y, source: source);
+      if (!await f.exists()) return null;
+      final b = await f.readAsBytes();
+      if (_isPng(b)) return b;
+      return await _normalizePng(b);
+    } catch (e) {
+      debugPrint('TILESRV: cache read error $z/$x/$y ($source): $e');
+      return null;
+    }
   }
 
   /// Try every online template; returns a decodable PNG (and caches it) or
