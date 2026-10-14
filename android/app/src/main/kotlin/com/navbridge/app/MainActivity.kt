@@ -159,6 +159,12 @@ class MainActivity : FlutterActivity() {
                         // two clips overlap (a new MediaPlayer used to be
                         // created per call with nothing stopping the old one).
                         val wait = call.argument<Boolean>("wait") ?: false
+                        // Playback rate for this clip (the Dart side sends the
+                        // SAME rate it gives TTS — `effectiveSpeechRate()`), so a
+                        // recorded voice pack and a TTS sentence come out at the
+                        // same tempo. This argument used to be ignored, so every
+                        // clip played at 1.0x regardless of the user's setting.
+                        val speed = call.argument<Double>("speed")?.toFloat() ?: 1.0f
                         // Never let two voice clips talk over each other: stop
                         // whatever is still playing first.
                         stopActivePlayer()
@@ -197,6 +203,17 @@ class MainActivity : FlutterActivity() {
                                     true
                                 }
                                 prepare()
+                                // Apply the requested rate AFTER prepare() (the
+                                // decoder must be configured first). Guarded: a
+                                // bad rate or an unsupported decoder must never
+                                // break the announcement — it just plays 1.0x.
+                                if (speed > 0.1f && speed < 4.0f &&
+                                    kotlin.math.abs(speed - 1.0f) > 0.01f
+                                ) {
+                                    try {
+                                        playbackParams = playbackParams.setSpeed(speed)
+                                    } catch (_: Throwable) {}
+                                }
                                 start()
                             }
                             activePlayer = mp
@@ -274,6 +291,11 @@ class MainActivity : FlutterActivity() {
                         routing.roadInfo(
                             call.argument<Double>("lat") ?: 0.0,
                             call.argument<Double>("lng") ?: 0.0,
+                            // The car's travel heading, so the graph can reject
+                            // the CROSS street at a junction. It used to be
+                            // dropped here, and the snap then picked whichever
+                            // edge happened to be nearest.
+                            call.argument<Double>("heading"),
                             result,
                         )
                     }
@@ -349,7 +371,11 @@ class MainActivity : FlutterActivity() {
     /// Auto-enter PiP when the user leaves the app (Home / recents) during nav.
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (autoEnterPip) enterPip()
+        // ⛔ NOT from SPLIT SCREEN. `isInMultiWindowMode` is true for PiP too, so
+        // this reads "neither PiP nor a split", and `onUserLeaveHint` fires on a
+        // split rearrangement as well — auto-entering PiP would tear the app out
+        // of the split the user just set up. The manual PiP button still works.
+        if (autoEnterPip && !isInMultiWindowMode) enterPip()
     }
 
     /// Notify the Flutter side when PiP mode toggles so it can swap to the
@@ -370,6 +396,11 @@ class MainActivity : FlutterActivity() {
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         notifyPipChanged(isInPictureInPictureMode)
+        // Multi-window means sharing the screen (split / freeform), excluding PiP.
+        pipChannel?.invokeMethod(
+            "onMultiWindowChanged",
+            mapOf("active" to (isInMultiWindowMode && !isInPictureInPictureMode))
+        )
         if (isInPictureInPictureMode) {
             // Re-assert our requested aspect on the first frame — some ROMs
             // (e.g. itel) open the window at the OS default ratio and ignore
@@ -379,5 +410,19 @@ class MainActivity : FlutterActivity() {
             } catch (_: Throwable) {
             }
         }
+    }
+
+    // Split screen / freeform: tell Flutter so the auto-PiP path stays out of the
+    // way and the UI can respond to multi-window mode.
+    @Deprecated("Deprecated in Java")
+    override fun onMultiWindowModeChanged(
+        isInMultiWindowMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
+        pipChannel?.invokeMethod(
+            "onMultiWindowChanged",
+            mapOf("active" to (isInMultiWindowMode && !isInPictureInPictureMode))
+        )
     }
 }

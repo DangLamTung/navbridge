@@ -384,7 +384,15 @@ extension _NavGps on _NavigationPageState {
     final spd = p.speed.isNaN ? 0.0 : p.speed;
     // Filtered heading: holds while stationary, only applies a big change
     // after two agreeing fixes (see [StrictHeading]).
-    _headingFilter.update(p.heading, pos);
+    //
+    // ⭐ Settings → Dẫn đường → "Nguồn hướng" picks WHERE that heading comes
+    // from. 'phone' trusts the heading the receiver reports with this fix, which
+    // exists even while crawling; 'travel' (default) derives it from the last
+    // two fixes and holds it below the 2 m movement threshold. The heading is
+    // not just cosmetic: the posted-limit segment layer picks a segment's
+    // `fwd`/`rev` value from it and decides with it whether the car is RIDING
+    // the segment.
+    _headingFilter.update(p.heading, pos, preferPhone: _phoneHeading);
     _lastSpeedMps = spd;
     // ~1 Hz: keep the floating widget's auto-hide in sync with the map
     // (zoom-out / radar / satellite hide it). No-op unless it changed.
@@ -606,10 +614,17 @@ extension _NavGps on _NavigationPageState {
           '"$street" was published');
       return;
     }
-    final base = RoadInfo(
+    // ⭐ ONE constructor for both publishers ([statutoryRoad]): built inline here
+    // this object silently took `RoadInfo`'s `src` default, so the replay
+    // announced every in-town street as CLASS while [_correctSpeedFromWaze]
+    // called the same one CITY — the badge alternated CITY/CLASS on an unchanged
+    // street (user, 2026-10-13: "why city and class jumping, u forgot what is
+    // city?").
+    final base = statutoryRoad(
       name: street,
       highway: hw,
       label: hw,
+      vehicle: vehicleType,
       // ⭐ The road FORM comes from the recording too. Left at its defaults every
       // road looked two-way, so the motorbike ceiling capped a đường đôi's Waze
       // limit to 50 (Lũy Bán Bích) — see ReplayFix.divided.
@@ -617,14 +632,6 @@ extension _NavGps on _NavigationPageState {
       lanes: f.lanes,
       divided: f.divided,
       urban: urban,
-      speedLimit: effectiveLimit(
-        hw,
-        vehicle: vehicleType,
-        oneway: f.oneway,
-        lanes: f.lanes,
-        divided: f.divided,
-        urban: urban,
-      ),
     );
     // ⭐ The posted-limit layer is applied BEFORE publishing, exactly as the live
     // path does (_refreshRoad → _withPostedLayer). The replay used to publish the
@@ -808,6 +815,14 @@ extension _NavGps on _NavigationPageState {
           oneway: next.oneway,
           lanes: next.lanes,
           divided: next.divided,
+          // ⚠ NOT the default `true`. This road exists because the LAYER renamed
+          // us to a street we have no tags for, so its form was copied from the
+          // road we were on — which is exactly the "previous road's form must not
+          // bleed over" case. Inheriting `true` here made the published road a
+          // "known hai chiều" again, so the NEXT layer value for the same street
+          // was re-clamped to the two-way 50 — the 60/50 flap arriving from the
+          // other writer (see `formIsKnown`).
+          formKnown: false,
           src: next.urban ? srcCity : srcClass,
         );
       }
@@ -1055,19 +1070,14 @@ extension _NavGps on _NavigationPageState {
     // LAYER already gave for THIS road when there is one, else [road] (the
     // class rule). Hoisted out of the try so a thrown lookup keeps it too.
     final cur = _roadInfo;
-    // ⭐ The value already on screen is held over a MISS (the layer has nothing
-    // within 25 m on this fix) — but only for as far as [LayerHold] allows.
-    // Unbounded, it held the road we had LEFT over the one we are on: measured
-    // 2026-10-10, the 60 of a Waze-covered stretch stayed on the chip after the
-    // car had driven out of the layer's coverage (user: "move from 60 km have
-    // waze segment to no waze segment still not correct, last trip still have
-    // the 60 even after moved to new place").
-    final held = (cur != null &&
-            sameRoad(cur.name, road.name) &&
-            cur.fromLayer &&
-            _layerHold.fresh(cur.name, pos))
-        ? cur
-        : road;
+    // ⛔ NO POSTED-VALUE HOLD ANY MORE (option 1, 2026-10-13).
+    //
+    // This used to return the value already on screen (`held`) whenever the
+    // layer MISSED, bounded only by [LayerHold.maxMeters]. That kept a posted
+    // 60 on the chip after the car had LEFT the 60 road (user: "go from luỹ bán
+    // bích to thống nhất or some other street no waze, it keep 60 km/h"). A
+    // posted limit belongs to the road it was posted on, so on a miss we now
+    // publish THIS road's own value (class / statutory / OSM) instead.
     try {
       // Keep the value on screen while two parallel records of the SAME road
       // disagree (see _pickWithContinuity): without it the chip swapped 60/50
@@ -1087,7 +1097,7 @@ extension _NavGps on _NavigationPageState {
         keepKmh: keep,
         expectStreet: _vetoStreet,
       );
-      if (hit == null) return held;
+      if (hit == null) return road;
       // Limit, layer kind and street name all come from THIS result.
       final layerKind = hit.source;
       final layerName = hit.streetName;
@@ -1103,7 +1113,7 @@ extension _NavGps on _NavigationPageState {
       // value flickered between the two. This path is not simulator-only: the
       // 8 m graph refresh and the replay publisher both come through here.
       if (!_layerNameAgrees(layerName, ridden: hit.aligned)) {
-        return held;
+        return road;
       }
       // The layer answered for THIS road from HERE: that is the anchor the hold
       // is measured from (see [LayerHold]).
@@ -1117,7 +1127,7 @@ extension _NavGps on _NavigationPageState {
         inTown: await _townAt(pos),
       );
     } catch (_) {
-      return held; // no layer data → keep what the layer last said
+      return road; // no layer data → this road's own value
     }
   }
 
@@ -1360,33 +1370,31 @@ extension _NavGps on _NavigationPageState {
               vehicle: vehicleType,
               urban: urban,
             ),
+            // We know NOTHING about this street's form — no graph way, no tags.
+            // The default `true` read that silence as "hai chiều", so once this
+            // road was published the next layer value for the same street was
+            // clamped to the two-way 50 while the road-refresh writer used the
+            // zone ceiling (60 in town): the same flap, one fix apart.
+            formKnown: false,
             src: urban ? srcCity : srcClass,
           );
         }
         _roadOsm = fallbackRoad;
       }
-      // If we are still on the SAME road and already hold a valid posted limit
-      // from the layer (e.g. 60 km/h on Lũy Bán Bích), a momentary segment lookup
-      // miss (e.g. at an intersection or GPS jitter) must NOT immediately demote
-      // the speed to the uninformative statutory default (50 km/h)!
+      // ⛔ THE POSTED-VALUE HOLD IS GONE (option 1, 2026-10-13).
       //
-      // ⛔ But "momentary" has to be BOUNDED, and the test for "still on the
-      // same road" has to be able to fail. `name` is `cur.name` on a miss (there
-      // is no segment to name the road), so `sameRoad(cur.name, name)` was a
-      // TAUTOLOGY: once a layer value was on screen this returned early on every
-      // miss, for the rest of the drive, and the fallback below it could never
-      // run — which is exactly the case it exists for (user, 2026-10-10: "move
-      // from 60 km have waze segment to no waze segment still not correct, last
-      // trip still have the 60 even after moved to new place"). The hold now
-      // expires once the car has driven past [LayerHold.maxMeters] since the
-      // layer last answered, and the road's own (OSM / statutory) limit takes
-      // over there.
-      if (cur.fromLayer &&
-          sameRoad(cur.name, name) &&
-          cur.speedLimit > 0 &&
-          _layerHold.fresh(cur.name, pos)) {
-        return;
-      }
+      // It read: hold the published layer value while `sameRoad(cur.name, name)`
+      // and within [LayerHold.maxMeters]. But on a miss `name` IS `cur.name`
+      // (there is no segment to name the road), so the name test could never
+      // fail — the hold was purely a 300 m timer, and it kept a posted 60 on a
+      // road the layer knows nothing about (user: "go from luỹ bán bích to
+      // thống nhất or some other street no waze, it keep 60 km/h"). A posted
+      // limit belongs to the road it was posted on: on a miss we publish
+      // [fallbackRoad] — this road's own OSM / statutory value — instead.
+      //
+      // If this proves to stutter at layer gaps, the fix is a hold that must be
+      // EARNED (the freshly resolved road must still match the posted one), not
+      // a longer timer.
 
       if (cur.fromLayer ||
           cur.speedLimit != fallbackRoad.speedLimit ||
@@ -1489,45 +1497,15 @@ extension _NavGps on _NavigationPageState {
     debugPrint('ROAD: graph highway=${g['highway']} maxspeed=${g['maxspeed']}');
     final highway = (g['highway'] ?? '') as String;
     if (highway.isEmpty) return null;
-    // GraphHopper sends Infinity for `maxspeed=none` — treat any non-finite
-    // value as "no tagged limit" and fall back to the statutory class default.
-    // Also reject implausible finite readings: a mis-decoded max_speed edge
-    // once turned a real 50 km/h limit into a bogus "31" (and vice versa).
-    // A sane posted limit is 5..200 km/h; anything outside is data noise.
-    final msRaw = g['maxspeed'];
-    final ms = (msRaw is num && msRaw.isFinite && msRaw >= 5 && msRaw <= 200)
-        ? msRaw.toInt()
-        : null;
-    // Vehicle-aware statutory fallback. The graph's max_speed is a CAR tag,
-    // so for motorbikes / trucks it only tightens the statutory class default
-    // — a motorbike never inherits the car's posted limit.
-    //
-    // `oneway` comes from the graph (the OSM import stores it); `lanes` is not
-    // in GraphHopper's default encodings, so it stays null and
-    // [urbanLimit] then treats a one-way street as ≥2 làn (a one-way through
-    // street), which is what the VN built-up rule keys on.
-    final oneway = parseOneway(g['oneway'] as String?);
-    final lanes = parseLanes(g['lanes']);
-    final divided = g['divided'] == true;
     // The graph rarely carries a real `maxspeed`, so its value is the class
     // default — which is the RURAL one (primary 80 for a car / 60 for a mô tô).
     // Inside a town that is wrong: the built-up rule caps it at 50 (60 on a
     // đường đôi). POI density decides which table applies; a posted value
     // (graph maxspeed or a Waze segment) always wins over it.
     final urban = await _townAt(pos);
-    // Shared constructor, so this path and the Overpass path cannot drift apart
-    // (see [roadInfoFromRoad]).
-    return roadInfoFromRoad(
-      name: (g['name'] ?? '') as String,
-      highway: highway,
-      vehicle: vehicleType,
-      taggedKmh: ms ?? 0,
-      maxspeedTag: ms == null ? null : '$ms',
-      oneway: oneway,
-      lanes: lanes,
-      divided: divided,
-      urban: urban,
-    );
+    // ⭐ Shared with the standalone overlay, so the two badges cannot disagree
+    // about the road class, the form or the zone (see [roadInfoFromGraphMap]).
+    return roadInfoFromGraphMap(g, vehicle: vehicleType, urban: urban);
   }
 
   /// Feed the active trip logger (real GPS fixes).

@@ -132,10 +132,31 @@ def main() -> int:
     # slip-lane fragment: a sign at each end of it would be noise, and it is the
     # main reason the raw run count (43k) overstates the real number of one-way
     # streets. Same for unnamed runs — Waze leaves 62% of segments unnamed.
+    # --- ONLY genuinely one-way STREETS --------------------------------------
+    # ⛔ A DIVIDED road is stored in WME as TWO one-way carriageways, so the
+    # per-SEGMENT flag says "one-way" on BOTH sides of an arterial. Trusting it
+    # put "Đường một chiều" signs on Cộng Hòa, Trường Chinh, QL1, Nguyễn Văn
+    # Linh ... Measured 2026-10-11 with tool/oneway_street_audit.py: 1,914 of
+    # the street names look one-way in part but carry BOTH directions somewhere
+    # — 82.5% of all one-way-looking segments. A one-way sign is only correct
+    # when the WHOLE street is one-way, i.e. NO segment of it is two-way.
+    two_way: set[str] = set()
+    for s in range(seg.n_segs):
+        if seg.fwd[s] and seg.rev[s]:
+            nm = seg.street(s)
+            if nm:
+                two_way.add(nm)
+
+    def in_vn(pt) -> bool:
+        """Vietnam only — the crawl also covers Thailand (ถนนมิตรภาพ, ทล.226)."""
+        return 8.0 <= float(pt[0]) <= 24.0 and 102.0 <= float(pt[1]) <= 110.0
+
     kept_runs = [
         (e, x, st) for (e, x, st) in runs
         if metres((float(e[0]), float(e[1])), (float(x[0]), float(x[1]))) >= args.min_run_m
         and (args.keep_unnamed or st)
+        and st not in two_way        # the WHOLE street must be one-way
+        and in_vn(e) and in_vn(x)    # and inside Vietnam
     ]
     dropped_short = sum(
         1 for (e, x, _st) in runs
@@ -143,8 +164,14 @@ def main() -> int:
     dropped_unnamed = sum(
         1 for (e, x, st) in runs if not st
         and metres((float(e[0]), float(e[1])), (float(x[0]), float(x[1]))) >= args.min_run_m)
-    print(f"  kept {len(kept_runs):,} runs (>={args.min_run_m:.0f} m, named) — "
-          f"dropped {dropped_short:,} short, {dropped_unnamed:,} unnamed"
+    dropped_two_way = sum(1 for (e, x, st) in runs if st in two_way)
+    dropped_foreign = sum(1 for (e, x, _st) in runs
+                          if not in_vn(e) or not in_vn(x))
+    print(f"  streets proven TWO-WAY somewhere: {len(two_way):,}")
+    print(f"  kept {len(kept_runs):,} runs (>={args.min_run_m:.0f} m, named, "
+          f"whole street one-way, in VN) — dropped {dropped_short:,} short, "
+          f"{dropped_unnamed:,} unnamed, {dropped_two_way:,} on TWO-WAY "
+          f"streets, {dropped_foreign:,} outside VN"
           f" -> candidate signs: {len(kept_runs) * 2:,}")
 
     # --- drop candidates that collide (the same junction, both directions) ----

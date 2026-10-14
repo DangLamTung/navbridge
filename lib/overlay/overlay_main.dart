@@ -354,19 +354,11 @@ class _OverlayAppState extends State<OverlayApp> {
     try {
       // Road class + form tags for the statutory fallback (all of it comes from
       // the same on-device graph the app uses).
-      String hw = 'unclassified';
       var roadName = '';
-      bool? oneway;
-      int? lanes;
-      var divided = false;
+      Map<String, dynamic>? graph;
       try {
-        final g = await OfflineRouter.instance.roadInfo(pos);
-        final gh = (g?['highway'] ?? '') as String;
-        if (gh.isNotEmpty) hw = gh;
-        roadName = (g?['name'] ?? '') as String;
-        oneway = parseOneway(g?['oneway'] as String?);
-        lanes = parseLanes(g?['lanes']);
-        divided = g?['divided'] == true;
+        graph = await OfflineRouter.instance.roadInfo(pos);
+        roadName = (graph?['name'] ?? '') as String;
       } catch (_) {}
 
       final posted = await speedLimitAt(
@@ -386,21 +378,30 @@ class _OverlayAppState extends State<OverlayApp> {
               !streetNameMatches(roadName, heldName));
       // Which layer answered, before the fallback overwrites the variable.
       final postedLayer = usable ? lastLimitLayer() : null;
-      // ONE decision, shared with the app (roadInfoFromRoad + applyPostedLayer):
-      // the posted layer wins when it answered, otherwise the road's own class
-      // table applies with the built-up rule on top. This widget used to
-      // re-derive the fallback itself and kept the RURAL class default in town
-      // (60 on a 2-lane city street) while the app showed 50.
+      // ONE decision, shared with the app (roadInfoFromGraphMap +
+      // applyPostedLayer): the posted layer wins when it answered, otherwise the
+      // road's own class table applies with the built-up rule on top. This widget
+      // used to re-derive the fallback itself and kept the RURAL class default in
+      // town (60 on a 2-lane city street) while the app showed 50 — and it was
+      // about to drift again, because the graph carries no `oneway` EV and only
+      // the shared mapper turns the per-direction car access into the road form.
       final inTown = await builtUpRuleApplies(pos, hasPosted: false);
-      final road = roadInfoFromRoad(
-        name: roadName,
-        highway: hw,
-        vehicle: _vehicle,
-        oneway: oneway,
-        lanes: lanes,
-        divided: divided,
-        urban: inTown,
-      );
+      // The graph can be missing entirely (data pack not downloaded, or a gap
+      // under the car) — the posted layer is still authoritative there, so fall
+      // back to an UNCLASSIFIED road rather than dropping the limit, exactly as
+      // this widget did when it kept `hw = 'unclassified'` for that case.
+      final road =
+          roadInfoFromGraphMap(
+            graph ?? const {},
+            vehicle: _vehicle,
+            urban: inTown,
+          ) ??
+          roadInfoFromRoad(
+            name: roadName,
+            highway: 'unclassified',
+            vehicle: _vehicle,
+            urban: inTown,
+          );
       final decided = usable
           ? applyPostedLayer(
               road,
@@ -444,6 +445,9 @@ class _OverlayAppState extends State<OverlayApp> {
   void dispose() {
     _sub?.cancel();
     _msgSub?.cancel();
+    // Stop any in-flight camera / sign announcement — otherwise the widget is
+    // torn down but the TTS engine keeps talking.
+    unawaited(_tts.stop());
     super.dispose();
   }
 

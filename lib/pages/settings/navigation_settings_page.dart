@@ -6,7 +6,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'package:navbridge/core/settings.dart' show gpsFilterStrength;
+import 'package:navbridge/core/settings.dart' show gpsFilterStrength, headingSource;
+import 'package:navbridge/core/windy_key_store.dart' show WindyKeyStore;
 import 'package:navbridge/pages/settings/settings_save.dart';
 import 'package:navbridge/pages/settings/settings_widgets.dart';
 import 'package:navbridge/services/offline_tiles.dart'
@@ -38,6 +39,9 @@ class _NavigationSettingsPageState extends State<NavigationSettingsPage> {
   bool _gpsFilter = true;
   String _gpsFilterStrength = 'standard';
 
+  /// 'travel' | 'phone' — see [headingSource].
+  String _headingSource = 'travel';
+
   /// 'chip' | 'dial' — see [navSpeedStyle]. Defaults to the dial.
   String _navSpeedStyle = 'dial';
 
@@ -51,6 +55,11 @@ class _NavigationSettingsPageState extends State<NavigationSettingsPage> {
   /// [carScreenAnchor]. 0 = centre, 0.10 = lower third, 0.22 = near bottom.
   double _carScreenAnchor = 0.0;
 
+  /// The Windy key pasted in the dialog below (empty = not set). Loaded from
+  /// the encrypted store; the BUILD-TIME `WINDY_API_KEY` is the dev fallback and
+  /// is deliberately not shown here — it is not editable from the app.
+  String _windyKey = '';
+
   @override
   void initState() {
     super.initState();
@@ -59,10 +68,64 @@ class _NavigationSettingsPageState extends State<NavigationSettingsPage> {
     _cameraAlerts = cameraAlerts;
     _gpsFilter = gpsFilter;
     _gpsFilterStrength = gpsFilterStrength;
+    _headingSource = headingSource;
     _navSpeedStyle = navSpeedStyle;
     _alertBarCount = alertBarCount;
     _navBannerBottom = navBannerBottom;
     _carScreenAnchor = carScreenAnchor;
+    _loadWindyKey();
+  }
+
+  Future<void> _loadWindyKey() async {
+    final k = await WindyKeyStore.instance.read();
+    if (mounted) setState(() => _windyKey = k ?? '');
+  }
+
+  /// Paste / replace / clear the Windy key. Stored ENCRYPTED on the device, so
+  /// trying a key needs no rebuild (`tool/env.sh` + `--dart-define` still work
+  /// as the dev fallback). The weather refresh picks it up within 3 minutes.
+  Future<void> _editWindyKey() async {
+    final ctrl = TextEditingController(text: _windyKey);
+    final newVal = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Khoá Windy'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          obscureText: true,
+          decoration: const InputDecoration(
+            hintText: 'Dán khoá Point Forecast (api.windy.com)',
+            helperText: 'Để trống rồi Lưu = xoá khoá',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Huỷ'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text),
+            child: const Text('Lưu'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (newVal == null || !mounted) return;
+    await WindyKeyStore.instance.save(newVal);
+    if (!mounted) return;
+    setState(() => _windyKey = newVal.trim());
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          newVal.trim().isEmpty
+              ? 'Đã xoá khoá Windy.'
+              : 'Đã lưu khoá Windy (mã hoá trên máy).',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _setCarScreenAnchor(double v) async {
@@ -106,6 +169,15 @@ class _NavigationSettingsPageState extends State<NavigationSettingsPage> {
     setState(() {
       _gpsFilterStrength = v;
       gpsFilterStrength = v;
+    });
+    unawaited(saveAllSettings());
+  }
+
+  void _setHeadingSource(String v) {
+    if (headingSource == v) return;
+    setState(() {
+      _headingSource = v;
+      headingSource = v;
     });
     unawaited(saveAllSettings());
   }
@@ -385,6 +457,42 @@ class _NavigationSettingsPageState extends State<NavigationSettingsPage> {
                 ),
               ],
               const SizedBox(height: 8),
+              const Text(
+                'Nguồn hướng (mũi tên + camera + chọn làn tốc độ)',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: SettingsChoice(
+                      label: 'Hướng đi',
+                      subtitle: 'Theo GPS',
+                      icon: Icons.navigation,
+                      selected: _headingSource == 'travel',
+                      onTap: () => _setHeadingSource('travel'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: SettingsChoice(
+                      label: 'Điện thoại',
+                      subtitle: 'Máy báo',
+                      icon: Icons.screen_rotation_alt,
+                      selected: _headingSource == 'phone',
+                      onTap: () => _setHeadingSource('phone'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _headingSource == 'travel'
+                    ? 'Hướng lấy từ quãng đường vừa đi: ổn định khi chạy nhanh, giữ nguyên khi bò chậm trong kẹt xe.'
+                    : 'Hướng lấy từ máy báo cho từng fix: có hướng cả khi bò chậm / dừng đèn đỏ, nhưng có thể nhiễu khi đứng yên.',
+                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              ),
+              const SizedBox(height: 8),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 value: _cameraAlerts,
@@ -608,6 +716,53 @@ class _NavigationSettingsPageState extends State<NavigationSettingsPage> {
                   : 'Chỉ đường bằng mũi tên lớn + giọng nói, không hiện bản đồ.',
               style: TextStyle(fontSize: 12, color: Colors.grey[700]),
             ),
+          ),
+        ),
+
+        // --- Weather source key ---
+        const SettingsSection('Thời tiết'),
+        SettingsCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  _windyKey.isEmpty ? Icons.cloud_off : Icons.cloud,
+                  color: _windyKey.isEmpty ? Colors.grey[600] : kAppBlue,
+                  size: 22,
+                ),
+                title: const Text(
+                  'Khoá Windy (Point Forecast)',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                subtitle: Text(
+                  _windyKey.isEmpty
+                      ? 'Chưa có khoá — đang dùng Open-Meteo (miễn phí). Thêm '
+                            'khoá Windy để lấy thời tiết theo đúng vị trí xe.'
+                      : 'Đã lưu (mã hoá trên máy) — đang dùng Windy. Chạm để '
+                            'đổi hoặc xoá.',
+                  style: const TextStyle(fontSize: 11),
+                ),
+                trailing: _windyKey.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Xoá khoá',
+                        icon: const Icon(Icons.delete_outline, size: 20),
+                        onPressed: _editWindyKey,
+                      ),
+                onTap: _editWindyKey,
+              ),
+              Text(
+                'Windy là nguồn theo ô lưới dự báo (GFS) — phủ mọi điểm trên '
+                'đường, khác METAR (chỉ đúng gần sân bay) và vẫn miễn phí ở mức '
+                'cơ bản. Khoá được lưu mã hoá bằng Keystore/Keychain, không nằm '
+                'trong file cài đặt. Lưu ý: khoá hạng “testing” của Windy trả về '
+                'dữ liệu đã bị xáo trộn — nếu số liệu vô lý, kiểm tra lại gói API.',
+                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              ),
+            ],
           ),
         ),
       ],

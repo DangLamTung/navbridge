@@ -9,6 +9,8 @@ import com.graphhopper.routing.ev.EnumEncodedValue
 import com.graphhopper.routing.ev.IntEncodedValue
 import com.graphhopper.routing.ev.RoadClass
 import com.graphhopper.routing.util.EdgeFilter
+import com.graphhopper.util.EdgeIteratorState
+import com.graphhopper.util.FetchMode
 import com.graphhopper.util.shapes.GHPoint
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
@@ -375,11 +377,47 @@ class GraphHopperRouting {
         }
     }
 
+    /** Axis bearing (0=N, clockwise) of an edge, or null when it can't be read.
+     *  Uses THIS edge's own geometry (base pillar → adj node) — the direction of
+     *  the road under the query point, not the whole way's overall heading. */
+    private fun edgeAxisBearing(edge: EdgeIteratorState): Double? = try {
+        val pl = edge.fetchWayGeometry(FetchMode.PILLAR_AND_ADJ)
+        if (pl.size() < 2) null
+        else bearingDeg(pl.getLat(0), pl.getLon(0), pl.getLat(1), pl.getLon(1))
+    } catch (_: Throwable) {
+        null
+    }
+
+    /** Smallest angle (0..90°) between the road's AXIS and [heading]. A road is
+     *  an axis: 180° apart is the SAME street (a two-way road), so a car heading
+     *  opposite its own travel direction is 0° off, not 180°. */
+    private fun axisMisalignmentDeg(bearing: Double, heading: Double): Double {
+        var d = Math.abs((bearing - heading) % 360.0)
+        if (d > 180.0) d = 360.0 - d
+        return Math.min(d, 180.0 - d)
+    }
+
+    private fun bearingDeg(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val p1 = Math.toRadians(lat1)
+        val p2 = Math.toRadians(lat2)
+        val dl = Math.toRadians(lon2 - lon1)
+        val y = Math.sin(dl) * Math.cos(p2)
+        val x = Math.cos(p1) * Math.sin(p2) -
+            Math.sin(p1) * Math.cos(p2) * Math.cos(dl)
+        return (Math.toDegrees(Math.atan2(y, x)) + 360.0) % 360.0
+    }
+
     /** Road info (name / road class / maxspeed) at [lat],[lng] from the
      *  on-device graph — instant and offline (no Overpass round-trip).
      *  maxspeed is 0/absent when not tagged (Vietnam rarely tags it; the
-     *  Dart side applies statutory defaults per road class). */
-    fun roadInfo(lat: Double, lng: Double, result: MethodChannel.Result) {
+     *  Dart side applies statutory defaults per road class).
+     *  [heading] (degrees, 0=N) lets the snap reject a CROSS street. */
+    fun roadInfo(
+        lat: Double,
+        lng: Double,
+        heading: Double?,
+        result: MethodChannel.Result
+    ) {
         executor.execute {
             try {
                 val gh = hopper
@@ -404,7 +442,33 @@ class GraphHopperRouting {
                 } catch (_: Exception) {
                     null
                 }
-                val snap = gh.locationIndex.findClosest(lat, lng, EdgeFilter.ALL_EDGES)
+                // ⭐ HEADING-AWARE SNAP. `findClosest` returns the NEAREST edge,
+                // which at a junction is frequently the CROSS street a few metres
+                // away — the road name / limit then flashed to the wrong street
+                // every time the car crossed one. When the car's travel heading
+                // is known, reject an edge that runs ACROSS it and retry keeping
+                // only roughly-parallel edges; fall back to the plain nearest
+                // edge when that finds nothing (a U-turn / perpendicular start).
+                var snap = gh.locationIndex.findClosest(lat, lng, EdgeFilter.ALL_EDGES)
+                if (snap != null && snap.isValid && heading != null) {
+                    val brg0 = edgeAxisBearing(snap.closestEdge)
+                    if (brg0 != null && axisMisalignmentDeg(brg0, heading) > 60.0) {
+                        val h = heading
+                        val aligned = try {
+                            gh.locationIndex.findClosest(
+                                lat,
+                                lng,
+                                EdgeFilter { e ->
+                                    val b = edgeAxisBearing(e)
+                                    b == null || axisMisalignmentDeg(b, h) <= 60.0
+                                }
+                            )
+                        } catch (_: Throwable) {
+                            null
+                        }
+                        if (aligned != null && aligned.isValid) snap = aligned
+                    }
+                }
                 if (snap == null || !snap.isValid) {
                     postSuccess(result, null)
                     return@execute
@@ -418,14 +482,44 @@ class GraphHopperRouting {
                 val out = HashMap<String, Any?>()
                 out["name"] = edge.name ?: ""
                 out["highway"] = edge.get(roadClass)?.name?.lowercase() ?: ""
-                // One-way flag — the VN built-up speed limit (Thông tư
-                // 38/2024/TT-BGTVT) splits "đường đôi / đường một chiều có từ
-                // hai làn xe cơ giới" (60) from "đường hai chiều / một làn"
-                // (50), and OSM has NO median tag in Vietnam (0 of 9,011
-                // highway ways sampled in HCMC/Đà Nẵng carry one), so `oneway`
-                // is the only usable signal. Read it defensively: a graph built
-                // without the encoded value must not break road info — the Dart
-                // side treats a missing value as "unknown".
+                // ⭐ PER-DIRECTION CAR ACCESS — the road FORM, and the reason the
+                // app could not tell a đường đôi from a hai chiều street.
+                //
+                // The VN built-up limit (Thông tư 38/2024/TT-BGTVT) splits
+                // "đường đôi / đường một chiều có từ hai làn xe cơ giới" (60)
+                // from "đường hai chiều / một làn" (50), and OSM has NO median
+                // tag in Vietnam (0 of 9,011 highway ways sampled in HCMC/Đà
+                // Nẵng carry one). GraphHopper 7 has no `oneway` encoded value
+                // either, so this always came back null and the Dart side read
+                // EVERY street as "form unknown" — falling back to the zone
+                // ceiling (60 in town) even on genuine two-way streets.
+                //
+                // The information IS in the graph: `car_access` is stored for
+                // both directions, and a one-way way opens exactly one of them.
+                // Mappers split a divided road into one way per carriageway, so
+                // "one direction only" is precisely the đường-đôi signal.
+                // Verified against the shipped graph with
+                // `tools/ProbeOneway.java`:
+                //   Lũy Bán Bích / Trường Chinh / Trần Quốc Hoàn  fwd=true  bwd=false
+                //   Đường 30 Tháng 4 / Cách Mạng / Âu Cơ             fwd=true  bwd=true
+                // The Dart side turns the pair into `oneway` (roadInfoFromGraph →
+                // onewayFromCarAccess); it prefers an explicit `oneway` value if
+                // a graph ever carries one. Read defensively: a graph without
+                // the encoded value must not break road info.
+                var carFwd: Boolean? = null
+                var carBwd: Boolean? = null
+                try {
+                    val access = em.getBooleanEncodedValue("car_access")
+                    if (access != null) {
+                        carFwd = edge.get(access)
+                        carBwd = edge.getReverse(access)
+                    }
+                } catch (_: Throwable) {
+                    carFwd = null
+                    carBwd = null
+                }
+                out["car_access_fwd"] = carFwd
+                out["car_access_bwd"] = carBwd
                 var oneway: String? = null
                 try {
                     if (em.hasEncodedValue("oneway")) {
@@ -446,7 +540,8 @@ class GraphHopperRouting {
                 out["maxspeed"] = if (ms.isFinite() && ms > 0) ms else null
                 android.util.Log.i(
                     "NavBridgeRouter",
-                    "roadInfo: name=${edge.name} highway=${out["highway"]} maxspeed=$ms oneway=$oneway"
+                    "roadInfo: name=${edge.name} highway=${out["highway"]} " +
+                        "maxspeed=$ms oneway=$oneway access=$carFwd/$carBwd"
                 )
                 postSuccess(result, out)
             } catch (e: Throwable) {

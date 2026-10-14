@@ -411,6 +411,10 @@ void main() {
           taggedKmh: 50, // tagged way → urban comes out false
           maxspeedTag: '50',
           urban: false,
+          // A TAGGED hai chiều way: the cap below is the two-way one, which only
+          // applies when the form is genuinely known (a missing tag is not a
+          // two-way road — see formIsKnown).
+          oneway: false,
         );
         expect(tagged.urban, isFalse);
         final inTown = applyPostedLayer(
@@ -492,9 +496,124 @@ void main() {
         expect(effectiveLimit('trunk', vehicle: 'truck'), 70);
       })();
     });
+
+    test('statutoryRoad names the table it used — CITY in town, CLASS outside', () {
+      // The simulator's publisher built this object inline and so silently took
+      // `RoadInfo`'s default `src` ('class'), labelling an in-town street with
+      // the RURAL table while the layer-correction writer called the same street
+      // CITY: the chip badge then alternated CITY/CLASS on an unchanged street
+      // (user, 2026-10-13: "why city and class jumping, u forgot what is
+      // city?"). 89 device recordings hold no in-town `class` fix at all.
+      final town = statutoryRoad(
+        name: 'Hẻm 8 Yên Đổ',
+        highway: 'residential',
+        label: 'residential',
+        vehicle: 'motorbike',
+        urban: true,
+      );
+      final field = statutoryRoad(
+        name: 'ĐT724',
+        highway: 'residential',
+        label: 'residential',
+        vehicle: 'motorbike',
+      );
+      expect(town.src, srcCity);
+      expect(town.speedLimit, 50, reason: 'mô tô hai chiều trong khu dân cư');
+      // Same 50, DIFFERENT table — this is the case the driver saw flip: a
+      // residential way is 50 in the rural table too, so only `src` moved.
+      expect(field.src, srcClass);
+      expect(field.speedLimit, 50);
+      expect(statutoryRoad(
+        name: 'x',
+        highway: 'secondary',
+        label: 'secondary',
+        vehicle: 'motorbike',
+      ).speedLimit, 60, reason: 'secondary ngoài KĐDC = 60');
+      expect(statutoryRoad(
+        name: 'x',
+        highway: 'secondary',
+        label: 'secondary',
+        vehicle: 'motorbike',
+        urban: true,
+      ).speedLimit, 50, reason: 'secondary trong KĐDC (hai chiều) = 50');
+
+      // The form's provenance rides along, so the layer cannot re-clamp this
+      // road with a two-way assumption it was never told (see formIsKnown).
+      expect(town.formKnown, isFalse);
+      expect(
+        statutoryRoad(
+          name: 'x',
+          highway: 'secondary',
+          label: 'secondary',
+          vehicle: 'motorbike',
+          oneway: true,
+          lanes: 2,
+        ).formKnown,
+        isTrue,
+      );
+    });
   });
 
   group('parseOneway / parseLanes', () {
+    test('onewayFromCarAccess: the graph\'s per-direction access IS the form', () {
+      // Values verified against the SHIPPED graph with tools/ProbeOneway.java
+      // (Lũy Bán Bích / Trường Chinh / Trần Quốc Hoàn = true/false; Đường 30
+      // Tháng 4 / Cách Mạng / Âu Cơ = true/true).
+      expect(onewayFromCarAccess(forward: true, backward: true), isFalse,
+          reason: 'both directions open = hai chiều');
+      expect(onewayFromCarAccess(forward: true, backward: false), isTrue,
+          reason: 'Lũy Bán Bích: one carriageway of a đường đôi');
+      expect(onewayFromCarAccess(forward: false, backward: true), isTrue);
+      expect(onewayFromCarAccess(forward: false, backward: false), isNull,
+          reason: 'not a road the car may use → form unknown');
+      expect(onewayFromCarAccess(), isNull,
+          reason: 'a graph without the encoded value must stay unknown');
+    });
+
+    test('the form the graph supplies now decides the in-town ceiling', () {
+      // The point of the whole exercise: with the form genuinely known, a
+      // hai chiều town street caps a mô tô at the legal 50, while a divided
+      // road's carriageway keeps its lawful 60 — instead of BOTH being guessed
+      // as "unknown" and landing on the zone 60.
+      final twoWay = roadInfoFromRoad(
+        name: 'Thống Nhất',
+        highway: 'secondary',
+        vehicle: 'motorbike',
+        oneway: onewayFromCarAccess(forward: true, backward: true),
+        urban: true,
+      );
+      expect(twoWay.formKnown, isTrue);
+      expect(
+        applyPostedLayer(
+          twoWay,
+          kmh: 60,
+          vehicle: 'motorbike',
+          layerSrc: srcSegment,
+        ).speedLimit,
+        50,
+        reason: 'hai chiều trong khu dân cư: mô tô 50',
+      );
+
+      final divided = roadInfoFromRoad(
+        name: 'Lũy Bán Bích',
+        highway: 'secondary',
+        vehicle: 'motorbike',
+        oneway: onewayFromCarAccess(forward: true, backward: false),
+        urban: true,
+      );
+      expect(divided.formKnown, isTrue);
+      expect(
+        applyPostedLayer(
+          divided,
+          kmh: 60,
+          vehicle: 'motorbike',
+          layerSrc: srcSegment,
+        ).speedLimit,
+        60,
+        reason: 'đường một chiều ≥2 làn (đường đôi): mô tô 60',
+      );
+    });
+
     test('oneway tag → true / false / unknown', () {
       expect(parseOneway('yes'), true);
       expect(parseOneway('true'), true);

@@ -9,6 +9,10 @@ extension _NavScreens on _NavigationPageState {
     // The user may have changed the data source — reload it.
     if (!mounted) return;
     final s = await loadSettings();
+    // And the sim-arm overrides are done with: whatever the settings screen now
+    // holds is the user's explicit choice (see `_voiceOverride`).
+    _voiceOverride = null;
+    _phoneHeadingOverride = null;
     dataSource = s.dataSource;
     vehicleType = s.vehicleType;
     _routeProfile = switch (s.vehicleType) {

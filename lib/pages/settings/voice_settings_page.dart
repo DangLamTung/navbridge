@@ -5,7 +5,8 @@ library;
 import 'package:flutter/material.dart';
 
 import 'package:navbridge/core/settings.dart'
-    show voiceBoostMax, ttsVoiceName, ttsSpeechRate, ttsPitch, voicePack;
+    show voiceBoostMax, ttsVoiceName, ttsSpeechRate, ttsPitch, voicePack,
+        voiceAnnouncements;
 import 'package:navbridge/pages/settings/settings_save.dart';
 import 'package:navbridge/pages/settings/settings_widgets.dart';
 import 'package:navbridge/services/offline_tiles.dart'
@@ -23,6 +24,7 @@ class VoiceSettingsPage extends StatefulWidget {
 
 class _VoiceSettingsPageState extends State<VoiceSettingsPage> {
   bool _ridingMode = false;
+  bool _voiceAnnouncements = true;
   double _voiceVolume = 1.0;
   double _ttsSpeechRate = 0.55;
   double _ttsPitch = 1.0;
@@ -34,6 +36,7 @@ class _VoiceSettingsPageState extends State<VoiceSettingsPage> {
   void initState() {
     super.initState();
     _ridingMode = ridingMode;
+    _voiceAnnouncements = voiceAnnouncements;
     _voiceVolume = voiceVolume;
     _ttsSpeechRate = ttsSpeechRate;
     _ttsPitch = ttsPitch;
@@ -46,6 +49,20 @@ class _VoiceSettingsPageState extends State<VoiceSettingsPage> {
   void dispose() {
     _wakeWordCtrl.dispose();
     super.dispose();
+  }
+
+  /// Spoken turn-by-turn announcements on/off, persisted — the same switch the
+  /// nav screen's speaker button flips (see `_voiceOn` in navigation_page.dart).
+  Future<void> _setVoiceAnnouncements(bool v) async {
+    setState(() {
+      _voiceAnnouncements = v;
+      voiceAnnouncements = v;
+    });
+    await saveAllSettings();
+    // Switched OFF mid-sentence: cut what is playing right now, so the very
+    // next thing the driver hears is silence (same reason [setVoiceMuted]
+    // stops the engine when it mutes).
+    if (!v) await VoiceGuide.instance.stop();
   }
 
   /// Riding mode: tune voice recognition for a moving motorbike — short-
@@ -282,6 +299,27 @@ class _VoiceSettingsPageState extends State<VoiceSettingsPage> {
     return SettingsPage(
       title: 'Giọng nói',
       children: [
+        const SettingsSection('Thông báo giọng nói'),
+        SettingsCard(
+          child: SwitchListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text(
+              'Đọc thông báo khi dẫn đường',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            subtitle: const Text(
+              'Tắt = im lặng hoàn toàn: không đọc chỉ đường, biển báo, camera, '
+              'thay đổi tốc độ hay thời tiết. Nút loa trên màn hình dẫn đường '
+              'cũng đổi đúng mục này, và giá trị được ghi nhớ cho lần sau.',
+              style: TextStyle(fontSize: 11),
+            ),
+            value: _voiceAnnouncements,
+            onChanged: _setVoiceAnnouncements,
+          ),
+        ),
+        const SizedBox(height: 14),
+
         const SettingsSection('Nhập liệu giọng nói'),
         SettingsCard(
           child: Column(

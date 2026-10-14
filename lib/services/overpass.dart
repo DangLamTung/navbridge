@@ -397,6 +397,47 @@ bool dividedForm({bool divided = false, bool? oneway, int? lanes}) {
   return divided || (oneway == true && (lanes ?? 2) >= 2);
 }
 
+/// Is the road FORM genuinely known from these fields, or are they defaults?
+///
+/// [dividedForm] cannot answer this: `false` is both "inferred two-way" and "we
+/// were never told", and the same is true of a null `oneway` / `lanes`. The ONE
+/// place that distinction is made, so [roadInfoFromRoad], the replay publisher
+/// and [applyPostedLayer] cannot drift apart.
+///
+/// It matters because a *guess* at the form is not evidence: reading silence as
+/// "hai chiều" caps a mô tô at 50 in town, and the shipped GraphHopper graph
+/// encodes neither `oneway` nor `lanes` (see `tools/data/saigon_graph/properties`)
+/// and sends no `divided` at all — so on the phone the form is UNKNOWN for every
+/// road, and the zone ceiling (60 in town / 70 rural) is the honest answer.
+bool formIsKnown({bool divided = false, bool? oneway, int? lanes}) =>
+    divided || oneway != null || lanes != null;
+
+/// One-way-ness from the routing graph's PER-DIRECTION car access.
+///
+/// This is the road FORM, and it is the thing the app could not know: the
+/// phone's GraphHopper graph has no `oneway` and no `lanes` encoded value (see
+/// `tools/data/saigon_graph/properties`), so every street read as "form unknown"
+/// and the vehicle ceiling fell back to the ZONE ceiling — a legal 60 everywhere
+/// in town, including genuine two-way streets where a mô tô may only do 50.
+///
+/// `car_access` IS stored for both directions, so:
+///   * both directions open → a two-way street (`false` here, and thereafter
+///     [formIsKnown] is true and the two-way 50 cap applies);
+///   * exactly one open → a one-way way (`true`). In Việt Nam that means either
+///     a genuine one-way street or ONE CARRIAGEWAY of a divided road — mappers
+///     split those per direction, and [dividedForm] already reads a one-way way
+///     as a đường đôi (≥2 làn), which is the 60 case. Verified against the
+///     shipped graph with `tools/ProbeOneway.java`:
+///       Lũy Bán Bích / Trường Chinh / Trần Quốc Hoàn  fwd=true  bwd=false
+///       Đường 30 Tháng 4 / Cách Mạng / Âu Cơ             fwd=true  bwd=true
+///   * NEITHER open → `null`: the graph is not describing a road the car may
+///     use (prohibited / pedestrian), so the form stays unknown.
+bool? onewayFromCarAccess({bool? forward, bool? backward}) {
+  if (forward == null || backward == null) return null;
+  if (forward != backward) return true;
+  return forward ? false : null;
+}
+
 /// The vehicle's legal MAXIMUM speed given WHERE it is and WHAT the road is —
 /// Thông tư 38/2024/TT-BGTVT (hiệu lực 01/01/2025):
 ///
@@ -503,9 +544,106 @@ RoadInfo roadInfoFromRoad({
     lanes: lanes,
     divided: divided,
     urban: urban,
+    // A form the caller could not supply (the phone's graph carries neither
+    // `oneway` nor `lanes`) is NOT a two-way road — see [formIsKnown].
+    formKnown: formIsKnown(divided: divided, oneway: oneway, lanes: lanes),
     // Otherwise the value is ours: the built-up road-form rule, or the class
     // default outside a built-up area.
     src: tagDecides ? srcOsm : (urban ? srcCity : srcClass),
+  );
+}
+
+/// The road FORM a step's own tags describe, when there is nothing posted on
+/// it: the object a posted-limit layer is then applied to ([applyPostedLayer]).
+///
+/// ONE constructor, on purpose. Built inline, this object silently takes
+/// `RoadInfo`'s `src` default — 'class' — which is how the replay published
+/// every in-town street as CLASS (the RURAL statutory table) while the
+/// layer-correction writer labelled the same street CITY, so the badge
+/// alternated CITY/CLASS on a street that never changed (user, 2026-10-13: "why
+/// city and class jumping, u forgot what is city?"). 89 recorded device drives
+/// hold 3 071 `city` fixes and ZERO in-town `class` ones, so the device never
+/// showed it — only the sim did.
+///
+/// [label] is passed through rather than derived, so a caller that shows the raw
+/// OSM class on the chip (the replay does) keeps doing so while the live paths
+/// keep using [classInfo].
+RoadInfo statutoryRoad({
+  required String name,
+  required String highway,
+  required String vehicle,
+  required String label,
+  bool? oneway,
+  int? lanes,
+  bool divided = false,
+  bool urban = false,
+}) => RoadInfo(
+  name: name,
+  highway: highway,
+  label: label,
+  oneway: oneway,
+  lanes: lanes,
+  divided: divided,
+  urban: urban,
+  // Nothing was posted, so the form is known only as far as the tags go —
+  // a null `oneway`/`lanes` is "we were never told", not a two-way road.
+  formKnown: formIsKnown(divided: divided, oneway: oneway, lanes: lanes),
+  speedLimit: effectiveLimit(
+    highway,
+    vehicle: vehicle,
+    oneway: oneway,
+    lanes: lanes,
+    divided: divided,
+    urban: urban,
+  ),
+  // Which TABLE produced that number: the built-up rule in town, else the class
+  // default (the rural one).
+  src: urban ? srcCity : srcClass,
+);
+
+/// Map the PLATFORM CHANNEL's `roadInfo` map (GraphHopper, Kotlin) to a
+/// [RoadInfo]. Null when the map carries no road class.
+///
+/// ONE place, because there are TWO consumers — the nav page
+/// (`_roadInfoFromGraph`) and the standalone floating widget
+/// (`overlay_main.dart`) — and each parsed the map by hand. The overlay already
+/// drifted once (it re-derived the fallback and kept the RURAL class default in
+/// town while the app showed 50), and they would have drifted again the moment
+/// the form became knowable: the graph reports no `oneway` EV, so only the
+/// per-direction car access says whether the road is a đường đôi.
+RoadInfo? roadInfoFromGraphMap(
+  Map<String, dynamic> g, {
+  required String vehicle,
+  required bool urban,
+}) {
+  final highway = (g['highway'] ?? '') as String;
+  if (highway.isEmpty) return null;
+  // GraphHopper sends Infinity for `maxspeed=none` — treat any non-finite value
+  // as "no tagged limit" and fall back to the statutory class default. Also
+  // reject implausible finite readings: a mis-decoded max_speed edge once turned
+  // a real 50 km/h limit into a bogus "31".
+  final msRaw = g['maxspeed'];
+  final ms = (msRaw is num && msRaw.isFinite && msRaw >= 5 && msRaw <= 200)
+      ? msRaw.toInt()
+      : null;
+  return roadInfoFromRoad(
+    name: (g['name'] ?? '') as String,
+    highway: highway,
+    vehicle: vehicle,
+    taggedKmh: ms ?? 0,
+    maxspeedTag: ms == null ? null : '$ms',
+    // An explicit `oneway` tag wins if a graph ever carries one; the shipped
+    // graph has none, so the per-direction access IS the form (see
+    // [onewayFromCarAccess] — verified against the real graph).
+    oneway:
+        parseOneway(g['oneway'] as String?) ??
+        onewayFromCarAccess(
+          forward: g['car_access_fwd'] as bool?,
+          backward: g['car_access_bwd'] as bool?,
+        ),
+    lanes: parseLanes(g['lanes']),
+    divided: g['divided'] == true,
+    urban: urban,
   );
 }
 
@@ -537,12 +675,25 @@ RoadInfo applyPostedLayer(
       road.name.trim().isEmpty ||
       streetNameMatches(road.name, name);
 
-  // The road form (oneway / lanes / divided) is only genuinely known when
+  // The road form (oneway / lanes / divided) is only genuinely known when the
   // road tags came from the graph/OSM for THIS street. If the road was
   // synthesized from a layer rename, or if this call introduces a new street
   // name, the previous road's form must not bleed over.
+  //
+  // ⭐ [RoadInfo.formKnown], not `!road.fromLayer`. The two publishers of a
+  // limit hand this function DIFFERENT objects for the same street:
+  // `_withPostedLayer` passes the graph's road, `_correctSpeedFromWazeInner`
+  // passes the road it last published (whose `src` is the layer's). The old
+  // provenance test read that as "form known" for one and "form unknown" for
+  // the other, so the SAME street got two different ceilings — 50 from the
+  // road refresh (two-way assumption) and 60 from the layer correction (zone
+  // ceiling) — and, publishing one after the other, they alternated on every
+  // fix. Measured on the 2026-10-13 08:28 drive: 38 transitions 60↔50 over
+  // 1.0 km on Lũy Bán Bích, whose Waze layer says 60 on every fix. The ceiling
+  // is a property of the ROAD, so it must not depend on which object the
+  // caller happens to be holding.
   final formGenuinelyKnown =
-      sameRoad && road.name.trim().isNotEmpty && !road.fromLayer;
+      sameRoad && road.name.trim().isNotEmpty && road.formKnown;
 
   final int ceiling;
   if (formGenuinelyKnown) {
@@ -578,6 +729,14 @@ RoadInfo applyPostedLayer(
     lanes: road.lanes,
     divided: newDivided,
     urban: effectiveTown,
+    // ⭐ Carry the form's provenance through, not just the form. Without this
+    // the value we just published goes back to `formKnown: true` (the field's
+    // default), so the NEXT application for the same street would re-classify
+    // the road as a known two-way and clamp it back — the same 60/50 flap from
+    // the other direction. A road whose form we did not know still has an
+    // unknown one afterwards (and a road we renamed knows nothing about the
+    // new name's form at all — see `newDivided`).
+    formKnown: formGenuinelyKnown,
     // The posted-limit layer has now spoken: from here a speed sign may only
     // tighten this value (see [signLimitInForce]).
     src: layerSrc,

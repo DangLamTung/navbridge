@@ -86,7 +86,9 @@ class BleMapClock {
 
   void _setLink(ClockLink l) {
     _link = l;
-    _linkController.add(l);
+    // The controller is closed in [dispose]; a connection event that lands after
+    // that must not throw "Bad state: Cannot add event after closing".
+    if (!_linkController.isClosed) _linkController.add(l);
   }
 
   Future<void> _ensureAdapterOn() async {
@@ -413,7 +415,16 @@ class BleMapClock {
   }
 
   void dispose() {
+    // Cancel EVERY subscription that feeds a controller BEFORE closing it.
+    // `_connSub` (the hardware-disconnect watcher) calls [_setLink], which adds
+    // to `_linkController`; leaving it subscribed across `close()` was the way
+    // a post-dispose BLE drop became "Cannot add event after closing".
     _notifySub?.cancel();
+    _notifySub = null;
+    _connSub?.cancel();
+    _connSub = null;
+    _scanSub?.cancel();
+    _scanSub = null;
     _linkController.close();
     _scanController.close();
     _gpsController.close();

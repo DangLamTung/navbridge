@@ -162,7 +162,15 @@ class _NavigationPageState extends State<NavigationPage>
   /// setState wrapper exposed to the navigation `part` extensions (nav_*.dart),
   /// which are not State subclasses and so can't call the protected
   /// [State.setState] directly. This keeps a single rebuild path for the page.
-  void setNavState(VoidCallback fn) => setState(fn);
+  ///
+  /// Guarded by [mounted]: the extensions call it from async continuations
+  /// (geocode / route fetch / camera lookup) that can land AFTER the page is
+  /// disposed, and an unguarded [setState] there throws
+  /// "setState() called after dispose()".
+  void setNavState(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
+  }
 
   // --- search -----------------------------------------------------------
   final _searchCtrl = TextEditingController();
@@ -331,6 +339,10 @@ class _NavigationPageState extends State<NavigationPage>
   /// set, the page renders a compact PiP layout so the big banner/controls
   /// don't overflow the tiny floating window.
   bool _pipActive = false;
+
+  /// True while Android is showing the app in SPLIT SCREEN / freeform. Drives
+  /// the same compact layout as PiP (see [_onMultiWindowChanged]).
+  bool _multiWindow = false;
   String _mapStatus = 'off';
 
   /// Last minute sent to the ESP32 display's HUD clock — the current time is
@@ -843,7 +855,37 @@ class _NavigationPageState extends State<NavigationPage>
   /// on the mic button. Keeps the recognizer running and only acts when the
   /// wake word is heard, so hands-free commands work without touching the map.
   bool _alwaysOnVoice = false;
-  bool _voiceOn = true; // spoken turn-by-turn guidance enabled
+  /// Spoken turn-by-turn guidance on/off — PERSISTED (Settings → Giọng nói →
+  /// "Thông báo giọng nói"; the nav rail's speaker button and the "tắt tiếng"
+  /// voice command write it too). It used to be per-session page state, so a
+  /// driver who wanted a quiet ride had to re-toggle it on every drive.
+  ///
+  /// The getter/setter pair keeps ONE source of truth: the global that
+  /// [snapshotSettings] saves. All three writers already sit inside
+  /// `setNavState`, so the rail icon still repaints.
+  bool get _voiceOn => _voiceOverride ?? voiceAnnouncements;
+  set _voiceOn(bool v) {
+    // Picking a value by hand ENDS the `?voice=` override, so the button is
+    // never a no-op during a sim run.
+    _voiceOverride = null;
+    if (v == voiceAnnouncements) return;
+    voiceAnnouncements = v;
+    unawaited(saveAllSettings());
+  }
+
+  /// Session-only overrides for the web sim arm (`?voice=off`, `?heading=phone`).
+  ///
+  /// They must NOT be written into [voiceAnnouncements]/[headingSource]: those
+  /// are PERSISTED, so an override living there would be saved by the next
+  /// settings edit and silently become the user's real preference. Cleared as
+  /// soon as the user picks a value themselves.
+  bool? _voiceOverride;
+  bool? _phoneHeadingOverride;
+
+  /// Is the heading taken from the phone rather than from the direction of
+  /// travel? (`?heading=phone` overrides the setting for this run.)
+  bool get _phoneHeading =>
+      _phoneHeadingOverride ?? (headingSource == 'phone');
   bool _spokenFar = false;
   bool _spokenNear = false;
   bool _spokenFinal = false;
@@ -1567,6 +1609,20 @@ class _NavigationPageState extends State<NavigationPage>
       // the accuracy harness has to be able to switch it without a rebuild.
       final veh = Uri.base.queryParameters['vehicle']?.trim();
       if (veh != null && veh.isNotEmpty) vehicleType = veh;
+      // ?heading=phone drives the SAME build with the phone's own heading
+      // instead of the direction of travel (see [headingSource]). It decides the
+      // posted-limit segment layer's fwd/rev pick and its "is the car riding
+      // this segment" test, so the harness has to be able to switch it from a
+      // URL — exactly like `vehicle`. Session-only (see [_phoneHeadingOverride]).
+      final hdg = Uri.base.queryParameters['heading']?.trim();
+      if (hdg != null && hdg.isNotEmpty) _phoneHeadingOverride = hdg == 'phone';
+      // ?voice=off runs the same build with the spoken announcements switched
+      // off (see [voiceAnnouncements]) — the harness needs to prove a silent run
+      // is silent without a rebuild. Session-only (see [_voiceOverride]).
+      final voiceParam = Uri.base.queryParameters['voice']?.trim();
+      if (voiceParam != null && voiceParam.isNotEmpty) {
+        _voiceOverride = voiceParam != 'off';
+      }
       final want = Uri.base.queryParameters['layers'];
       if (want != null) {
         for (final l in want.split(',')) {
@@ -1597,6 +1653,8 @@ class _NavigationPageState extends State<NavigationPage>
     // swap to the compact layout whenever the OS PiP window appears.
     PipService.instance.init();
     PipService.instance.isPipMode.addListener(_onPipChanged);
+    PipService.instance.isMultiWindow.addListener(_onMultiWindowChanged);
+
     // Open the map centered on the driver's current/last-known place (from
     // the last GPS fix), not the fixed HCMC fallback.
     unawaited(_loadInitialCenter());
@@ -1774,6 +1832,15 @@ class _NavigationPageState extends State<NavigationPage>
     setNavState(() => _pipActive = pip);
   }
 
+  /// Split screen / freeform toggled. Tracks whether the app shares the screen
+  /// so auto-PiP is inhibited and the layout can adapt if needed.
+  void _onMultiWindowChanged() {
+    if (!mounted) return;
+    final multi = PipService.instance.isMultiWindow.value;
+    if (multi == _multiWindow) return;
+    setNavState(() => _multiWindow = multi);
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -1783,6 +1850,7 @@ class _NavigationPageState extends State<NavigationPage>
       _apiNoticeListener = null;
     }
     PipService.instance.isPipMode.removeListener(_onPipChanged);
+    PipService.instance.isMultiWindow.removeListener(_onMultiWindowChanged);
     _vmFollow.removeListener(_syncOverlayVisibility);
     _debounce?.cancel();
     _offlineBannerTimer?.cancel();
@@ -1802,6 +1870,11 @@ class _NavigationPageState extends State<NavigationPage>
     _startFocus.dispose();
     _gpsSub?.cancel();
     _connSub?.cancel();
+    // The track-sim feed (nav_navigation `replayPositionStream`) was otherwise
+    // left subscribed: leaving the page mid-simulation kept the stream — and its
+    // `_onGpsFix` callback — firing for the life of the isolate.
+    _trackSimSub?.cancel();
+    _trackSimSub = null;
     _voice.stop();
     _commands.stop();
     // Release the SCREEN wakelock unconditionally.
@@ -1879,6 +1952,9 @@ class _NavigationPageState extends State<NavigationPage>
   /// shell of state + wiring.
   @override
   Widget build(BuildContext context) {
+    // Only the small floating OS PiP window uses the barebones PiP layout.
+    // In split-screen / multi-window mode, the app keeps its full interactive
+    // navigation layout (controls, stop nav button, speed dial, route card).
     if (_pipActive && _navigating) return _buildPipLayout();
     // Simple mode: hide the map — just a big arrow + voice commands.
     if (simpleMode && _navigating) return _buildSimpleNavLayout();

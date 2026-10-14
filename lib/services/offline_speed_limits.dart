@@ -1005,6 +1005,12 @@ int _densityGen = 0;
   // "prefer the aligned one", which is why a junction could rename the road.
   final cands =
       <(int, double, double, double)>[]; // (segment, dist, bearing, overshoot)
+  // A segment is indexed into EVERY grid cell its bounding box touches (see
+  // [_buildSegIndex]), so the 3×3 neighbourhood below can return the SAME
+  // segment from several cells. Dedupe by id — otherwise it is scored (and can
+  // win) more than once, letting a segment that straddles a cell border outvote
+  // the roads beside it.
+  final seen = <int>{};
   final dec = _SegDecoder(idx);
   for (var dx = -1; dx <= 1; dx++) {
     for (var dy = -1; dy <= 1; dy++) {
@@ -1013,6 +1019,7 @@ int _densityGen = 0;
       if (ids == null) continue;
       for (var k = 0; k < ids.length; k++) {
         final s = ids[k];
+        if (!seen.add(s)) continue;
         final (d, brg, over) = _segDistBearing(dec, s, lat, lon, cosLat);
         cands.add((s, d, brg, over));
       }

@@ -37,6 +37,14 @@ class AppSettings {
   /// through unfiltered (position/speed may jump).
   final bool gpsFilter;
 
+  /// Where the heading comes from — it drives the car arrow, the heading-up
+  /// camera AND the direction pick of the posted-limit segment layer.
+  ///   'travel' (default) the bearing between the last two fixes (needs >2 m of
+  ///            movement, so it holds while crawling in traffic).
+  ///   'phone'  the heading the RECEIVER reports for the fix, which is available
+  ///            even below the 2 m threshold.
+  final String headingSource;
+
   /// Rain-radar overlay on the map (RainViewer, free/no key).
   final bool radar;
 
@@ -75,6 +83,14 @@ class AppSettings {
   /// Spoken guidance volume (0.0–1.0, default 1.0). Applied to the TTS engine
   /// at init and before every utterance.
   final double voiceVolume;
+
+  /// Spoken turn-by-turn ANNOUNCEMENTS on/off (default on). Off silences the
+  /// whole nav voice — manoeuvres, signs, cameras, limit changes, weather — at
+  /// the source, BEFORE anything is logged (unlike [voiceMuted], which is an
+  /// audio-only mute that keeps the run auditable). The nav screen's speaker
+  /// button and the "tắt tiếng" voice command both write this, so a drive armed
+  /// in silence stays silent after a restart instead of having to be re-toggled.
+  final bool voiceAnnouncements;
 
   /// Cap on the Android media-stream volume the app pushes during an
   /// announcement's loudness boost (0.0–1.0, default 0.7). The boost raises
@@ -175,6 +191,7 @@ class AppSettings {
     this.smoothCamera = true,
     this.cameraAlerts = true,
     this.gpsFilter = true,
+    this.headingSource = 'travel',
     this.radar = false,
     this.pipAspect = '34',
     this.ridingMode = false,
@@ -184,6 +201,7 @@ class AppSettings {
     this.overlayLayout = 'vertical',
     this.overlayScale = 1.0,
     this.voiceVolume = 1.0,
+    this.voiceAnnouncements = true,
     this.voiceBoostMax = 0.7,
     this.ttsVoiceName = '',
     this.ttsVoiceLocale = 'vi-VN',
@@ -218,6 +236,7 @@ class AppSettings {
     'smoothCamera': smoothCamera,
     'cameraAlerts': cameraAlerts,
     'gpsFilter': gpsFilter,
+    'headingSource': headingSource,
     'navSpeedStyle': navSpeedStyle,
     'alertBarCount': alertBarCount,
     'navBannerBottom': navBannerBottom,
@@ -233,6 +252,7 @@ class AppSettings {
     'overlayScale': overlayScale,
     'overlayEnabled': overlayEnabled,
     'voiceVolume': voiceVolume,
+    'voiceAnnouncements': voiceAnnouncements,
     'voiceBoostMax': voiceBoostMax,
     'ttsVoiceName': ttsVoiceName,
     'ttsVoiceLocale': ttsVoiceLocale,
@@ -261,6 +281,7 @@ class AppSettings {
     bool? smoothCamera,
     bool? cameraAlerts,
     bool? gpsFilter,
+    String? headingSource,
     bool? radar,
     String? pipAspect,
     bool? ridingMode,
@@ -270,6 +291,7 @@ class AppSettings {
     double? overlayScale,
     bool? overlayEnabled,
     double? voiceVolume,
+    bool? voiceAnnouncements,
     double? voiceBoostMax,
     String? ttsVoiceName,
     String? ttsVoiceLocale,
@@ -303,6 +325,7 @@ class AppSettings {
       smoothCamera: smoothCamera ?? this.smoothCamera,
       cameraAlerts: cameraAlerts ?? this.cameraAlerts,
       gpsFilter: gpsFilter ?? this.gpsFilter,
+      headingSource: headingSource ?? this.headingSource,
       navSpeedStyle: navSpeedStyle ?? this.navSpeedStyle,
       alertBarCount: alertBarCount ?? this.alertBarCount,
       navBannerBottom: navBannerBottom ?? this.navBannerBottom,
@@ -318,6 +341,7 @@ class AppSettings {
       overlayScale: overlayScale ?? this.overlayScale,
       overlayEnabled: overlayEnabled ?? this.overlayEnabled,
       voiceVolume: voiceVolume ?? this.voiceVolume,
+      voiceAnnouncements: voiceAnnouncements ?? this.voiceAnnouncements,
       voiceBoostMax: voiceBoostMax ?? this.voiceBoostMax,
       ttsVoiceName: ttsVoiceName ?? this.ttsVoiceName,
       ttsVoiceLocale: ttsVoiceLocale ?? this.ttsVoiceLocale,
@@ -368,6 +392,14 @@ double voiceBoostMax = 0.7;
 
 /// GPS outlier-filter strength: 'light' | 'standard' | 'strong'.
 String gpsFilterStrength = 'standard';
+
+/// Heading source for the arrow / camera / posted-limit direction pick:
+/// 'travel' (bearing between the last two fixes, the default) | 'phone' (use
+/// the heading the receiver reports for each fix). See [AppSettings].
+String headingSource = 'travel';
+
+/// Spoken turn-by-turn announcements on/off (see [AppSettings.voiceAnnouncements]).
+bool voiceAnnouncements = true;
 
 /// Custom AI system-prompt instructions (appended to the base prompt).
 String aiCustomPrompt = '';
@@ -457,6 +489,11 @@ Future<AppSettings> _loadSettingsOnce() async {
     );
 
     final gpsStrength = (j['gpsFilterStrength'] ?? 'standard') as String;
+    final voiceOns = (j['voiceAnnouncements'] ?? true) as bool;
+    // Two modes only; anything else falls back to the default so a hand-edited
+    // JSON cannot leave the heading undefined.
+    final rawHeadingSrc = (j['headingSource'] ?? 'travel') as String;
+    final headingSrc = rawHeadingSrc == 'phone' ? 'phone' : 'travel';
     final customPrompt = (j['aiCustomPrompt'] ?? '') as String;
     final placeSuggestions = (j['aiPlaceSuggestions'] ?? true) as bool;
     final speechRate = ((j['ttsSpeechRate'] ?? 0.55) as num).toDouble().clamp(
@@ -478,6 +515,8 @@ Future<AppSettings> _loadSettingsOnce() async {
     voicePack = pack;
     voiceBoostMax = boostMax;
     gpsFilterStrength = gpsStrength;
+    headingSource = headingSrc;
+    voiceAnnouncements = voiceOns;
     aiCustomPrompt = customPrompt;
     aiPlaceSuggestions = placeSuggestions;
     ttsSpeechRate = speechRate;
@@ -496,6 +535,7 @@ Future<AppSettings> _loadSettingsOnce() async {
       smoothCamera: (j['smoothCamera'] ?? true) as bool,
       cameraAlerts: (j['cameraAlerts'] ?? true) as bool,
       gpsFilter: (j['gpsFilter'] ?? true) as bool,
+      headingSource: headingSrc,
       navSpeedStyle: (j['navSpeedStyle'] ?? 'dial') as String,
       alertBarCount: (j['alertBarCount'] ?? 3) as int,
       navBannerBottom: (j['navBannerBottom'] ?? false) as bool,
@@ -519,6 +559,7 @@ Future<AppSettings> _loadSettingsOnce() async {
         0.0,
         1.0,
       ),
+      voiceAnnouncements: voiceOns,
       voiceBoostMax: boostMax,
       ttsVoiceName: voiceName,
       ttsVoiceLocale: voiceLocale,
@@ -555,6 +596,8 @@ Future<void> saveSettings(AppSettings s) async {
     lastBleName = s.lastBleName;
     lastBleType = s.lastBleType;
     gpsFilterStrength = s.gpsFilterStrength;
+    headingSource = s.headingSource;
+    voiceAnnouncements = s.voiceAnnouncements;
     aiCustomPrompt = s.aiCustomPrompt;
     aiPlaceSuggestions = s.aiPlaceSuggestions;
     ttsSpeechRate = s.ttsSpeechRate;

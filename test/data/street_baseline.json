@@ -1,0 +1,161 @@
+{
+  "assets/trips/2026-10-13_082850.json": [
+    {
+      "street": "Đường 30 Tháng 4",
+      "kmh": 50,
+      "src": "road",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 21
+    },
+    {
+      "street": "Cách Mạng",
+      "kmh": 50,
+      "src": "road",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 8
+    },
+    {
+      "street": "Hẻm 57 Yên Đổ",
+      "kmh": 50,
+      "src": "road",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 10
+    },
+    {
+      "street": "Hẻm 8 Yên Đổ",
+      "kmh": 50,
+      "src": "road",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 13
+    },
+    {
+      "street": "Thống Nhất",
+      "kmh": 50,
+      "src": "road",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 38
+    },
+    {
+      "street": "Lũy Bán Bích",
+      "kmh": 60,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 60 km/h.",
+      "fixes": 74
+    },
+    {
+      "street": "Âu Cơ",
+      "kmh": 50,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 42
+    },
+    {
+      "street": "Lũy Bán Bích",
+      "kmh": 60,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 60 km/h.",
+      "fixes": 5
+    },
+    {
+      "street": "Ba Vân",
+      "kmh": 50,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 48
+    },
+    {
+      "street": "Trương Công Định",
+      "kmh": 50,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 75
+    },
+    {
+      "street": "Trường Chinh",
+      "kmh": 60,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 60 km/h.",
+      "fixes": 19
+    },
+    {
+      "street": "Ấp Bắc",
+      "kmh": 50,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 38
+    }
+  ],
+  "assets/trips/2026-09-24_105213.json": [
+    {
+      "street": "Nguyễn Văn Trỗi",
+      "kmh": 60,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 60 km/h.",
+      "fixes": 90
+    },
+    {
+      "street": "Hoàng Văn Thụ",
+      "kmh": 60,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 60 km/h.",
+      "fixes": 7
+    },
+    {
+      "street": "Phan Đình Giót",
+      "kmh": 50,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 29
+    },
+    {
+      "street": "Phan Thúc Duyện",
+      "kmh": 50,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 21
+    },
+    {
+      "street": "Hầm chui Phan Thúc Duyện",
+      "kmh": 50,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 18
+    },
+    {
+      "street": "Trần Quốc Hoàn",
+      "kmh": 60,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 60 km/h.",
+      "fixes": 38
+    },
+    {
+      "street": "Cộng Hòa",
+      "kmh": 60,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 60 km/h.",
+      "fixes": 60
+    },
+    {
+      "street": "Cộng Hòa",
+      "kmh": 50,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 14
+    },
+    {
+      "street": "Cộng Hòa",
+      "kmh": 60,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 60 km/h.",
+      "fixes": 25
+    },
+    {
+      "street": "Cộng Hoà",
+      "kmh": 50,
+      "src": "segment",
+      "callout": "Tốc độ tối đa 50 km/h.",
+      "fixes": 23
+    }
+  ],
+  "assets/trips/2026-08-08.json": []
+}

@@ -74,13 +74,34 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
-            android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
             android:windowSoftInputMode="adjustResize">
+            <!-- MULTI-WINDOW (split screen / floating window).
+                 Satisfies Android's "Support multi-window mode" requirements:
+                 `resizeableActivity="true"` on the ACTIVITY (not also on
+                 <application>, which is redundant), no `screenOrientation`
+                 lock, and no `taskAffinity` — an EMPTY affinity detaches the
+                 task from the package, and recents/split-screen pair TASKS (it
+                 was in the initial commit, with no note why). Also declares
+                 `allow_multiple_resumed_activities` so every activity stays
+                 RESUMED while the screen is shared, and a `<layout>` giving the
+                 freeform window its minimum size. `configChanges` already
+                 covers orientation/screenSize, so a window rearrangement does
+                 not recreate the activity and does not restart navigation.
+
+                 On the Lenovo TB331FC (ZUI 15.1) the ROM still greys out
+                 "Floating Window" / "Split Screen" in its own window menu for
+                 this app, even though the framework reports
+                 supportsMultiWindow=true and RESIZE_MODE_RESIZEABLE and the app
+                 can be forced into a freeform window from the shell. No manifest
+                 declaration changes that — the gate is inside ZUI. -->
+            <layout
+                android:minWidth="240dp"
+                android:minHeight="160dp" />
             <!-- Specifies an Android theme to apply to this Activity as soon as
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues

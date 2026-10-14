@@ -51,7 +51,10 @@ extension _NavWeather on _NavigationPageState {
   Future<void> _refreshWeather() async {
     final cur = _current ?? _origin;
     if (cur == null) return;
-    // Real METAR station data (nearest VN airport) merged with Open-Meteo.
+    // Best available source for the CAR's position, in priority order —
+    // AccuWeather (keyed) → Windy (keyed) → METAR observation (only within
+    // [kMetarMaxMeters] of a station) → Open-Meteo, which also fills the fields
+    // the others lack. See [fetchBestWeather].
     final w = await fetchBestWeather(cur.latitude, cur.longitude);
     if (mounted && w != null) setNavState(() => _weather = w);
     if (w != null) _announceRainTransition(w);
@@ -296,11 +299,18 @@ extension _NavWeather on _NavigationPageState {
     // nagged repeatedly in between. The PiP chip (_nextCamera) still updates
     // every fix; only the VOICE is zoned.
     //
+    // ⭐ …and gated by `_voiceOn` too (Settings → Giọng nói → "Đọc thông báo
+    // khi dẫn đường"). This was the ONE guidance path that never checked the
+    // announcements switch, so a run armed with `?voice=off` still spoke two
+    // camera sentences in its first 40 s (measured on the 2026-10-13 replay).
+    // The other paths (manoeuvres, signs, limits, weather, reroute) all return
+    // early on it.
+    //
     // Announcement uses the camera's REAL content (its name + posted speed
     // limit) rather than a generic "khu vực giám sát": the VietMap/Waze DB
     // distinguishes speed cameras, phạt nguội (fine) cameras, traffic
     // cameras and red-light cameras — say what it actually is.
-    if (cameraVoice && next != null && next.routeMeters <= 600) {
+    if (cameraVoice && _voiceOn && next != null && next.routeMeters <= 600) {
       final m = next.routeMeters.round();
       final near = next.routeMeters <= 100;
       final zsig = '$sig/${near ? 'near' : 'far'}';

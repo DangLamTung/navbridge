@@ -238,7 +238,12 @@ extension _NavNavigation on _NavigationPageState {
       // who simply took the wrong turn — which is what made the 2026-10-08
       // reports unauditable.
       _logAnnouncement(recalcTxt, kind: 'reroute');
-      _voice.speak(recalcTxt, priority: VoiceGuide.priorityHigh);
+      // Gated like every other guidance line: with the announcements switched
+      // off the driver hears NOTHING, while the log above still records the
+      // reroute (a silent run stays auditable).
+      if (_voiceOn && _voiceReady) {
+        _voice.speak(recalcTxt, priority: VoiceGuide.priorityHigh);
+      }
     }
     final sw = Stopwatch()..start();
     try {
@@ -318,7 +323,7 @@ extension _NavNavigation on _NavigationPageState {
           firstStep != null &&
           (firstStep.modifier?.contains('uturn') == true ||
               firstStep.type == 'uturn');
-      if (isTurnBack) {
+      if (isTurnBack && _voiceOn && _voiceReady) {
         _voice.speak(
           'Không có đường đi tiếp, vui lòng quay đầu xe.',
           priority: VoiceGuide.priorityCritical,
@@ -328,10 +333,12 @@ extension _NavNavigation on _NavigationPageState {
       // keep the old route on failure — but TELL the driver so they know the
       // reroute didn't take and they must turn back.
       debugPrint('REROUTE: failed: $e — keeping the old route');
-      _voice.speak(
-        'Không tìm thấy đường đi tiếp, vui lòng quay lại.',
-        priority: VoiceGuide.priorityHigh,
-      );
+      if (_voiceOn && _voiceReady) {
+        _voice.speak(
+          'Không tìm thấy đường đi tiếp, vui lòng quay lại.',
+          priority: VoiceGuide.priorityHigh,
+        );
+      }
       if (mounted) {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
@@ -497,7 +504,10 @@ extension _NavNavigation on _NavigationPageState {
     // faint behind it so the driver sees where the road goes next. Resampled to
     // the ESP's parse cap (64) so it's never dropped.
     if (start + 1 < geometry.length) {
-      final cont = <LatLng>[geometry[start + 1], ...geometry.skip(start + 1)];
+      // `sublist(start + 1)` — NOT `<LatLng>[geometry[start + 1], ...skip(...)]`,
+      // which prepended the SAME point twice (index start+1 landed at both 0 and
+      // 1, a zero-length leading segment the board had to decode).
+      final cont = geometry.sublist(start + 1);
       if (cont.length > 1) {
         await _mapClock.sendFrame(
           buildMapRouteContFrame(_decimateRoute(cont, max: 64)),

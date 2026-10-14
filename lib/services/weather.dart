@@ -10,11 +10,36 @@ library;
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:http/http.dart' as http;
 
-/// Windy Point Forecast API key — from `--dart-define=WINDY_API_KEY` (.env).
-/// Empty = Windy disabled (the app falls back to the free sources).
-const String windyApiKey = String.fromEnvironment('WINDY_API_KEY');
+import 'package:navbridge/core/windy_key_store.dart';
+
+/// Build-time Windy Point Forecast key — `--dart-define=WINDY_API_KEY`, which
+/// `tool/env.sh` fills from `.env`.
+///
+/// This is only the DEV fallback now: a key pasted in Settings is stored
+/// encrypted on the device and WINS over this one (see [resolveWindyApiKey]),
+/// so trying a key no longer needs a rebuild. Empty = Windy disabled.
+const String windyApiKeyBuiltIn = String.fromEnvironment('WINDY_API_KEY');
+
+/// The Windy key in force: the encrypted on-device one if the user pasted one
+/// (Settings → Dẫn đường → Thời tiết), else the build-time define. Empty string
+/// = no key → [fetchWindyWeather] returns null and the chain falls through to
+/// METAR / Open-Meteo.
+Future<String> resolveWindyApiKey() async {
+  final stored = await WindyKeyStore.instance.read();
+  return pickWindyApiKey(stored: stored);
+}
+
+/// Which key wins. Pure, so the precedence (entered > built-in) is pinned by a
+/// test instead of being re-derived at every call site.
+@visibleForTesting
+String pickWindyApiKey({
+  String? stored,
+  String buildTime = windyApiKeyBuiltIn,
+}) =>
+    (stored != null && stored.trim().isNotEmpty) ? stored.trim() : buildTime;
 
 /// Current weather at a location. Nullable fields are null when the feed
 /// doesn't include them (or the call failed).
@@ -269,10 +294,50 @@ Future<List<Map<String, dynamic>>> _fetchMetarBatch() async {
 
 /// Real observed weather from the NEAREST reporting Vietnamese airport
 /// (METAR — measured, not a forecast model): actual temperature / wind /
-/// conditions. Free + keyless. Null when no station is reporting.
-Future<WeatherInfo?> fetchMetarWeather(double lat, double lng) async {
+/// conditions. Free + keyless. Null when no station is reporting WITHIN
+/// [maxMeters].
+///
+/// ⚠ A METAR describes the AIRPORT, not the road: twelve stations cover the
+/// whole country, so the nearest can be 300 km away (Pleiku → Đà Nẵng). Because
+/// the chain in [fetchBestWeather] ranks an observation above the forecasts,
+/// this used to win everywhere and show another province's temperature/wind.
+/// The radius is what keeps it a NEIGHBOURHOOD source (a driver near Tân Sơn
+/// Nhất gets the real thing; a driver in the highlands gets Open-Meteo).
+Future<WeatherInfo?> fetchMetarWeather(
+  double lat,
+  double lng, {
+  double maxMeters = kMetarMaxMeters,
+}) async {
   final batch = await _fetchMetarBatch();
-  if (batch.isEmpty) return null;
+  final best = nearestMetarWithin(batch, lat, lng, maxMeters: maxMeters);
+  if (best == null) return null;
+  final temp = (best['temp'] as num).toDouble();
+  final wdir = best['wdir'] is num ? (best['wdir'] as num).toDouble() : null;
+  final wspdKt = best['wspd'] is num ? (best['wspd'] as num).toDouble() : null;
+  return WeatherInfo(
+    tempC: temp,
+    feelsLikeC: temp, // METAR has no feels-like — use the measured temp
+    windKmh: wspdKt == null ? null : wspdKt * 1.852, // knots → km/h
+    windDir: wdir,
+    weatherCode: _metarWeatherCode(best),
+    source: 'METAR',
+  );
+}
+
+/// How far a METAR station may be and still describe where the car is. 60 km is
+/// the scale of a Vietnamese province — beyond it the observation is about a
+/// different climate, not about the road.
+const double kMetarMaxMeters = 60000;
+
+/// The station nearest [lat]/[lng] that is within [maxMeters], else null.
+/// Pure (no network), so the radius policy is unit-tested.
+@visibleForTesting
+Map<String, dynamic>? nearestMetarWithin(
+  List<Map<String, dynamic>> batch,
+  double lat,
+  double lng, {
+  double maxMeters = kMetarMaxMeters,
+}) {
   Map<String, dynamic>? best;
   var bestD = double.infinity;
   for (final m in batch) {
@@ -287,17 +352,7 @@ Future<WeatherInfo?> fetchMetarWeather(double lat, double lng) async {
       best = m;
     }
   }
-  if (best == null) return null;
-  final temp = (best['temp'] as num).toDouble();
-  final wdir = best['wdir'] is num ? (best['wdir'] as num).toDouble() : null;
-  final wspdKt = best['wspd'] is num ? (best['wspd'] as num).toDouble() : null;
-  return WeatherInfo(
-    tempC: temp,
-    feelsLikeC: temp, // METAR has no feels-like — use the measured temp
-    windKmh: wspdKt == null ? null : wspdKt * 1.852, // knots → km/h
-    windDir: wdir,
-    weatherCode: _metarWeatherCode(best),
-  );
+  return bestD <= maxMeters ? best : null;
 }
 
 int _cloudRank(String c) => switch (c) {
@@ -340,11 +395,29 @@ int? _metarWeatherCode(Map<String, dynamic> m) {
 }
 
 /// Current weather from Windy (GFS point forecast) when a key is configured.
-/// Returns null when there's no key or the call fails (callers fall back to
-/// the free sources). Wind is u/v components (m/s) → km/h + meteorological
-/// direction; the WMO [weatherWarnings] code feeds the existing emoji.
+/// Returns null when there's no key or the call fails, so the caller falls back
+/// to the METAR observation / Open-Meteo (see [fetchBestWeather]).
+///
+/// ⚠ Three things a LIVE call to `api.windy.com/api/point-forecast/v2` (model
+/// `gfs`) forced, all verified 2026-10-13 with the key from `.env`:
+///   1. `weatherWarnings` is NOT an allowed GFS parameter. Sending it 400s the
+///      ENTIRE request ("Invalid parameters provided. Allowed parameters for
+///      model 'gfs': [temp, dewpoint, precip, convPrecip, snowPrecip, wind,
+///      windGust, cape, ptype, lclouds, mclouds, hclouds, rh, gh, pressure]")
+///      — so this function returned null on every call and the priority chain
+///      silently fell through to the nearest airport's METAR. That is why the
+///      app looked like it "used METAR" while a Windy key was configured.
+///   2. `temp` comes back in KELVIN — the response says so in its `units` map
+///      (`{'temp-surface': 'K'}`). Reading it as °C showed the driver 299 °C.
+///      [windyInfoFromJson] converts whatever the `units` map claims.
+///   3. `past3hprecip` is in METRES (`{'past3hprecip-surface': 'm'}`) → ×1000
+///      for mm, which is what [WeatherInfo.precipMm] promises.
+/// The WMO code has to be DERIVED (the GFS endpoint has no weatherWarnings):
+/// from `ptype` (0 none, 1 rain, 2 snow, 3 freezing rain, 4 ice pellets) and,
+/// when it is dry, from cloud cover — otherwise a solid overcast reads "clear".
 Future<WeatherInfo?> fetchWindyWeather(double lat, double lng) async {
-  if (windyApiKey.isEmpty) return null;
+  final key = await resolveWindyApiKey();
+  if (key.isEmpty) return null;
   try {
     final res = await http
         .post(
@@ -354,73 +427,147 @@ Future<WeatherInfo?> fetchWindyWeather(double lat, double lng) async {
             'lat': lat,
             'lon': lng,
             'model': 'gfs',
+            // ONLY parameters the GFS model accepts — one rejected name 400s
+            // the whole call (see the doc above).
             'parameters': [
               'temp',
+              'dewpoint',
               'wind',
               'rh',
               'ptype',
               'lclouds',
               'mclouds',
               'hclouds',
-              'weatherWarnings',
               'precip',
+              'pressure',
             ],
             'levels': ['surface'],
-            'key': windyApiKey,
+            'key': key,
           }),
         )
         .timeout(const Duration(seconds: 12));
     if (res.statusCode != 200) return null;
-    final d = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-    final ts = (d['ts'] as List?)?.cast<num>();
-    if (ts == null || ts.isEmpty) return null;
-    // Index of the forecast point closest to now.
-    final now = DateTime.now().millisecondsSinceEpoch;
-    var idx = 0;
-    var bestD = double.infinity;
-    for (var i = 0; i < ts.length; i++) {
-      final dd = (ts[i].toDouble() - now).abs();
-      if (dd < bestD) {
-        bestD = dd;
-        idx = i;
-      }
+    final d = jsonDecode(utf8.decode(res.bodyBytes));
+    if (d is! Map) return null;
+    final doc = Map<String, dynamic>.from(d);
+    // The free/trial tier answers with real-looking values plus a `warning`
+    // ("The testing API version is for development purposes only. This data is
+    // randomly shuffled…"). Surface it once so a wrong-looking temperature can
+    // be traced to the tier instead of blamed on the parsing.
+    final warn = doc['warning'];
+    if (warn is String && warn.isNotEmpty) {
+      debugPrint('WEATHER: Windy API notice: $warn');
     }
-    double? at(String key) {
-      final arr = d[key] as List?;
-      if (arr == null || idx >= arr.length) return null;
-      final v = arr[idx];
-      return v is num ? v.toDouble() : null;
-    }
-
-    final u = at('wind_u-surface');
-    final v = at('wind_v-surface');
-    double? windKmh;
-    double? windDir;
-    if (u != null && v != null) {
-      windKmh = math.sqrt(u * u + v * v) * 3.6; // m/s → km/h
-      // Meteorological direction the wind comes FROM (0 = N).
-      windDir = (math.atan2(u, v) * 180 / math.pi + 180) % 360;
-    }
-    final wx = at('weatherwarnings-surface');
-    final ptype = at('ptype-surface');
-    final code = wx != null
-        ? wx.round()
-        : (ptype != null && ptype > 0)
-        ? (ptype >= 5 ? 71 : 61)
-        : null;
-    return WeatherInfo(
-      tempC: at('temp-surface'),
-      feelsLikeC: at('temp-surface'),
-      humidityPct: at('rh-surface'),
-      windKmh: windKmh,
-      windDir: windDir,
-      precipMm: at('past3hprecip-surface'),
-      weatherCode: code,
-      source: 'Windy',
+    return windyInfoFromJson(
+      doc,
+      nowMs: DateTime.now().millisecondsSinceEpoch,
     );
-  } catch (_) {
+  } catch (e) {
+    debugPrint('WEATHER: Windy failed: $e');
     return null;
   }
+}
+
+/// Map a Windy point-forecast document to a [WeatherInfo] for the point in time
+/// closest to [nowMs]. Pure, so the unit handling is pinned by a test built from
+/// a REAL response payload (see `test/unit/weather_test.dart`).
+@visibleForTesting
+WeatherInfo? windyInfoFromJson(
+  Map<String, dynamic> d, {
+  required int nowMs,
+}) {
+  final ts = (d['ts'] as List?)?.cast<num>();
+  if (ts == null || ts.isEmpty) return null;
+  // Index of the forecast point closest to now. The series commonly starts
+  // BEFORE now (Windy returns the model run's full span), so this is not 0.
+  var idx = 0;
+  var bestD = double.infinity;
+  for (var i = 0; i < ts.length; i++) {
+    final dd = (ts[i].toDouble() - nowMs).abs();
+    if (dd < bestD) {
+      bestD = dd;
+      idx = i;
+    }
+  }
+  final units = (d['units'] as Map?) ?? const {};
+
+  double? raw(String key) {
+    final arr = d[key] as List?;
+    if (arr == null || idx >= arr.length) return null;
+    final v = arr[idx];
+    return v is num ? v.toDouble() : null;
+  }
+
+  /// The response's own `units` map decides the conversion — never assume °C.
+  double? temp(String key) {
+    final v = raw(key);
+    if (v == null) return null;
+    return switch (units[key]) {
+      'K' => v - 273.15,
+      'F' => (v - 32) * 5 / 9,
+      _ => v,
+    };
+  }
+
+  /// Precip is metres for `past3hprecip`; [WeatherInfo.precipMm] is mm.
+  double? precipMm(String key) {
+    final v = raw(key);
+    if (v == null) return null;
+    return units[key] == 'm' ? v * 1000 : v;
+  }
+
+  final u = raw('wind_u-surface');
+  final v = raw('wind_v-surface');
+  double? windKmh;
+  double? windDir;
+  if (u != null && v != null) {
+    windKmh = math.sqrt(u * u + v * v) * 3.6; // m/s → km/h
+    // Meteorological direction the wind comes FROM (0 = N).
+    windDir = (math.atan2(u, v) * 180 / math.pi + 180) % 360;
+  }
+  return WeatherInfo(
+    tempC: temp('temp-surface'),
+    feelsLikeC: temp('temp-surface'),
+    humidityPct: raw('rh-surface'),
+    windKmh: windKmh,
+    windDir: windDir,
+    precipMm: precipMm('past3hprecip-surface'),
+    weatherCode: windyWmoCode(
+      ptype: raw('ptype-surface'),
+      cloudPct: [
+        for (final k in const [
+          'lclouds-surface',
+          'mclouds-surface',
+          'hclouds-surface',
+        ])
+          raw(k),
+      ],
+    ),
+    source: 'Windy',
+  );
+}
+
+/// Windy `ptype` (0 none, 1 rain, 2 snow, 3 freezing rain, 4 ice pellets) → an
+/// Open-Meteo WMO code, so the existing emoji/label keep working. Dry → the code
+/// says how cloudy it is (three cloud layers averaged), because "clear" under a
+/// solid overcast is worse than saying nothing.
+@visibleForTesting
+int windyWmoCode({double? ptype, List<double?> cloudPct = const []}) {
+  final p = ptype?.round() ?? 0;
+  if (p > 0) {
+    return switch (p) {
+      2 => 71, // snow
+      3 || 4 => 66, // freezing rain / ice pellets
+      _ => 61, // rain
+    };
+  }
+  final layers = cloudPct.whereType<double>().toList();
+  if (layers.isEmpty) return 0;
+  final avg = layers.reduce((a, b) => a + b) / layers.length;
+  if (avg >= 75) return 3; // overcast
+  if (avg >= 40) return 2; // partly cloudy
+  if (avg >= 12) return 1; // mainly clear
+  return 0; // clear
 }
 
 /// AccuWeather API key — real-time current conditions + 12-hour rain forecast.
@@ -428,7 +575,6 @@ Future<WeatherInfo?> fetchWindyWeather(double lat, double lng) async {
 /// ACCUWEATHER_API_KEY` (.env). Empty = AccuWeather disabled (the app uses
 /// Windy → METAR → Open-Meteo).
 const String accuWeatherApiKey = String.fromEnvironment('ACCUWEATHER_API_KEY');
-
 /// AccuWeather WeatherIcon (1–44) → Open-Meteo WMO code, so the existing
 /// emoji / merge / rain-ahead logic just works.
 int? _accuIconToWmo(int icon) {
@@ -571,8 +717,50 @@ Future<WeatherInfo?> fetchBestWeather(double lat, double lng) async {
     windKmh: primary.windKmh ?? om?.windKmh,
     windDir: primary.windDir ?? om?.windDir,
     precipMm: primary.precipMm ?? om?.precipMm,
-    weatherCode: primary.weatherCode ?? om?.weatherCode,
+    // ⭐ The CODE is decided separately from the rest: see [pickWeatherCode].
+    // Windy's code comes from a 3-hourly `ptype` and Open-Meteo's from the
+    // current hour, so letting the primary win it unconditionally would let a
+    // coarse "dry" reading silence a drizzle/storm the other source had
+    // already seen — and the rain start/stop announcements key on this.
+    weatherCode: pickWeatherCode([
+      primary.weatherCode,
+      windy?.weatherCode,
+      metar?.weatherCode,
+      om?.weatherCode,
+      accu?.weatherCode,
+    ]),
     rainProb: om?.rainProb,
     source: primary.source,
   );
+}
+
+/// Whether a WMO code means PRECIPITATION of any kind (rain, drizzle, showers,
+/// snow, thunderstorm) — the codes that make the weather "actionable".
+///
+/// Wider than the announcement's rain test on purpose: this one decides which
+/// source describes the sky, and a snow code must not be dropped just because
+/// the sentence says "mưa".
+bool isPrecipCode(int? code) =>
+    code != null &&
+    ((code >= 51 && code <= 67) ||
+        (code >= 71 && code <= 77) ||
+        (code >= 80 && code <= 86) ||
+        code >= 95);
+
+/// The WMO code to publish, [codes] ordered by authority (the source the
+/// temperature came from first).
+///
+/// A source that reports PRECIPITATION wins over a drier reading — a false
+/// negative loses the rain alert entirely, while a false positive costs one
+/// sentence. When nothing reports precipitation the first non-null code stands
+/// (the authority's), so the common case is unchanged. Pure + unit-tested.
+@visibleForTesting
+int? pickWeatherCode(Iterable<int?> codes) {
+  int? first;
+  for (final c in codes) {
+    if (c == null) continue;
+    first ??= c;
+    if (isPrecipCode(c)) return c;
+  }
+  return first;
 }

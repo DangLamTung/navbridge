@@ -867,14 +867,19 @@ void main() {
 
         // ---- case: the layer is authority, but not above the mô tô form ceiling ----
         (() {
-            // Same street, hai chiều: the law gives a mô tô 50 in town, so a 60
+            // A TAGGED hai chiều street: the law gives a mô tô 50 in town, so a 60
             // layer value is capped — the class no longer decides (that was the
             // Ấp Bắc bug), the road FORM does.
+            //
+            // `oneway: false` is the point: the form must be genuinely KNOWN
+            // for this cap to apply. Reading a missing tag as "hai chiều" is a
+            // guess, and a guess is what made the chip swap 60↔50 on Lũy Bán
+            // Bích (see the next case).
             final road = roadInfoFromRoad(
               name: 'Tân Thành',
               highway: 'tertiary',
               vehicle: 'motorbike',
-              divided: false,
+              oneway: false,
               urban: true,
             );
             final posted = applyPostedLayer(
@@ -886,6 +891,50 @@ void main() {
             expect(posted.speedLimit, 50);
             expect(posted.src, srcWazePoint);
             expect(posted.fromLayer, isTrue);
+
+        })();
+
+
+        // ---- case: an UNKNOWN road form must not be guessed into a 50 ----
+        (() {
+            // Lũy Bán Bích, 2026-10-13 08:28 drive. The phone's graph carries
+            // neither `oneway` nor `lanes` and never sends `divided`, so the form
+            // is not known — and the street's Waze layer says 60 on every fix.
+            // Assuming hai chiều capped it to 50 and the two publishers then
+            // alternated 60↔50 for 1.0 km (38 transitions). The zone ceiling is
+            // the honest answer, exactly as the next-street callout already
+            // used it (nav_voice.dart passes `formKnown: false` for the same
+            // reason).
+            final road = roadInfoFromRoad(
+              name: 'Lũy Bán Bích',
+              highway: 'secondary',
+              vehicle: 'motorbike',
+              urban: true,
+            );
+            expect(road.formKnown, isFalse); // nothing to know it FROM
+            final posted = applyPostedLayer(
+              road,
+              kmh: 60,
+              vehicle: 'motorbike',
+              layerSrc: srcSegment,
+            );
+            expect(posted.speedLimit, 60);
+            expect(posted.src, srcSegment);
+
+            // ⭐ …and it must STAY 60 when the same road is handed back in, i.e.
+            // the layer correction (_correctSpeedFromWazeInner) and the road
+            // refresh (_withPostedLayer) agree. This is the flap: the published
+            // road must not come back as a "known two-way".
+            final again = applyPostedLayer(
+              posted,
+              kmh: 60,
+              vehicle: 'motorbike',
+              layerSrc: srcSegment,
+              name: 'Lũy Bán Bích',
+              inTown: true,
+            );
+            expect(again.speedLimit, 60);
+            expect(again.formKnown, isFalse);
 
         })();
 

@@ -23,6 +23,14 @@ class PipService {
   /// compact PiP layout when it flips on.
   final ValueNotifier<bool> isPipMode = ValueNotifier(false);
 
+  /// True while the app shares the screen with another app (Android split
+  /// screen / freeform). Pushed on `onMultiWindowModeChanged`. A split window
+  /// gets the SAME compact layout as PiP — the full banner + speed dial +
+  /// alert bar do not fit a half-height window — and the native side refuses to
+  /// AUTO-enter PiP while it is set, so a split is never yanked into a floating
+  /// window.
+  final ValueNotifier<bool> isMultiWindow = ValueNotifier(false);
+
   /// Whether the device supports PiP (Android 8+, hardware feature). Cached
   /// after the first check.
   bool? _supported;
@@ -31,11 +39,14 @@ class PipService {
   /// (the nav page calls this from its [State.initState]).
   void init() {
     _channel.setMethodCallHandler((call) async {
+      final args = call.arguments as Map?;
+      final active = args?.containsKey('active') == true
+          ? args!['active'] as bool?
+          : null;
       if (call.method == 'onPipChanged') {
-        final active = (call.arguments as Map?)?.containsKey('active') == true
-            ? (call.arguments! as Map)['active'] as bool?
-            : null;
         isPipMode.value = active ?? false;
+      } else if (call.method == 'onMultiWindowChanged') {
+        isMultiWindow.value = active ?? false;
       }
     });
   }

@@ -4,7 +4,96 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
-## 1.1.5 — 2026-10-12 (build 4012)
+## 1.1.6 — 2026-10-14 (build 4013)
+
+**The driven part of the route clears as you drive it.** The route line's
+rebuild key did not include the car's own position, so the line was only re-cut
+when the consumed *vertex* index changed — on a long or sparse segment the part
+already driven stayed drawn behind the car. The key now carries the position
+quantised to ~11 m, so the consumed line is removed on the fix.
+
+**A limit no longer survives leaving the road it came from.** The posted-value
+hold is gone from both writers. On a layer MISS the road name falls back to the
+previous one, so the hold's same-road test was a tautology — it was really only
+a 300 m timer, and it kept a posted 60 alive on a road the layer knows nothing
+about. Reproduced on Luỹ Bán Bích → Thống Nhất (no per-segment coverage, dial
+stuck at 60 for the whole street).
+
+**Voice clips obey the speaking-rate setting.** `playAsset` accepted a `speed`
+argument and dropped it, so every recorded clip played at 1.0× while the TTS
+sentences used the user's rate — the two never matched. The rate is now applied
+after `prepare()` (the decoder must be configured first) and guarded, so a rate
+the decoder rejects falls back to 1.0× instead of silencing the announcement.
+
+**A deliberate multi-window declaration.** `resizeableActivity` on the activity,
+no `screenOrientation` or `taskAffinity` lock, `allow_multiple_resumed_activities`,
+and a `<layout>` giving the freeform window its minimum size — so a window
+rearrangement neither recreates the activity nor restarts navigation, and PiP
+and split share the compact layout. Known limit: the stock ROM on the TB331FC
+still greys out its own "Floating Window" / "Split Screen" menu entries for this
+app. That gate is inside ZUI; no manifest declaration changes it.
+
+**A hai chiều street is no longer read as a đường đôi.** The on-device graph
+carries no `oneway` and no `lanes` encoded value, so the road FORM was unknown
+for every street and the ceiling fell back to the zone one — 60 in town even
+where a mô tô may only do 50. `car_access` *is* stored, per direction, and
+"exactly one direction open" is precisely a one-way way (which is also how a
+divided road is mapped, one way per carriageway). The form now comes from that
+pair, so a genuine hai chiều street caps at 50 again and a đường đôi keeps 60.
+Verified against the shipped graph with `tools/ProbeOneway.java`.
+
+**Settings → Dẫn đường → "Nguồn hướng" picks where the heading comes from.**
+"Điện thoại" uses the heading the receiver reports with each fix, which exists
+below the 2 m of movement the travel bearing needs — the case stop-and-go traffic
+creates, and the one the posted-limit segment layer needs a direction for. The
+same heading now reaches the graph snap, so crossing a junction no longer flashes
+the name and limit of the cross street that happened to be a few metres nearer.
+
+**Spoken announcements can be turned off for good.** Settings → Giọng nói →
+"Đọc thông báo khi dẫn đường" — the same value the nav screen's speaker button
+and the "tắt tiếng" voice command write — is now persisted, so a drive armed in
+silence stays silent instead of having to be re-toggled. It gates *every*
+guidance path, including the camera sentences, which was the one path that never
+checked it. The replay harness can arm both with `?voice=off` / `?heading=phone`.
+
+**A Windy key can be pasted in Settings, and the weather chain was fixed.**
+The key is stored encrypted on the device (the build-time `--dart-define` stays
+as the dev fallback), so trying one no longer needs a rebuild. Three live bugs
+went with it: `weatherWarnings` is not an allowed GFS parameter and 400'd the
+whole call — which is why Windy never answered while a key was configured —
+`temp` arrives in kelvin and was read as °C (299 °C on screen), and
+`past3hprecip` arrives in metres. METAR is now a *neighbourhood* source: a
+station more than 60 km away no longer outranks the forecast, which is how a
+driver in the highlands was shown another province's weather. The WMO code is
+voted across the sources, so a precipitation reading is not silenced by a drier
+one from a coarser source.
+
+### Internal
+
+- `street_baseline_test.dart` + `test/data/street_baseline.json`: a functional
+  golden that replays every bundled trip through the real limit cascade and
+  asserts each street's limit, source and spoken callout. The first run writes
+  the golden, later runs compare against it.
+- `tool/install.sh` launches with the real launcher intent
+  (`ACTION_MAIN` + `CATEGORY_LAUNCHER`) instead of `monkey`/`am start -n`. A bare
+  component intent produces a task the ROM does not classify as a launcher task,
+  and `singleTop` then reuses that task for every later launch.
+- Lifetime fixes found by audit: the BLE map clock and BLE link controller cancel
+  and null their subscriptions before closing the controllers, the overlay TTS
+  handle is awaited on dispose, the overlay segment index dedupes duplicate
+  candidates, and the route-send continuation no longer re-emits the first point.
+- `tool/oneway_street_audit.py` + `tool/drop_oneway_signs.py`: the generated
+  "đường một chiều" signs were placed on plainly two-way divided arterials (WME
+  stores a divided road as two one-way carriageways), so the pack is stripped of
+  them until the predicate is right. `tools/signs/build_oneway_signs.py` no
+  longer trusts the per-segment flag alone — the whole street must be one-way —
+  and now also rejects runs outside Vietnam.
+- The track-sim feed is cancelled on `dispose` (leaving the page mid-simulation
+  kept firing the GPS callback for the life of the isolate), `setNavState` is
+  `mounted`-guarded, and the sim-arm overrides (`?voice=` / `?heading=`) are
+  dropped as soon as the settings screen hands back a new choice.
+
+## 1.1.5 — 2026-10-14 (build 4012)
 
 **Offline routing works on a fresh install.** A route planned in the first
 second after launch could see the on-device graph as "not loaded" and fail with

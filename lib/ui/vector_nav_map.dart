@@ -1367,16 +1367,29 @@ class _VectorNavMapState extends State<VectorNavMap>
   }
 
   /// Stable signature of the drawn route: how much has been consumed (start
-  /// index) + full geometry length + destination. Changes only when the car
-  /// passes a route vertex (more gets consumed) or a brand-new route is set —
-  /// NOT every GPS fix (the consumed start point moves continuously and the
-  /// drawn line only needs rebuilding when the vertex list actually changes).
+  /// index) + full geometry length + destination + the car's own (coarse)
+  /// position.
+  ///
+  /// ⭐ The CAR TOKEN is what keeps the drawn line in step with the puck. The
+  /// line starts at the car ([_drawnRoute] prepends `widget.current`), so it has
+  /// to be rebuilt as the car MOVES — not only when it crosses a route VERTEX
+  /// (`routeStartIndex`). Without it the line's first point stayed frozen
+  /// between vertices, so on a long segment (highway / bridge / rural straight,
+  /// where vertices are sparse) the stretch already driven kept drawing until
+  /// the next vertex — the "the path we have been through is not deleted" lag.
+  /// Quantised to ~1e-4° (≈11 m) so the rebuild follows real movement (≈1 Hz at
+  /// city speed) instead of every GPS jitter.
   String _routeSignature() {
     final g = widget.routeGeometry;
     if (g.isEmpty) return '';
     final last = g.last;
+    final c = widget.current;
+    final carTok = c == null
+        ? ''
+        : '${(c.latitude * 1e4).round()},${(c.longitude * 1e4).round()}';
     return '${widget.routeStartIndex}|${g.length}|'
-        '${last.latitude.toStringAsFixed(5)},${last.longitude.toStringAsFixed(5)}';
+        '${last.latitude.toStringAsFixed(5)},${last.longitude.toStringAsFixed(5)}|'
+        '$carTok';
   }
 
   /// POI markers (colored dot + name label). Rebuilt when the list changes.

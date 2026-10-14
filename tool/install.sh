@@ -34,7 +34,20 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do
   if "${ADB[@]}" install -r -d "$APK"; then
     echo "INSTALL OK"
     "${ADB[@]}" shell am force-stop com.navbridge.app 2>/dev/null
-    "${ADB[@]}" shell monkey -p com.navbridge.app -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
+    # Launch with the REAL launcher intent (ACTION_MAIN + CATEGORY_LAUNCHER),
+    # NOT `am start -n pkg/.Activity` and NOT monkey.
+    #
+    # A bare component intent creates a task whose BASE intent carries no
+    # action/category. Lenovo ZUI's freeform code classifies such a task with
+    # `isLauncherApp == false` (see OVFeatureUtils / the ovfreeform service) and
+    # then greys out "Floating Window" and "Split Screen" in the window menu.
+    # Because MainActivity is launchMode=singleTop, every later launch just
+    # re-fronts that same poisoned task, so the app stays un-floatable until the
+    # task is cleared — which is why the app looked "not splittable" while the
+    # HUD camera app (started from the launcher, correct base intent) was fine.
+    "${ADB[@]}" shell am start -a android.intent.action.MAIN \
+      -c android.intent.category.LAUNCHER \
+      -n com.navbridge.app/.MainActivity >/dev/null 2>&1
     echo "LAUNCHED"
     exit 0
   fi

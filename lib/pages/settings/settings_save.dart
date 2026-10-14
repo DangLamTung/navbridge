@@ -63,6 +63,8 @@ AppSettings snapshotSettings() => AppSettings(
   lastBleName: lastBleName,
   lastBleType: lastBleType,
   gpsFilterStrength: gpsFilterStrength,
+  headingSource: headingSource,
+  voiceAnnouncements: voiceAnnouncements,
   aiCustomPrompt: aiCustomPrompt,
   aiPlaceSuggestions: aiPlaceSuggestions,
   ttsSpeechRate: ttsSpeechRate,
