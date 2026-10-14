@@ -80,6 +80,22 @@ class TripFix {
   final int? lanes;
   final bool? divided;
 
+  /// Whether the road FORM was genuinely known ([RoadInfo.formKnown]) — the flag
+  /// that decides WHICH ceiling a posted limit is clamped by: the form's
+  /// ([vehicleCeiling]: 50 hai chiều / 60 đường đôi for a mô tô in town) or, when
+  /// the form is unknown, the ZONE ceiling ([vehicleZoneCeiling]: 60).
+  ///
+  /// ⭐ Without it a recorded limit is NOT re-derivable. Audited 2026-10-14 on
+  /// the 08:47 drive: 33 fixes on Lũy Bán Bích published 60 while the logged
+  /// form (residential / two-way / no lanes, in town) derives a ceiling of 50 —
+  /// and the recording could not say whether the ceiling had been skipped (a
+  /// real defect: advising 60 on a 50 road) or the form was honestly UNKNOWN
+  /// (60 is then the rule's intended answer). The layer-rename path copies the
+  /// previous road's [highway]/[oneway]/[lanes]/[divided] and sets
+  /// `formKnown: false`, so those carried-over tags read as a two-way road
+  /// unless this flag is recorded next to them.
+  final bool? formKnown;
+
   /// True when the built-up ("khu đông dân cư") rule chose the value — the
   /// POI-density test said town and nothing was posted, so the road-FORM limit
   /// applied (50 hai chiều / 60 đường đôi) instead of the rural class default.
@@ -111,6 +127,7 @@ class TripFix {
     this.lanes,
     this.divided,
     this.urban,
+    this.formKnown,
     this.routeName,
   });
 
@@ -137,6 +154,10 @@ class TripFix {
       if (lanes != null) 'lanes': lanes,
       if (divided != null) 'divided': divided,
       if (urban != null) 'urban': urban,
+      // ⭐ Carried so the CEILING a limit was clamped by can be re-derived: the
+      // form's (50/60 in town for a mô tô) or the zone's (60) when the form is
+      // unknown. See [formKnown].
+      if (formKnown != null) 'formKnown': formKnown,
       if (routeName != null) 'routeName': routeName,
       'activity': [
         {
@@ -374,6 +395,7 @@ class TripLogger {
     int? lanes,
     bool? divided,
     bool? urban,
+    bool? formKnown,
     String? routeName,
     /// The FIX's own time. Defaults to the wall clock, which is right for a real
     /// drive (they are the same thing) and WRONG for a simulation played faster
@@ -413,6 +435,7 @@ class TripLogger {
         lanes: lanes,
         divided: divided,
         urban: urban,
+        formKnown: formKnown,
         routeName: routeName,
       ),
     );

@@ -4,6 +4,56 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
+## 1.1.7 — 2026-10-14 (build 4014)
+
+**The basemap you pick wins over the cache again.** Reported from the device:
+*"my map still fallback to using the carto even when have the network"*. The
+disk cache was consulted BEFORE the online fetch in both tile paths, and the
+cross-source caches hold imagery from a DIFFERENT provider than the one you
+selected — so the bundled `overview` pack (z0-z8, captured from CARTO) was what
+an OSM or vector selection rendered at those zooms, online or not. Order is now:
+the selected source's own cache (same provider, so it still saves the request)
+→ online fetch → the cross-source caches → transparent. The same reorder applies
+to the browse map, where `source == 'osm'` also used to fall back to the `carto`
+directory (bulk region downloads are CARTO) and where a missing tile was
+synthesized from a CARTO ancestor.
+
+**The bundled overview map no longer carries CARTO's stamp.** Every tile in the
+shipped pack was stamped "API KEY REQUIRED — carto.com/basemaps" and no build
+ever had a CARTO key: measured, `.../voyager/8/203/120.png` answers **2 049 B**
+without a key and **20 325 B** with one, and `release.yml` was not passing
+`CARTO_API_KEY` at all. The pack is regenerated from keyed CARTO (same imagery,
+no stamp) and the key is now a release secret.
+
+**A recording says WHICH ceiling clamped its limit.** The trip log carried
+`oneway`/`lanes`/`divided`, but not `RoadInfo.formKnown` — the flag that decides
+whether a posted value is clamped by the road form's ceiling (50 hai chiều / 60
+đường đôi for a mô tô in town) or by the ZONE ceiling (60) when the form is
+unknown. Auditing the 2026-10-14 08:47 drive against the app's own
+`vehicleCeiling` left 33 fixes on Lũy Bán Bích that published 60 while the form
+logged for them (residential, two-way, no lanes) derives 50 — and the recording
+could not say whether the ceiling had been skipped or the form was honestly
+unknown. The layer-rename path copies the previous road's tags and marks the form
+unknown, so those carried-over tags read as a two-way road unless this flag is
+recorded next to them. It is now, and the log schema test pins both directions.
+
+### Internal
+
+- `tool/build_overview_tiles.py`: rebuilds the overview pack from
+  `--provider osm|esri-street|carto`, reproducing the pack's EXACT (z,x,y) set so
+  only the imagery can change. It refuses to write when a provider is not really
+  serving tiles: it fingerprints OSM's "Access blocked" page (which arrives as
+  **HTTP 200 with valid PNG magic**, 6 987 B — OSM blocked this machine's IP on
+  the first attempt, and all 171 fetches were that page) and CARTO's
+  "API KEY REQUIRED" placeholder, rejects non-images, and aborts when under 90%
+  of the CONTENT tiles are distinct. Blank tiles are not failures: open sea
+  legitimately encodes as a ~103-byte 1-bit PNG, so they are reported (38 of 171)
+  and excluded from that ratio.
+- The street-baseline golden now SKIPS when `assets/trips/index.json` is absent
+  instead of throwing `PathNotFoundException` — `assets/trips/` is not in git
+  (and `tool/stub_assets.sh` does not recreate it), so CI went red on 1.1.6 while
+  every dev machine passed.
+
 ## 1.1.6 — 2026-10-14 (build 4013)
 
 **The driven part of the route clears as you drive it.** The route line's

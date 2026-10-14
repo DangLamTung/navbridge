@@ -140,6 +140,12 @@ void main() {
         lanes: 2,
         divided: false,
         urban: true,
+        // ⭐ The flag that says WHICH ceiling clamped the value above: the
+        // form's (50/60 in town) or the zone's (60) when the form is unknown.
+        // A carried-over form (the layer-rename path copies the previous
+        // road's tags) reads as a two-way road without it — see the 33-fix
+        // ambiguity audited on the 2026-10-14 08:47 drive.
+        formKnown: false,
       );
       t.finish();
       final loc =
@@ -153,6 +159,7 @@ void main() {
       expect(loc['lanes'], 2);
       expect(loc['divided'], isFalse);
       expect(loc['urban'], isTrue);
+      expect(loc['formKnown'], isFalse);
     });
 
     test('omits decision inputs that were unknown', () {
@@ -165,6 +172,7 @@ void main() {
       expect(loc.containsKey('vehicle'), isFalse);
       expect(loc.containsKey('urban'), isFalse);
       expect(loc.containsKey('limitLayer'), isFalse);
+      expect(loc.containsKey('formKnown'), isFalse);
     });
 
     test('tripDateLabel formats date as DD/MM/YYYY', () {

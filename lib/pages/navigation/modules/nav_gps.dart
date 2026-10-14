@@ -1535,6 +1535,13 @@ extension _NavGps on _NavigationPageState {
       lanes: r?.lanes,
       divided: r?.divided,
       urban: r?.urban,
+      // ⭐ WHICH CEILING the value above was clamped by. `oneway`/`lanes`/
+      // `divided` alone cannot say: the layer-rename path copies the previous
+      // road's tags and marks the form UNKNOWN, and an unknown form is clamped
+      // by the ZONE ceiling (60 for a mô tô in town) rather than the form's 50.
+      // Recorded, an audited trip can tell "the ceiling was skipped" from "we
+      // never knew the form" — see the 33-fix ambiguity on Lũy Bán Bích.
+      formKnown: r?.formKnown,
       // ⭐ The REAL fix accuracy in metres. It was NOT passed, so TripLogger's
       // default (`accuracyM = 10`) was written for EVERY fix — the recording
       // then claims a constant 10 m and cannot answer "how good was the fix
