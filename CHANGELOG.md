@@ -4,7 +4,32 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
-## 1.1.7 — 2026-10-14 (build 4014)
+## 1.1.7 — 2026-10-14 (build 4015)
+
+**The layer you pick is remembered, and the vector map is always underneath.**
+Three follow-ups found by driving 1.1.7, all in the map's fallback chain:
+
+- The basemap layer was per-session page state, so the layer menu's choice was
+  thrown away on every launch — pick OpenStreetMap, restart, and the offline map
+  came back (*"map osm still not show when start"*). It is saved with the other
+  nav preferences now, and an id this build does not know falls back to `offline`
+  rather than leaving the basemap blank.
+- The vector archive is the base for **every** layer, not only for
+  `offline`/`vector`. Picking an online layer used to render raster-only, so the
+  30 MB archive the app carries went unused — and when that layer was
+  rate-limited, blocked or simply unreachable there was nothing underneath it: an
+  empty map. The picked layer draws BELOW the vector layers now, so it shows
+  through where the vector has no data and the vector map is what remains when the
+  layer cannot be fetched at all.
+- The `osm` source had no fallback servers on purpose (mirrors label in their own
+  language), so an OSM rate limit or IP block left the map blank — and OSM does
+  block: a bulk pack fetch got this network banned. `tile.openstreetmap.de` and
+  `openstreetmap.fr` are tried after the primary now, and the detector that
+  triggers the failover was broken in **both** directions: OSM's "Access blocked"
+  page is a 6 997-byte 256x256 PNG, over the old 3 000-byte guard, so it was never
+  detected and the app *drew it as the map*, while a genuinely empty tile
+  (~103 bytes) was flagged as a block and marked the server blocked over open sea.
+  The size band (4-40 KB) separates them.
 
 **The basemap you pick wins over the cache again.** Reported from the device:
 *"my map still fallback to using the carto even when have the network"*. The
