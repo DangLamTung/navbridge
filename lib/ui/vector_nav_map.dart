@@ -759,15 +759,25 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// The style JSON string with (or without) 3D terrain, depending on
   /// [widget.terrain3D] and whether offline DEM data exists.
   String _buildStyleString() {
-    // The on-device vector archive is the map for the OFFLINE source and for the
-    // explicit 'vector' choice. Every named raster source (osm/esri/topo/carto…)
-    // renders raster-only, so the driver sees exactly the layer they picked.
+    // ⭐ THE VECTOR ARCHIVE IS THE BASE whenever it is on the device — not only
+    // for 'offline' / 'vector'.
     //
-    // Gating this on 'vector' alone is what made an 'offline' selection render a
-    // raster-only style with no templates — i.e. an empty map.
-    final wantsVector =
-        widget.tileSource == 'vector' || widget.tileSource == 'offline';
-    if (_baseStyle == null || !wantsVector) {
+    // This used to be gated on those two ids: every named raster source
+    // (osm / esri / topo / carto …) rendered RASTER-ONLY, so the 30 MB archive
+    // the app carries went UNUSED the moment an online layer was picked — and if
+    // that layer was rate-limited, blocked or simply unreachable (OSM blocks; the
+    // device drops off the network) there was nothing underneath it. An empty
+    // map. (user, 2026-10-14: "this must be default fallback if everything else
+    // not worked".)
+    //
+    // Now the picked layer renders as the raster basemap BELOW the vector layers:
+    // it shows through wherever the vector has no data (outside its coverage,
+    // zoomed out), and the vector map — which paints its own background, landuse
+    // and water — is what is left when the layer cannot be fetched at all. The
+    // map can no longer come up empty.
+    if (_baseStyle == null) {
+      // No archive on this device: the picked (online / cached) raster layer is
+      // all there is, which is the pre-download state.
       return _rasterFallbackStyle();
     }
     final style = applyTerrainToStyle(
