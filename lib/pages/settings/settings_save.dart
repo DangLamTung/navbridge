@@ -65,6 +65,7 @@ AppSettings snapshotSettings() => AppSettings(
   gpsFilterStrength: gpsFilterStrength,
   headingSource: headingSource,
   voiceAnnouncements: voiceAnnouncements,
+  basemapLayer: basemapLayer,
   aiCustomPrompt: aiCustomPrompt,
   aiPlaceSuggestions: aiPlaceSuggestions,
   ttsSpeechRate: ttsSpeechRate,

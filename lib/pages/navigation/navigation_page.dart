@@ -821,12 +821,19 @@ class _NavigationPageState extends State<NavigationPage>
   /// menu). The local tile server sends a proper User-Agent and re-encodes
   /// every tile to PNG, so OSM/CARTO/ESRI all load even on MapLibre builds
   /// that reject the provider's raw HTTP tiles.
-  void _setTileSource(String next) {
+  void _setTileSource(String next, {bool persist = true}) {
     if (_tileSource == next) return;
     setNavState(() {
       _tileSource = next;
       _tileProvider = OfflineTileProvider(source: next);
     });
+    // ⭐ PERSIST the choice. It used to live only in this page's state, so the
+    // layer menu's selection was thrown away on every launch: the driver picked
+    // OpenStreetMap and the next start drew the offline map again (reported as
+    // "map osm still not show when start").
+    if (!persist) return; // a load, not a choice — do not re-save
+    basemapLayer = next;
+    unawaited(saveAllSettings());
   }
 
   // --- multi-stop plan ---
@@ -1747,6 +1754,9 @@ class _NavigationPageState extends State<NavigationPage>
         _ => RouteProfile.car,
       };
       geocodingProvider = s.geocodingProvider;
+      // The basemap layer the layer menu last chose (persisted — see
+      // [_setTileSource]); 'offline' on a fresh install.
+      _setTileSource(s.basemapLayer, persist: false);
       routingEngine = s.routingEngine;
       smoothCamera = s.smoothCamera;
       simpleMode = s.simpleMode;

@@ -45,6 +45,17 @@ class AppSettings {
   ///            even below the 2 m threshold.
   final String headingSource;
 
+  /// Which BASEMAP LAYER the map draws: 'offline' (the default — the on-device
+  /// vector archive plus the bundled overview tiles, nothing fetched), or one of
+  /// the online layers ('osm', 'carto', 'carto-light', 'carto-dark', 'topo',
+  /// 'esri', 'esri-street', 'vietmap', 'vietmapsat', 'vector').
+  ///
+  /// ⭐ It used to be per-session page state, so the layer menu's choice was
+  /// thrown away on every launch: the driver picked OpenStreetMap, and the next
+  /// start drew the offline map again — reported as "map osm still not show when
+  /// start". Saved with the rest of the nav preferences now.
+  final String basemapLayer;
+
   /// Rain-radar overlay on the map (RainViewer, free/no key).
   final bool radar;
 
@@ -192,6 +203,7 @@ class AppSettings {
     this.cameraAlerts = true,
     this.gpsFilter = true,
     this.headingSource = 'travel',
+    this.basemapLayer = 'offline',
     this.radar = false,
     this.pipAspect = '34',
     this.ridingMode = false,
@@ -237,6 +249,7 @@ class AppSettings {
     'cameraAlerts': cameraAlerts,
     'gpsFilter': gpsFilter,
     'headingSource': headingSource,
+    'basemapLayer': basemapLayer,
     'navSpeedStyle': navSpeedStyle,
     'alertBarCount': alertBarCount,
     'navBannerBottom': navBannerBottom,
@@ -282,6 +295,7 @@ class AppSettings {
     bool? cameraAlerts,
     bool? gpsFilter,
     String? headingSource,
+    String? basemapLayer,
     bool? radar,
     String? pipAspect,
     bool? ridingMode,
@@ -326,6 +340,7 @@ class AppSettings {
       cameraAlerts: cameraAlerts ?? this.cameraAlerts,
       gpsFilter: gpsFilter ?? this.gpsFilter,
       headingSource: headingSource ?? this.headingSource,
+      basemapLayer: basemapLayer ?? this.basemapLayer,
       navSpeedStyle: navSpeedStyle ?? this.navSpeedStyle,
       alertBarCount: alertBarCount ?? this.alertBarCount,
       navBannerBottom: navBannerBottom ?? this.navBannerBottom,
@@ -397,6 +412,27 @@ String gpsFilterStrength = 'standard';
 /// 'travel' (bearing between the last two fixes, the default) | 'phone' (use
 /// the heading the receiver reports for each fix). See [AppSettings].
 String headingSource = 'travel';
+
+/// The basemap layer the layer menu last chose (see [AppSettings.basemapLayer]).
+/// 'offline' = the on-device map; the rest are online raster/vector layers.
+String basemapLayer = 'offline';
+
+/// Every layer id the map can be asked for. The point of the list is that a
+/// hand-edited settings file (or an id this build no longer ships) falls back to
+/// the offline map instead of leaving the basemap blank.
+const Set<String> kBasemapLayers = <String>{
+  'offline',
+  'osm',
+  'carto',
+  'carto-light',
+  'carto-dark',
+  'topo',
+  'esri',
+  'esri-street',
+  'vietmap',
+  'vietmapsat',
+  'vector',
+};
 
 /// Spoken turn-by-turn announcements on/off (see [AppSettings.voiceAnnouncements]).
 bool voiceAnnouncements = true;
@@ -494,6 +530,9 @@ Future<AppSettings> _loadSettingsOnce() async {
     // JSON cannot leave the heading undefined.
     final rawHeadingSrc = (j['headingSource'] ?? 'travel') as String;
     final headingSrc = rawHeadingSrc == 'phone' ? 'phone' : 'travel';
+    // Only ids this build actually draws; anything else is the offline map.
+    final rawLayer = (j['basemapLayer'] ?? 'offline') as String;
+    final layer = kBasemapLayers.contains(rawLayer) ? rawLayer : 'offline';
     final customPrompt = (j['aiCustomPrompt'] ?? '') as String;
     final placeSuggestions = (j['aiPlaceSuggestions'] ?? true) as bool;
     final speechRate = ((j['ttsSpeechRate'] ?? 0.55) as num).toDouble().clamp(
@@ -517,6 +556,7 @@ Future<AppSettings> _loadSettingsOnce() async {
     gpsFilterStrength = gpsStrength;
     headingSource = headingSrc;
     voiceAnnouncements = voiceOns;
+    basemapLayer = layer;
     aiCustomPrompt = customPrompt;
     aiPlaceSuggestions = placeSuggestions;
     ttsSpeechRate = speechRate;
@@ -536,6 +576,7 @@ Future<AppSettings> _loadSettingsOnce() async {
       cameraAlerts: (j['cameraAlerts'] ?? true) as bool,
       gpsFilter: (j['gpsFilter'] ?? true) as bool,
       headingSource: headingSrc,
+      basemapLayer: layer,
       navSpeedStyle: (j['navSpeedStyle'] ?? 'dial') as String,
       alertBarCount: (j['alertBarCount'] ?? 3) as int,
       navBannerBottom: (j['navBannerBottom'] ?? false) as bool,
@@ -598,6 +639,7 @@ Future<void> saveSettings(AppSettings s) async {
     gpsFilterStrength = s.gpsFilterStrength;
     headingSource = s.headingSource;
     voiceAnnouncements = s.voiceAnnouncements;
+    basemapLayer = s.basemapLayer;
     aiCustomPrompt = s.aiCustomPrompt;
     aiPlaceSuggestions = s.aiPlaceSuggestions;
     ttsSpeechRate = s.ttsSpeechRate;
