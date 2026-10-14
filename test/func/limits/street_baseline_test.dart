@@ -45,6 +45,17 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('per-street limits and callouts match the captured baseline', () async {
+    // ⭐ The bundled trips are NOT in git (`assets/trips/` is staged locally by
+    // tool/sim_trips.py, and tool/stub_assets.sh does not recreate them), so a
+    // clean checkout — CI — has no index to replay. SKIP, do not fail the build:
+    // the same guard as test/func/trip/limit_flap_test.dart. Reading it blind
+    // threw PathNotFoundException on CI while passing on every dev machine.
+    final indexFile = File(_indexPath);
+    if (!indexFile.existsSync()) {
+      markTestSkipped('$_indexPath is not in this checkout');
+      return;
+    }
+
     await loadOfflineSpeedLimits();
     if (!speedLimitsPopulated) {
       markTestSkipped(
@@ -53,7 +64,7 @@ void main() {
       return;
     }
 
-    final index = jsonDecode(File(_indexPath).readAsStringSync()) as List<dynamic>;
+    final index = jsonDecode(indexFile.readAsStringSync()) as List<dynamic>;
     final actual = <String, List<Map<String, Object?>>>{};
 
     for (final entry in index.cast<Map<String, dynamic>>()) {
@@ -150,6 +161,14 @@ void main() {
       }
 
       actual[ref] = runs;
+    }
+
+    // The index can be present while every trip file it points at is not (a
+    // half-staged tree): then there is nothing to pin, and comparing an empty
+    // map against a captured baseline would fail for the wrong reason.
+    if (actual.isEmpty) {
+      markTestSkipped('no trip fixtures replayed here — nothing to pin');
+      return;
     }
 
     final goldenFile = File(_goldenPath);
