@@ -82,9 +82,18 @@ bool _isImageBytes(List<int> b) =>
 /// global fallback mixed styles → "the map type keeps changing"). `{s}` is
 /// substituted with a/b/c for providers that use subdomains.
 const Map<String, List<String>> _fallbackTileTemplatesBySource = {
-  // OSM: no regional mirrors (German/French mirrors render different styles
-  // and foreign language labels which caused the map style to change when zooming).
-  'osm': <String>[],
+  // OSM: mirrors, so a rate limit / IP block on the volunteer servers does not
+  // leave the map blank. They render OSM-derived data with their own label
+  // language — a style change, which this list used to avoid by staying empty,
+  // but a BLANK map is worse than a foreign label (user, 2026-10-14: "multiple
+  // link osm to have backup in case rate limit"). The primary list is still
+  // tried first, in order, per tile.
+  'osm': [
+    'https://tile.openstreetmap.de/{z}/{x}/{y}.png',
+    'https://a.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+    'https://b.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+    'https://c.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+  ],
   // CARTO Voyager: same style, balanced across subdomains.
   'carto': [
     'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
@@ -288,11 +297,22 @@ Future<http.Response?> _fetchTile(
   return null; // every server failed for this tile
 }
 
-/// Heuristic for OSM-style "access blocked" placeholder tiles: a small PNG
-/// whose pixels are nearly all one colour. Real map tiles are never uniform.
-/// Only small payloads are decoded, so normal tiles skip this check.
+/// Heuristic for OSM-style "access blocked" placeholder tiles: a near-uniform
+/// image. Real map tiles are never uniform — EXCEPT an empty one over open sea
+/// or empty country, which is legitimately a single colour.
+///
+/// ⭐ The SIZE BAND is what separates them, and getting it wrong breaks the map
+/// in both directions (measured 2026-10-14):
+///   * OSM's "Access blocked" page is a white 256x256 PNG of **6 987 B** — over
+///     the old 3 000 B guard, so the detector never ran and the app DREW the
+///     block page as if it were the map.
+///   * A genuinely empty tile is a 256x256 1-bit PNG of **~103 B** — under any
+///     guard, so the uniform test flagged it as a block and marked the whole
+///     server blocked while panning over the sea.
+/// So: under 4 KB is a real (empty) tile, over 40 KB is a real (busy) tile, and
+/// a near-uniform tile in between is the page. Only the middle band is decoded.
 Future<bool> _looksLikeBlockPlaceholder(Uint8List bytes) async {
-  if (bytes.length > 3000) return false; // normal tiles are bigger
+  if (bytes.length < 4000 || bytes.length > 40000) return false;
   try {
     final codec = await ui.instantiateImageCodec(bytes);
     final frame = await codec.getNextFrame();

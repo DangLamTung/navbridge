@@ -62,10 +62,17 @@ class NavTileServer {
       case 'offline':
         return const [];
       case 'osm':
+        // Mirrors AFTER the primary, so a rate limit / IP block on the
+        // volunteer servers fails over instead of leaving the nav basemap
+        // blank (see the same list in `offline_tiles.dart`).
         return const [
           'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
           'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
           'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          'https://tile.openstreetmap.de/{z}/{x}/{y}.png',
+          'https://a.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+          'https://b.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+          'https://c.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
         ];
       case 'topo':
         return const ['https://tile.opentopomap.org/{z}/{x}/{y}.png'];
