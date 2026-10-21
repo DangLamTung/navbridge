@@ -27,6 +27,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import 'package:navbridge/core/route_profile.dart';
+import 'package:navbridge/services/api_usage.dart' show ApiUsage;
 
 import 'osrm.dart';
 import 'vietmap_config.dart';
@@ -121,6 +122,7 @@ Future<List<OsrmRoute>> fetchGoogleRoutes(
   final res = await http
       .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
       .timeout(const Duration(seconds: 30));
+  ApiUsage.note('directions');
   if (res.statusCode != 200) {
     throw Exception('Google Directions HTTP ${res.statusCode}');
   }
@@ -296,6 +298,7 @@ Future<List<OsrmRoute>> fetchGoogleTwoWheelerRoutes(
         body: body,
       )
       .timeout(const Duration(seconds: 30));
+  ApiUsage.note('routes_pro');
   if (res.statusCode != 200) {
     throw Exception('Google Routes HTTP ${res.statusCode}');
   }

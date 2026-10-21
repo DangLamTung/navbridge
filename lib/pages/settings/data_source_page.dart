@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:navbridge/core/route_profile.dart';
 import 'package:navbridge/pages/settings/settings_save.dart';
 import 'package:navbridge/pages/settings/settings_widgets.dart';
+import 'package:navbridge/services/api_usage.dart';
 import 'package:navbridge/services/offline_tiles.dart' show vehicleType;
 import 'package:navbridge/services/route_providers.dart';
 import 'package:navbridge/services/vietmap_config.dart' show dataSource;
@@ -21,6 +22,15 @@ class DataSourcePage extends StatefulWidget {
 }
 
 class _DataSourcePageState extends State<DataSourcePage> {
+  @override
+  void initState() {
+    super.initState();
+    // Counters live on disk; repaint once they are in memory.
+    ApiUsage.load().then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
   Future<void> _setDataSource(String s) async {
     if (dataSource == s) return;
     dataSource = s;
@@ -124,7 +134,85 @@ class _DataSourcePageState extends State<DataSourcePage> {
             ],
           ),
         ),
+        const SettingsSection('Hạn mức Google API (tháng này)'),
+        SettingsCard(
+          color: const Color(0xFFE6F4EA),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Đếm trên MÁY NÀY. Google không có API trả về "còn bao nhiêu '
+                'lượt" — số thật nằm ở Cloud Console và tính theo project, gồm '
+                'cả script và mọi máy khác dùng chung key.',
+                style: TextStyle(fontSize: 11, height: 1.3),
+              ),
+              const SizedBox(height: 8),
+              for (final sku in googleSkus)
+                _SkuRow(sku: sku, used: ApiUsage.usedOf(sku.id)),
+              if (!ApiUsage.hasAny) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Chưa ghi nhận lượt gọi nào trong ${monthKey(DateTime.now())}.',
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ],
+            ],
+          ),
+        ),
       ],
+    );
+  }
+}
+
+/// One counter line: SKU name on the left, `used / cap` (plus overage cost)
+/// on the right. The colour only appears when the free cap is at risk, so a
+/// healthy month stays quiet.
+class _SkuRow extends StatelessWidget {
+  const _SkuRow({required this.sku, required this.used});
+
+  final GoogleSku sku;
+  final int used;
+
+  Color get _color {
+    final left = remainingOf(sku, used);
+    if (left == null) return const Color(0xFF5F6368);
+    if (left == 0) return const Color(0xFFD93025);
+    if (left < sku.freeCap * 0.2) return const Color(0xFFB06000);
+    return const Color(0xFF137333);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final left = remainingOf(sku, used);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(sku.label, style: const TextStyle(fontSize: 12)),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                usageText(sku, used),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: _color,
+                ),
+              ),
+              if (left != null)
+                Text(
+                  'còn $left lượt miễn phí',
+                  style: TextStyle(fontSize: 10, color: _color),
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

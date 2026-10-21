@@ -10,6 +10,7 @@ import 'package:latlong2/latlong.dart';
 
 import 'poi_search.dart';
 import 'api_notice.dart' show noteGoogleQuota;
+import 'package:navbridge/services/api_usage.dart' show ApiUsage;
 import 'vietmap_config.dart';
 
 /// Google Places Nearby Search for [type] around a CORRIDOR of [centers]
@@ -93,6 +94,7 @@ Future<List<PoiResult>> googlePoiSearch(
         noteGoogleQuota(statusCode: res.statusCode, body: res.body);
         return;
       }
+      ApiUsage.note('nearby_search');
       final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map?;
       if (data?['status'] != 'OK') {
         noteGoogleQuota(

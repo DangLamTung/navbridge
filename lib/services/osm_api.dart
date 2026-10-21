@@ -23,6 +23,7 @@ import 'offline_tiles.dart' show forceOffline, geocodingProvider;
 import 'offline_loader.dart' show readOfflineText;
 import 'package:navbridge/services/vietmap_api.dart';
 import 'package:navbridge/services/api_notice.dart' show noteGoogleQuota;
+import 'package:navbridge/services/api_usage.dart' show ApiUsage;
 import 'vietmap_config.dart' show VietmapConfig, dataSource;
 
 const _nominatimBase = 'https://nominatim.openstreetmap.org';
@@ -939,6 +940,7 @@ Future<List<OsmSuggestion>> googleGeocode(String text, {int limit = 6}) async {
       .timeout(const Duration(seconds: 15));
   if (res.statusCode != 200) return const [];
   final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+  ApiUsage.note('geocode');
   final results = (data['results'] as List? ?? []).cast<Map<String, dynamic>>();
   final out = <OsmSuggestion>[];
   for (final r in results.take(limit)) {
@@ -1002,6 +1004,7 @@ Future<List<OsmSuggestion>> googlePlaceAutocomplete(
     noteGoogleQuota(statusCode: res.statusCode, body: res.body);
     return const [];
   }
+  ApiUsage.note('autocomplete');
   final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
   if (data['status'] != 'OK') {
     noteGoogleQuota(
@@ -1060,6 +1063,7 @@ Future<(double, double, String)?> googlePlaceDetails(String placeId) async {
     noteGoogleQuota(statusCode: res.statusCode, body: res.body);
     return null;
   }
+  ApiUsage.note('place_details');
   final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
   if (data['status'] != 'OK') {
     noteGoogleQuota(
@@ -1106,6 +1110,7 @@ Future<List<(String, double, double)>> googlePlaceTextSearch(
       noteGoogleQuota(statusCode: res.statusCode, body: res.body);
       return const [];
     }
+    ApiUsage.note('text_search');
     final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
     if (data['status'] != 'OK') {
       noteGoogleQuota(
@@ -1151,6 +1156,7 @@ Future<String> reverseGeocode(LatLng pos) async {
           .get(Uri.parse(url), headers: const {'User-Agent': 'navbridge/1.0'})
           .timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
+        ApiUsage.note('geocode');
         final data =
             jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
         final results = (data['results'] as List? ?? [])
