@@ -19,6 +19,20 @@ val keystoreProps = Properties().apply {
     System.getenv("ANDROID_KEY_PASSWORD")?.let { setProperty("keyPassword", it) }
 }
 
+// ⭐ OVERRIDABLE targetSdk — the ZUI multi-window probe.
+//
+// The tablet (Lenovo TB331FC, ZUI 15.1) is **Android 13 = API 33**. An OEM
+// windowing chooser that gates on `targetSdkVersion > Build.VERSION.SDK_INT`
+// would exclude this app at 36 AND at 34 — so the earlier "we matched 34 and the
+// split option stayed greyed out" result never tested the hypothesis at all.
+// 33 is the value that has not been tried.
+//
+// Play requires 34+ for store releases, so the DEFAULT stays 36 and only the
+// tablet diagnosis build overrides it:
+//     NAVBRIDGE_TARGET_SDK=33 tool/build.sh --release
+val navTargetSdk: Int =
+    System.getenv("NAVBRIDGE_TARGET_SDK")?.trim()?.toIntOrNull() ?: 36
+
 android {
     namespace = "com.navbridge.app"
     // Explicit versions instead of flutter.* providers (stable on fresh builds).
@@ -39,7 +53,9 @@ android {
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         // GraphHopper needs Android 8+ (MethodHandle + java.time).
         minSdk = 26
-        targetSdk = 36
+        // 36 by default; NAVBRIDGE_TARGET_SDK=33 for the ZUI split-screen probe
+        // (see the comment on [navTargetSdk] above).
+        targetSdk = navTargetSdk
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }

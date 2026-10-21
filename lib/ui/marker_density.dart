@@ -63,3 +63,16 @@ int cameraMarkerCap(double zoom) => markerCapForZoom(
 /// Hard ceilings (a long route can carry a lot of both).
 const int kMaxSignMarkers = 120;
 const int kMaxCameraMarkers = 80;
+
+/// Marker budget for the **PiP window**.
+///
+/// PiP is a postage stamp a few centimetres wide, with the speed bar above it
+/// and the maneuver bar below. The zoom curve above asks for 20 signs + 12
+/// cameras at PiP's z13, and at that size the icons cover the whole road ahead
+/// — reported 2026-10-15 as "too dense information to the point can not see the
+/// path". PiP overrides the curve down to the next few things only; the
+/// projection already picks NEAREST-FIRST (see `_nearestSigns` /
+/// `_nearestCameras`), so a smaller take from that same ordered list is exactly
+/// "the 5 nearest", not an arbitrary subset.
+const int kPipSignMarkers = 5;
+const int kPipCameraMarkers = 5;

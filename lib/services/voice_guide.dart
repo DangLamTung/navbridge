@@ -12,7 +12,8 @@ import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter_tts/flutter_tts.dart';
 
 import 'package:navbridge/core/settings.dart'
-    show ttsVoiceName, ttsVoiceLocale, voiceBoostMax, ttsSpeechRate, ttsPitch;
+    show ttsVoiceName, ttsVoiceLocale, voiceBoostMax, ttsSpeechRate, voicePackRate,
+    ttsPitch;
 import 'package:navbridge/services/offline_tiles.dart' show voiceVolume;
 import 'package:navbridge/services/sound_alerts.dart' show SoundAlerts;
 
@@ -295,15 +296,25 @@ class VoiceGuide {
       await _pauseMedia();
       await _boostVolume();
       if (a.kind == _AnnKind.clip) {
-        // ONE rate for BOTH engines. The recorded pack used to play at a fixed
-        // 1.0x while TTS ran at `ttsSpeechRate` (0.55), so a speed-limit clip and
-        // a manoeuvre sentence came out at different tempos — the "voice pack
-        // speed does not match Android" report. Android applies this via
-        // MediaPlayer.setPlaybackParams; on web there is no pack at all (the
-        // channel is Android-only) and the caller falls back to TTS.
-        final clipRate = effectiveSpeechRate();
+        // ⭐ The pack has its OWN tempo and must NOT inherit the TTS rate.
+        //
+        // This used to pass `effectiveSpeechRate()` to both engines "so they
+        // match" — but 1.0 does not mean the same thing on either side: TTS 1.0
+        // is the engine's normal pace, while a clip's 1.0 is the tempo the file
+        // was RECORDED at (the bundled packs are baked at speaking_rate 1.0, see
+        // assets/audio/<pack>/MANIFEST.json). The result was every recorded
+        // announcement playing at 0.55x of its own tempo — 1.8x too slow — and
+        // raising the TTS rate to speed the pack up made the TTS too fast.
+        // `voicePackRate` is now its own setting; both rates are logged so a
+        // future re-coupling is visible in logcat.
+        //
+        // Android applies it via MediaPlayer.setPlaybackParams; on web there is
+        // no pack at all (the channel is Android-only) and the caller falls back
+        // to TTS.
+        final clipRate = voicePackRate.clamp(0.6, 1.6);
         debugPrint('VOICE: clip "${a.asset}" (p${a.priority}) '
-            'rate=${clipRate.toStringAsFixed(2)}');
+            'rate=${clipRate.toStringAsFixed(2)} '
+            '(tts=${effectiveSpeechRate().toStringAsFixed(2)})');
         // `wait: true` resolves when the clip actually ends, so the queue
         // cannot start the next announcement on top of this one.
         await _audioChannel

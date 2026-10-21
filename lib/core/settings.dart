@@ -150,6 +150,19 @@ class AppSettings {
   /// Spoken guidance speech rate (0.0–1.0, default 0.55).
   final double ttsSpeechRate;
 
+  /// Playback tempo of the PRE-RECORDED voice pack, as a multiplier on the
+  /// tempo the clips were RECORDED at (0.6–1.6, default 1.0 = exactly as
+  /// recorded).
+  ///
+  /// ⭐ Deliberately independent of [ttsSpeechRate]: the two engines do not
+  /// share a scale. TTS 1.0 means "the engine's normal pace"; a clip's 1.0
+  /// means "the tempo this file was baked at" — and the bundled packs are baked
+  /// at `speaking_rate: 1.0` (see `assets/audio/<pack>/MANIFEST.json`). Feeding
+  /// the TTS preference to the clips played every recorded announcement at 0.55x
+  /// of its own tempo (1.8x too slow), and raising the TTS rate to compensate
+  /// made the TTS itself too fast.
+  final double voicePackRate;
+
   /// Spoken guidance voice pitch (0.5–2.0, default 1.0).
   final double ttsPitch;
 
@@ -226,6 +239,7 @@ class AppSettings {
     this.aiCustomPrompt = '',
     this.aiPlaceSuggestions = true,
     this.ttsSpeechRate = 0.55,
+    this.voicePackRate = 1.0,
     this.ttsPitch = 1.0,
     this.aiProvider = 'auto',
     this.aiDeepSeekBaseUrl = '',
@@ -278,6 +292,7 @@ class AppSettings {
     'aiCustomPrompt': aiCustomPrompt,
     'aiPlaceSuggestions': aiPlaceSuggestions,
     'ttsSpeechRate': ttsSpeechRate,
+    'voicePackRate': voicePackRate,
     'ttsPitch': ttsPitch,
     'aiProvider': aiProvider,
     'aiDeepSeekBaseUrl': aiDeepSeekBaseUrl,
@@ -318,6 +333,7 @@ class AppSettings {
     String? aiCustomPrompt,
     bool? aiPlaceSuggestions,
     double? ttsSpeechRate,
+    double? voicePackRate,
     double? ttsPitch,
     String? aiProvider,
     String? aiDeepSeekBaseUrl,
@@ -369,6 +385,7 @@ class AppSettings {
       aiCustomPrompt: aiCustomPrompt ?? this.aiCustomPrompt,
       aiPlaceSuggestions: aiPlaceSuggestions ?? this.aiPlaceSuggestions,
       ttsSpeechRate: ttsSpeechRate ?? this.ttsSpeechRate,
+      voicePackRate: voicePackRate ?? this.voicePackRate,
       ttsPitch: ttsPitch ?? this.ttsPitch,
       aiProvider: aiProvider ?? this.aiProvider,
       aiDeepSeekBaseUrl: aiDeepSeekBaseUrl ?? this.aiDeepSeekBaseUrl,
@@ -445,6 +462,10 @@ bool aiPlaceSuggestions = true;
 
 /// Spoken guidance speech rate (0.0–1.0, default 0.55).
 double ttsSpeechRate = 0.55;
+
+/// Playback tempo of the pre-recorded voice pack — a multiplier on the tempo the
+/// clips were recorded at (see [AppSettings.voicePackRate]). 1.0 = as recorded.
+double voicePackRate = 1.0;
 
 /// Spoken guidance voice pitch (0.5–2.0, default 1.0).
 double ttsPitch = 1.0;
@@ -539,6 +560,12 @@ Future<AppSettings> _loadSettingsOnce() async {
       0.0,
       1.0,
     );
+    // Clips are recordings: 1.0 = the tempo they were baked at. The band is
+    // narrower than TTS's because extremes sound like a chipmunk / a drag.
+    final packRate = ((j['voicePackRate'] ?? 1.0) as num).toDouble().clamp(
+      0.6,
+      1.6,
+    );
     final pitch = ((j['ttsPitch'] ?? 1.0) as num).toDouble().clamp(0.5, 2.0);
     final aiProv = (j['aiProvider'] ?? 'auto') as String;
     final aiBase = (j['aiDeepSeekBaseUrl'] ?? '') as String;
@@ -560,6 +587,7 @@ Future<AppSettings> _loadSettingsOnce() async {
     aiCustomPrompt = customPrompt;
     aiPlaceSuggestions = placeSuggestions;
     ttsSpeechRate = speechRate;
+    voicePackRate = packRate;
     ttsPitch = pitch;
     aiProvider = aiProv;
     aiDeepSeekBaseUrl = aiBase;
@@ -613,6 +641,7 @@ Future<AppSettings> _loadSettingsOnce() async {
       aiCustomPrompt: customPrompt,
       aiPlaceSuggestions: placeSuggestions,
       ttsSpeechRate: speechRate,
+      voicePackRate: packRate,
       ttsPitch: pitch,
       aiProvider: aiProv,
       aiDeepSeekBaseUrl: aiBase,
@@ -643,6 +672,7 @@ Future<void> saveSettings(AppSettings s) async {
     aiCustomPrompt = s.aiCustomPrompt;
     aiPlaceSuggestions = s.aiPlaceSuggestions;
     ttsSpeechRate = s.ttsSpeechRate;
+    voicePackRate = s.voicePackRate;
     ttsPitch = s.ttsPitch;
     aiProvider = s.aiProvider;
     aiDeepSeekBaseUrl = s.aiDeepSeekBaseUrl;

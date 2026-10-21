@@ -5,8 +5,8 @@ library;
 import 'package:flutter/material.dart';
 
 import 'package:navbridge/core/settings.dart'
-    show voiceBoostMax, ttsVoiceName, ttsSpeechRate, ttsPitch, voicePack,
-        voiceAnnouncements;
+    show voiceBoostMax, ttsVoiceName, ttsSpeechRate, voicePackRate, ttsPitch,
+        voicePack, voiceAnnouncements;
 import 'package:navbridge/pages/settings/settings_save.dart';
 import 'package:navbridge/pages/settings/settings_widgets.dart';
 import 'package:navbridge/services/offline_tiles.dart'
@@ -27,6 +27,7 @@ class _VoiceSettingsPageState extends State<VoiceSettingsPage> {
   bool _voiceAnnouncements = true;
   double _voiceVolume = 1.0;
   double _ttsSpeechRate = 0.55;
+  double _voicePackRate = 1.0;
   double _ttsPitch = 1.0;
   String _ttsVoiceName = '';
   String _voicePack = '';
@@ -39,6 +40,7 @@ class _VoiceSettingsPageState extends State<VoiceSettingsPage> {
     _voiceAnnouncements = voiceAnnouncements;
     _voiceVolume = voiceVolume;
     _ttsSpeechRate = ttsSpeechRate;
+    _voicePackRate = voicePackRate;
     _ttsPitch = ttsPitch;
     _ttsVoiceName = ttsVoiceName;
     _voicePack = voicePack;
@@ -95,6 +97,21 @@ class _VoiceSettingsPageState extends State<VoiceSettingsPage> {
       ttsSpeechRate = v;
     });
     await VoiceGuide.instance.applySpeech();
+    await saveAllSettings();
+  }
+
+  /// Tempo of the PRE-RECORDED pack (0.6–1.6, 1.0 = exactly as recorded).
+  ///
+  /// Independent of [_setSpeechRate] on purpose: the clips are recordings and do
+  /// not share the TTS engine's scale, so one slider for both played every
+  /// announcement at the TTS preference (0.55) of its own tempo. Persisting is
+  /// enough to apply it — `VoiceGuide` reads the value when it starts the next
+  /// clip.
+  Future<void> _setVoicePackRate(double v) async {
+    setState(() {
+      _voicePackRate = v;
+      voicePackRate = v;
+    });
     await saveAllSettings();
   }
 
@@ -426,6 +443,45 @@ class _VoiceSettingsPageState extends State<VoiceSettingsPage> {
                 max: 1.0,
                 divisions: 20,
                 label: '${(_ttsSpeechRate * 100).round()}%',
+              ),
+              Row(
+                children: [
+                  const Icon(Icons.graphic_eq, color: kAppBlue, size: 22),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Tốc độ giọng đọc sẵn',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '${(_voicePackRate * 100).round()}%',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                  ),
+                ],
+              ),
+              Slider(
+                value: _voicePackRate,
+                // No pack selected = system TTS only, nothing to slow down.
+                onChanged: _voicePack.isEmpty ? null : _setVoicePackRate,
+                activeColor: kAppBlue,
+                min: 0.6,
+                max: 1.6,
+                divisions: 20,
+                label: '${(_voicePackRate * 100).round()}%',
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 30, bottom: 8),
+                child: Text(
+                  _voicePack.isEmpty
+                      ? 'Đang dùng TTS hệ thống — không có giọng đọc sẵn.'
+                      : 'Giọng đọc sẵn là bản ghi âm: 100% = đúng tốc độ đã '
+                            'thu. Độc lập với “Tốc độ đọc” ở trên.',
+                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                ),
               ),
               Row(
                 children: [

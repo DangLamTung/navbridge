@@ -71,6 +71,13 @@ extension _NavBuild on _NavigationPageState {
                     // During nav only cameras near the route are loaded (not all
                     // ~1,800 nationwide) — the driver sees what's on their road.
                     cameras: cameraAlerts ? _routeCameras : const [],
+                    // …and the PiP window is a postage stamp. The street-level
+                    // curve (12 cameras + 20 signs at its z13) covers the road
+                    // ahead completely — "too dense to see the path". PiP draws
+                    // only the next handful, which the projection already picks
+                    // NEAREST THE CAR first (see marker_density.dart).
+                    maxCameras: kPipCameraMarkers,
+                    maxSignMarkers: kPipSignMarkers,
                     showRadar: radarOn,
                     radarUrl: _radarLayerUrl,
                     showSatellite: _satelliteOn,
@@ -92,6 +99,26 @@ extension _NavBuild on _NavigationPageState {
                     showCompass: false,
                   ),
                 ),
+                // PiP CANNOT be pinched — two fingers do not fit in the window
+                // — so the map gets its own compact +/− instead. Right edge,
+                // vertically centred so it clears both the speed bar above and
+                // the maneuver bar below.
+                Positioned(
+                  right: 4,
+                  top: 0,
+                  bottom: 0,
+                  width: 30,
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _pipZoomButton(Icons.add, 1),
+                        const SizedBox(height: 6),
+                        _pipZoomButton(Icons.remove, -1),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -100,6 +127,20 @@ extension _NavBuild on _NavigationPageState {
       ),
     );
   }
+
+  /// A compact map-zoom button for the PiP window.
+  ///
+  /// PiP is too small to pinch, so the zoom is driven through
+  /// [VectorNavMapController.zoomBy]. Smaller than the full-screen controls
+  /// (30 px, not 46) so a pair of them fits the postage-stamp window without
+  /// covering the road.
+  Widget _pipZoomButton(IconData icon, double delta) => RoundActionButton(
+    icon: icon,
+    color: const Color(0xFF1A73E8),
+    size: 30,
+    onTap: () => _vmFollow.zoomBy(delta),
+    child: Icon(icon, color: const Color(0xFF1A73E8), size: 18),
+  );
 
   /// Floating time-scrubber bars for the weather layers — rain radar and the
   /// distinct weather-satellite layer. Each layer that's toggled on and has

@@ -99,6 +99,7 @@ import 'package:navbridge/ui/displays_button.dart';
 import 'package:navbridge/ui/directions_bar.dart';
 import 'package:navbridge/ui/elevation_chart.dart';
 import 'package:navbridge/ui/map_controls.dart';
+import 'package:navbridge/ui/marker_density.dart';
 import 'package:navbridge/ui/nav_status_bar.dart';
 import 'package:navbridge/ui/nav_top_bar.dart';
 import 'package:navbridge/ui/navigation_card.dart';

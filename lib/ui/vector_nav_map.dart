@@ -107,6 +107,16 @@ class VectorNavMapController extends ChangeNotifier {
   void attachRecenter(VoidCallback cb) => _recenter = cb;
   void recenter() => _recenter?.call();
 
+  /// The live map state's zoom nudge, registered by [attachZoomBy].
+  ///
+  /// The PiP window cannot be pinched — two fingers do not fit in it — so its
+  /// +/− buttons drive the camera through this instead of through gestures.
+  void Function(double delta)? _zoomBy;
+  void attachZoomBy(void Function(double delta) cb) => _zoomBy = cb;
+
+  /// Nudge the nav camera by [delta] zoom levels (e.g. +1 / −1 from PiP).
+  void zoomBy(double delta) => _zoomBy?.call(delta);
+
   void setFollowing(bool v) {
     if (_following != v) {
       _following = v;
@@ -159,6 +169,8 @@ class VectorNavMap extends StatefulWidget {
     this.onCameraTap,
     this.onSignTap,
     this.signs = const [],
+    this.maxSignMarkers,
+    this.maxCameras,
   });
 
   /// Route polyline to draw (latlong2 points).
@@ -313,6 +325,19 @@ class VectorNavMap extends StatefulWidget {
   /// Road signs near the route (stop / give-way / traffic lights) drawn as
   /// small colored dots on the nav map.
   final List<RoadSign> signs;
+
+  /// Hard override for the number of SIGN markers drawn, replacing the
+  /// zoom-dependent curve ([signMarkerCap]). Null = use the curve.
+  ///
+  /// The PiP window sets this: at its fixed z13 the curve asks for 20 signs in
+  /// a window a few centimetres wide, which buries the road itself. See
+  /// [kPipSignMarkers].
+  final int? maxSignMarkers;
+
+  /// Hard override for the number of CAMERA markers drawn, replacing the
+  /// zoom-dependent curve ([cameraMarkerCap]). Null = use the curve. PiP sets
+  /// it — see [maxSignMarkers] and [kPipCameraMarkers].
+  final int? maxCameras;
 
   @override
   State<VectorNavMap> createState() => _VectorNavMapState();
@@ -469,6 +494,11 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// the platform view keeps full pan + pinch control).
   CameraPosition? _lastFollowCam;
 
+  /// Zoom the driver asked for with PiP's +/− but the platform has not reported
+  /// back yet. While set, [_applyFollowCamera] uses this instead of the live
+  /// zoom, so the follow tick cannot undo the tap with the pre-tap value.
+  double? _zoomRequest;
+
   @override
   void initState() {
     super.initState();
@@ -477,6 +507,8 @@ class _VectorNavMapState extends State<VectorNavMap>
     _puckTicker = createTicker(_onPuckTick);
     _camTicker = createTicker(_onCamTick);
     widget.controller?.attachRecenter(_recenter);
+    // PiP's +/− buttons drive the camera through this (see [zoomBy]).
+    widget.controller?.attachZoomBy(_zoomByDelta);
     widget.controller?.setFollowing(true);
     final cur = widget.current;
     if (cur != null) {
@@ -1611,7 +1643,11 @@ class _VectorNavMapState extends State<VectorNavMap>
     // a Flutter widget reprojected ~4 Hz, so the count follows the zoom with a
     // HARD ceiling (see marker_density.dart).
     final cams = <OfflineCamera>[
-      ..._nearestCameras(onRoute, cameraMarkerCap(_zoom), cur),
+      ..._nearestCameras(
+        onRoute,
+        widget.maxCameras ?? cameraMarkerCap(_zoom),
+        cur,
+      ),
     ];
     _activeCams = cams; // reprojected on every camera move, not just on change
     final sig = _cameraSignature(cams, cur);
@@ -1751,7 +1787,12 @@ class _VectorNavMapState extends State<VectorNavMap>
       activeSigns = const [];
     } else {
       pool = _signPool(signs);
-      activeSigns = _nearestSigns(pool, signMarkerCap(_zoom), widget.current);
+      activeSigns = _nearestSigns(
+        pool,
+        // PiP passes [maxSignMarkers] — same nearest-first list, smaller take.
+        widget.maxSignMarkers ?? signMarkerCap(_zoom),
+        widget.current,
+      );
     }
     if (activeSigns.length != _lastSignCount) {
       _lastSignCount = activeSigns.length;
@@ -1966,6 +2007,43 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// field because the ~30 fps follow ticker must not touch MediaQuery).
   double _viewportH = 800;
 
+  /// Nudge the nav camera by [delta] zoom levels — the PiP window's +/− (a
+  /// postage stamp cannot be pinched).
+  ///
+  /// This has to COMMAND the platform camera. The follow camera is zoom-neutral
+  /// by design: [_applyFollowCamera] adopts whatever zoom the platform reports
+  /// (that is how a user pinch survives) and then writes that same value back,
+  /// so it can never change the zoom by itself. It also means the first follow
+  /// tick after a tap would happily adopt the PRE-tap zoom and undo the nudge —
+  /// hence [_zoomRequest], which the adoption honours until the platform
+  /// confirms the new value.
+  void _zoomByDelta(double delta) {
+    final ctrl = _controller;
+    if (ctrl == null) return;
+    final live = ctrl.cameraPosition;
+    final base = _zoomRequest ?? live?.zoom ?? _zoom;
+    final z = (base + delta).clamp(3.0, 19.0);
+    if ((z - base).abs() < 0.01) return;
+    _zoomRequest = z;
+    _zoom = z;
+    widget.controller?.setZoom(_zoom); // keep the page's copy in sync
+    _lastFollowCam = null; // force the next follow step to re-apply
+    final c = widget.current;
+    final target =
+        live?.target ?? (c == null ? null : LatLng(c.latitude, c.longitude));
+    if (target == null) return;
+    ctrl.moveCamera(
+      CameraUpdate.newCameraPosition(
+        CameraPosition(
+          target: target,
+          zoom: z,
+          bearing: live?.bearing ?? 0,
+          tilt: live?.tilt ?? 0,
+        ),
+      ),
+    );
+  }
+
   void _followPosition() {
     final ctrl = _controller;
     final c = widget.current;
@@ -1998,7 +2076,11 @@ class _VectorNavMapState extends State<VectorNavMap>
     // never forces the zoom back to the initial max.
     final live = ctrl.cameraPosition;
     if (live != null && live.zoom >= 3) {
-      _zoom = live.zoom.clamp(3.0, 19.0);
+      final req = _zoomRequest;
+      if (req != null && (live.zoom - req).abs() < 0.05) {
+        _zoomRequest = null; // the platform caught up; resume normal adoption
+      }
+      _zoom = (_zoomRequest ?? live.zoom).clamp(3.0, 19.0);
       widget.controller?.setZoom(_zoom);
     }
     if (ctrl.isCameraMoving) return;

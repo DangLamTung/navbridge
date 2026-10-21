@@ -12,7 +12,8 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
-import 'package:navbridge/core/settings.dart' show voicePack;
+import 'package:navbridge/core/settings.dart'
+    show voicePack, ttsSpeechRate, voicePackRate;
 import 'package:navbridge/pages/navigation/navigation_page.dart';
 import 'package:navbridge/services/offline_road_signs.dart';
 import 'package:navbridge/services/sound_alerts.dart';
@@ -188,10 +189,13 @@ void main() {
       TestWidgetsFlutterBinding.ensureInitialized();
 
       final playedAssets = <String>[];
+      // The `speed` handed to the native player — the pack's OWN tempo.
+      final clipSpeeds = <double>[];
       final spoken = <String>[];
 
       setUp(() {
         playedAssets.clear();
+        clipSpeeds.clear();
         spoken.clear();
         voicePack = 'voice_vn_fast'; // the shipped default
         // The queue only runs once the engine reports ready; unit tests have no
@@ -203,6 +207,8 @@ void main() {
             ) async {
               if (call.method == 'playAsset') {
                 final asset = call.arguments['asset'] as String?;
+                final speed = (call.arguments['speed'] as num?)?.toDouble();
+                if (speed != null) clipSpeeds.add(speed);
                 if (asset != null) {
                   playedAssets.add(asset);
                   return true;
@@ -260,6 +266,43 @@ void main() {
           expect(ok, isFalse);
           await settle();
           expect(playedAssets, isEmpty);
+        });
+
+        test('the pack tempo is its OWN setting, never the TTS rate', () async {
+          // Both engines used to be handed `effectiveSpeechRate()`, "so they
+          // match" — but 1.0 does not mean the same thing on either side: TTS
+          // 1.0 is the engine's normal pace, a clip's 1.0 is the tempo the file
+          // was RECORDED at. The pack therefore played at the TTS preference
+          // (0.55) of its own tempo — 1.8x too slow — and raising the TTS rate
+          // to speed it up made the TTS too fast (report 2026-10-19).
+          ttsSpeechRate = 0.55;
+          voicePackRate = 1.0;
+          addTearDown(() {
+            ttsSpeechRate = 0.55;
+            voicePackRate = 1.0;
+          });
+
+          await SoundAlerts.instance.playCurrentSpeedLimit(50);
+          await settle();
+          await settle();
+          expect(clipSpeeds.single, closeTo(1.0, 0.001),
+              reason: 'the clip must play at the tempo it was recorded at');
+
+          // Moving the TTS slider must NOT re-time the recording…
+          ttsSpeechRate = 0.95;
+          await SoundAlerts.instance.playNextSpeedLimit(50);
+          await settle();
+          await settle();
+          expect(clipSpeeds.last, closeTo(1.0, 0.001),
+              reason: 'a TTS-rate change must not touch the pack');
+
+          // …while its own slider must.
+          voicePackRate = 1.2;
+          await SoundAlerts.instance.playOverSpeed();
+          await settle();
+          await settle();
+          expect(clipSpeeds.last, closeTo(1.2, 0.001),
+              reason: 'the pack slider is what sets the clip tempo');
         });
 
         group('announcement queue never truncates', () {

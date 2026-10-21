@@ -34,6 +34,20 @@ void main() {
     expect(cameraMarkerCap(19), kMaxCameraMarkers);
   });
 
+  test('PiP asks for a handful, not the street-level curve', () {
+    // The PiP map sits at a fixed z13 inside a window a few centimetres wide,
+    // with the speed bar above and the maneuver bar below. The curve would put
+    // 20 signs + 12 cameras in there, which buries the road itself — reported
+    // 2026-10-15 as "too dense information to the point can not see the path".
+    expect(signMarkerCap(13), 20);
+    expect(cameraMarkerCap(13), 12);
+    expect(kPipSignMarkers, lessThan(signMarkerCap(13)));
+    expect(kPipCameraMarkers, lessThan(cameraMarkerCap(13)));
+    // "About 5" per the request: a few either way is fine, a dozen is not.
+    expect(kPipSignMarkers, inInclusiveRange(3, 8));
+    expect(kPipCameraMarkers, inInclusiveRange(3, 8));
+  });
+
   test('density never decreases as the camera zooms in', () {
     var prev = -1;
     for (var z = 10.0; z <= 19.0; z += 0.25) {
