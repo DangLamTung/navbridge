@@ -4,6 +4,36 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
+## 1.1.8 — 2026-10-21 (build 4016)
+
+**Camera data is now nationwide, Google routing finally uses live traffic, and
+the app can tell you how much of the free Google quota this phone has spent.**
+
+- **Camera database: 30,990 → 31,979.** The phạt-nguội lists of all 33
+  provinces were scraped (8,364 rows), geocoded with the Google Geocoding API
+  (5,381 addresses → 2,396 usable points) and merged: 1,042 new points, 239
+  nameless VietMap rows replaced, 53 redundant neighbours dropped, 120 m dedup.
+  1,265 of the points now carry what the camera watches (`penalty_camera` 641,
+  `speed_camera` 466, `red_light_camera` 158) plus the CSGT unit and the camera
+  code. A hand-kept list like this is only announced with the “có thể có camera”
+  wording unless a Waze/VietMap camera sits at the same spot.
+- **Google routing asks for traffic.** Both paths were computing ETAs from
+  free-flow time: the legacy Directions call had no `departure_time` (so Google
+  returned no `duration_in_traffic` at all) and the motorbike Routes API call
+  had no `routingPreference`. Measured on Q1 → Thủ Đức: 3,250 s without,
+  3,454 s with traffic. Car routing does not change billing SKU (alternatives
+  already put it on Directions Advanced); motorbike moves to Compute Routes Pro.
+- **Google API meter** in Settings → Nguồn dữ liệu: per-SKU calls this month,
+  remaining free calls and the overage cost. Google exposes no “calls
+  remaining” API, so this counts on-device and says so.
+- **PiP is readable again.** 5 signs + 5 cameras instead of the street-level
+  curve’s 20 + 12, and the window gets +/− zoom (it cannot be pinched).
+- **Voice pack tempo is its own setting** (`Tốc độ giọng đọc sẵn`): recorded
+  clips are no longer replayed at the TTS rate, which played every announcement
+  at 0.55× of the tempo it was recorded at.
+- `NAVBRIDGE_TARGET_SDK` build override, used to probe whether an OEM
+  split-screen allowlist is keyed on targetSdk ≥ 34.
+
 ## 1.1.7 — 2026-10-14 (build 4015)
 
 **The layer you pick is remembered, and the vector map is always underneath.**
