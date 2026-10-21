@@ -251,8 +251,12 @@ final Map<String, bool> _cameraConfirmCache = {};
 /// camera sits at the same spot (those come from official / community
 /// databases). A lone CSGT point is announced as "có thể có camera" instead.
 /// Non-police points (Waze / VietMap / OSM) are always confirmed.
+///
+/// `kiemtraphatnguoi` (scraped phạt-nguội lists, geocoded from street
+/// addresses) is the same class of evidence as `police` — a hand-kept list, not
+/// a surveyed position — so it must NOT be auto-confirmed either.
 Future<bool> isCameraConfirmed(OfflineCamera cam) async {
-  if (cam.source != 'police') return true;
+  if (cam.source != 'police' && cam.source != 'kiemtraphatnguoi') return true;
   final key = '${cam.source}:${cam.lat},${cam.lng}';
   final cached = _cameraConfirmCache[key];
   if (cached != null) return cached;
