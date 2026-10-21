@@ -72,6 +72,14 @@ String googleDirectionsUrl({
     'mode=${googleTravelMode(profile)}',
     'language=vi',
     'alternatives=${maxAlternatives > 1}',
+    // Live traffic. WITHOUT departure_time the response has no
+    // duration_in_traffic at all and duration is the FREE-FLOW time, so a
+    // ETA computed from it is a lie at rush hour. Measured on Q1 -> Thu Duc:
+    // 3,250 s without, 3,454 s with (traffic_model=best_guess). This does not
+    // change the billing SKU — `alternatives=true` already bills this as
+    // Directions Advanced, so the traffic data is free.
+    'departure_time=now',
+    'traffic_model=best_guess',
     if (avoid.isNotEmpty) 'avoid=${avoid.join('|')}',
     if (via.isNotEmpty)
       'waypoints=${via.map((w) => '${w.latitude},${w.longitude}').join('|')}',
@@ -149,8 +157,14 @@ Future<List<OsrmRoute>> fetchGoogleRoutes(
       final leg = legs[li];
       final legDist =
           ((leg['distance'] as Map?)?['value'] as num?)?.toDouble() ?? 0;
+      // Prefer the traffic-aware leg duration; fall back to free-flow for
+      // walking/cycling (no traffic model) and for legs Google returns
+      // without a duration_in_traffic.
       final legDur =
-          ((leg['duration'] as Map?)?['value'] as num?)?.toDouble() ?? 0;
+          (((leg['duration_in_traffic'] as Map?)?['value'] as num?) ??
+                  ((leg['duration'] as Map?)?['value'] as num?) ??
+                  0)
+              .toDouble();
       dist += legDist;
       dur += legDur;
       stopCum.add(dist);
@@ -218,6 +232,12 @@ Map<String, dynamic> googleComputeRoutesBody({
           _googleWaypoint(p),
       ],
     'travelMode': 'TWO_WHEELER',
+    // TRAFFIC_AWARE makes `duration` reflect live traffic (staticDuration
+    // stays free-flow). The legacy Directions API has no two-wheeler mode, so
+    // motorbike ETAs had no traffic at all before this. COST: moves the call
+    // from the Compute Routes Essentials SKU to Pro ($5 -> $10 per 1,000,
+    // free cap 10,000 -> 5,000 per month).
+    'routingPreference': 'TRAFFIC_AWARE',
     'computeAlternativeRoutes': maxAlternatives > 1,
     if (avoidHighway || avoidFerry)
       'routeModifiers': {
@@ -259,7 +279,18 @@ Future<List<OsrmRoute>> fetchGoogleTwoWheelerRoutes(
         headers: {
           'Content-Type': 'application/json',
           'X-Goog-Api-Key': key,
-          'X-Goog-FieldMask': '*',
+          // Only the fields the parser below actually reads. A '*' mask pulls
+          // the whole route object (steps, tolls, advisories) over the wire
+          // for nothing.
+          'X-Goog-FieldMask':
+              'routes.duration,routes.staticDuration,'
+              'routes.distanceMeters,routes.polyline.encodedPolyline,'
+              'routes.legs.distanceMeters,routes.legs.duration,'
+              'routes.legs.steps.distanceMeters,'
+              'routes.legs.steps.staticDuration,'
+              'routes.legs.steps.polyline.encodedPolyline,'
+              'routes.legs.steps.startLocation,'
+              'routes.legs.steps.navigationInstruction',
           'User-Agent': 'navbridge/1.0',
         },
         body: body,

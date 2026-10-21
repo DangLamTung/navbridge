@@ -18,19 +18,22 @@ const _via = [
 
 void main() {
   group('legacy Directions URL', () {
-
     test('6 cases', () {
-    // ---- case: car is mode=driving with no avoid when both toggles are off ----
-    (() {
+      // ---- case: car is mode=driving with no avoid when both toggles are off ----
+      (() {
         final url = googleDirectionsUrl(points: _pts, key: 'K');
         expect(url, contains('mode=driving'));
         expect(url, isNot(contains('avoid=')));
+        // Live traffic. Without departure_time Google drops
+        // duration_in_traffic entirely and duration is free-flow, so the ETA
+        // is wrong exactly when it matters (rush hour). The SKU is already
+        // Directions Advanced because of alternatives=true, so this is free.
+        expect(url, contains('departure_time=now'));
+        expect(url, contains('traffic_model=best_guess'));
+      })();
 
-    })();
-
-
-    // ---- case: avoid= is pipe-separated and lists only what was asked for ----
-    (() {
+      // ---- case: avoid= is pipe-separated and lists only what was asked for ----
+      (() {
         final both = googleDirectionsUrl(
           points: _pts,
           key: 'K',
@@ -54,12 +57,10 @@ void main() {
         );
         expect(ferry, contains('avoid=ferries'));
         expect(ferry, isNot(contains('highways')));
+      })();
 
-    })();
-
-
-    // ---- case: bicycle/walking get their own mode instead of a driving route ----
-    (() {
+      // ---- case: bicycle/walking get their own mode instead of a driving route ----
+      (() {
         expect(
           googleDirectionsUrl(
             points: _pts,
@@ -78,12 +79,10 @@ void main() {
         );
         // Motorbikes must not arrive here; the fallback stays a valid request.
         expect(googleTravelMode(RouteProfile.motorbike), 'driving');
+      })();
 
-    })();
-
-
-    // ---- case: walking never carries avoid= (the API ignores it there) ----
-    (() {
+      // ---- case: walking never carries avoid= (the API ignores it there) ----
+      (() {
         final url = googleDirectionsUrl(
           points: _pts,
           key: 'K',
@@ -92,12 +91,10 @@ void main() {
           avoidFerry: true,
         );
         expect(url, isNot(contains('avoid=')));
+      })();
 
-    })();
-
-
-    // ---- case: waypoints use the pipe separator, and origin stays before dest ----
-    (() {
+      // ---- case: waypoints use the pipe separator, and origin stays before dest ----
+      (() {
         final url = googleDirectionsUrl(points: _via, key: 'K');
         expect(url, contains('waypoints=10.785,106.68'));
         expect(url, contains('alternatives=true'));
@@ -105,38 +102,35 @@ void main() {
         // The key and language must survive any refactor of the builder.
         expect(url, contains('key=K'));
         expect(url, contains('language=vi'));
+      })();
 
-    })();
-
-
-    // ---- case: single alternative disables the alternatives flag ----
-    (() {
+      // ---- case: single alternative disables the alternatives flag ----
+      (() {
         final url = googleDirectionsUrl(
           points: _pts,
           key: 'K',
           maxAlternatives: 1,
         );
         expect(url, contains('alternatives=false'));
-
-    })();
+      })();
     });
-
   });
 
   group('Routes API v2 body (motorbike)', () {
-
     test('3 cases', () {
-    // ---- case: is TWO_WHEELER and carries no routeModifiers by default ----
-    (() {
+      // ---- case: is TWO_WHEELER and carries no routeModifiers by default ----
+      (() {
         final body = googleComputeRoutesBody(points: _pts);
         expect(body['travelMode'], 'TWO_WHEELER');
         expect(body.containsKey('routeModifiers'), isFalse);
+        // TRAFFIC_AWARE is deliberate: it moves the SKU from Compute Routes
+        // Essentials to Pro ($5 -> $10 per 1,000, free cap 10k -> 5k).
+        // Removing it silently brings back traffic-free motorbike ETAs.
+        expect(body['routingPreference'], 'TRAFFIC_AWARE');
+      })();
 
-    })();
-
-
-    // ---- case: avoid toggles become routeModifiers.avoidHighways/avoidFerries ----
-    (() {
+      // ---- case: avoid toggles become routeModifiers.avoidHighways/avoidFerries ----
+      (() {
         final both = googleComputeRoutesBody(
           points: _pts,
           avoidHighway: true,
@@ -147,14 +141,15 @@ void main() {
           'avoidFerries': true,
         });
 
-        final highway = googleComputeRoutesBody(points: _pts, avoidHighway: true);
+        final highway = googleComputeRoutesBody(
+          points: _pts,
+          avoidHighway: true,
+        );
         expect(highway['routeModifiers'], {'avoidHighways': true});
+      })();
 
-    })();
-
-
-    // ---- case: intermediates are only sent for 3+ points ----
-    (() {
+      // ---- case: intermediates are only sent for 3+ points ----
+      (() {
         expect(
           googleComputeRoutesBody(points: _pts).containsKey('intermediates'),
           isFalse,
@@ -162,9 +157,7 @@ void main() {
         final withVia = googleComputeRoutesBody(points: _via);
         expect(withVia.containsKey('intermediates'), isTrue);
         expect((withVia['intermediates'] as List).length, 1);
-
-    })();
+      })();
     });
-
   });
 }
