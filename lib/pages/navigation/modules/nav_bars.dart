@@ -74,9 +74,9 @@ extension _NavBars on _NavigationPageState {
     );
   }
 
-  Widget _navTopBar() {
+  Widget _navTopBar({bool compact = false}) {
     final nav = _progress;
-    return NavTopBar(
+    final bar = NavTopBar(
       destination: _destinationName,
       progress: nav,
       recording: _trip != null,
@@ -84,8 +84,19 @@ extension _NavBars on _NavigationPageState {
       stopLabel: _stopLabel(nav),
       steps: _route?.steps ?? const [],
       expanded: _showSteps,
+      compact: compact,
       onToggle: () => setNavState(() => _showSteps = !_showSteps),
       onExit: _exitNavigation,
+    );
+    if (!compact) return bar;
+    return Align(
+      alignment: Alignment.topLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.sizeOf(context).width * 0.64,
+        ),
+        child: bar,
+      ),
     );
   }
 
@@ -470,7 +481,7 @@ extension _NavBars on _NavigationPageState {
     );
   }
 
-  Widget _bottomArea() {
+  Widget _bottomArea({bool compact = false}) {
     final route = _route;
     final nav = _progress;
     final stopLabel = _stopLabel(nav);
@@ -491,6 +502,7 @@ extension _NavBars on _NavigationPageState {
           onOverview: _overviewRoute,
           stopLabel: stopLabel,
           arrivalTime: _arrivalTime(),
+          compact: compact,
         );
       }
     } else if (route != null) {
@@ -545,7 +557,7 @@ extension _NavBars on _NavigationPageState {
     } else {
       card = null;
     }
-    return Column(
+    final area = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         if (_navigating) _poiArea(),
@@ -588,6 +600,16 @@ extension _NavBars on _NavigationPageState {
             destination: _destinationName,
           ),
       ],
+    );
+    if (!compact) return area;
+    return Align(
+      alignment: Alignment.bottomLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.sizeOf(context).width * 0.58,
+        ),
+        child: area,
+      ),
     );
   }
 

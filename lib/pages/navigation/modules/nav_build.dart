@@ -4,6 +4,12 @@ part of '../navigation_page.dart';
 /// extension so each overlay (PiP, top bar, controls, offline banner, …)
 /// lives in its own method and the page shell stays small.
 extension _NavBuild on _NavigationPageState {
+  /// True on a phone held sideways while navigating. The top banner and ETA
+  /// card then float as narrow pills over the map instead of spanning the
+  /// full width, so the short landscape screen keeps most of its height.
+  bool get _landscapeNav =>
+      _navigating && MediaQuery.of(context).orientation == Orientation.landscape;
+
   /// Top offset for the suggestions / stops / offline-POI overlays. These sit
   /// just BELOW the top bar so they never overlap it. The directions bar is
   /// much taller than the single search pill (2 fields + add-stop row), so in
@@ -285,7 +291,7 @@ extension _NavBuild on _NavigationPageState {
                                   // Moved to the bottom edge — see the bottom
                                   // Positioned below (Settings → "Dẫn đường").
                                   ? const SizedBox.shrink()
-                                  : _navTopBar())
+                                  : _navTopBar(compact: _landscapeNav))
                             : (_route != null
                                   ? const SizedBox.shrink()
                                   : _topBar()),
@@ -957,8 +963,9 @@ extension _NavBuild on _NavigationPageState {
                         // (Settings → "Dẫn đường") — the layout riders know
                         // from Google Maps / Waze. It sits directly above the
                         // ETA bar so the two read as one block.
-                        if (_navigating && navBannerBottom) _navTopBar(),
-                        _bottomArea(),
+                        if (_navigating && navBannerBottom)
+                          _navTopBar(compact: _landscapeNav),
+                        _bottomArea(compact: _landscapeNav),
                       ],
                     ),
                   ),
@@ -1093,10 +1100,17 @@ extension _NavBuild on _NavigationPageState {
     // "fix" it for the open info bar. The overlap reported against the info bar
     // is a DIFFERENT control and was never reproduced on screen (the tablet was
     // locked at the time); see the session notes before touching this again.
-    final pos = _centerBtnOffset ?? Offset(14, size.height - 330 - button);
+    final pos =
+        _centerBtnOffset ??
+        (MediaQuery.of(context).orientation == Orientation.landscape
+            // Landscape keeps the bottom-left for the floating ETA pill; put
+            // the recenter button on the free right edge so it is not pushed
+            // off the short screen by the portrait offset (height - 330).
+            ? Offset(size.width - button - 14, size.height - button - 14)
+            : Offset(14, size.height - 330 - button));
     return Positioned(
-      left: pos.dx,
-      top: pos.dy,
+      left: pos.dx.clamp(0.0, size.width - button),
+      top: pos.dy.clamp(0.0, size.height - button),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         // Drag anywhere on the map; clamped to the screen so it never slides

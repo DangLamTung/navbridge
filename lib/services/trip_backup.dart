@@ -15,12 +15,21 @@ import 'trip_logger.dart';
 /// documents dir). Returns the file, ready to share.
 Future<File> exportTripsBackup() async {
   final trips = <Map<String, dynamic>>[];
-  for (final f in await listTrips()) {
-    try {
-      final content = jsonDecode(await f.readAsString());
-      trips.add({'file': f.uri.pathSegments.last, 'data': content});
-    } catch (_) {}
+  Future<void> add(Iterable<File> files, {required bool archived}) async {
+    for (final f in files) {
+      try {
+        final content = jsonDecode(await f.readAsString());
+        trips.add({
+          'file': f.uri.pathSegments.last,
+          'archived': archived,
+          'data': content,
+        });
+      } catch (_) {}
+    }
   }
+
+  await add(await listTrips(), archived: false);
+  await add(await listArchivedTrips(), archived: true);
   final fuelLog = await loadFuelLog();
   final backup = {
     'app': 'navbridge',
@@ -59,8 +68,12 @@ Future<int> restoreTripsBackup(File file) async {
     if (content == null) continue;
     // Avoid path traversal / collisions from an untrusted filename.
     final safe = name.replaceAll(RegExp(r'[^\w.\-]', unicode: true), '_');
-    await File('${dir.path}/$safe')
-        .writeAsString(const JsonEncoder.withIndent('  ').convert(content));
+    final target = t['archived'] == true
+        ? await archivedTripsDirectory()
+        : dir;
+    await File('${target.path}/$safe').writeAsString(
+      const JsonEncoder.withIndent('  ').convert(content),
+    );
     restored++;
   }
   for (final e in (data['fuelLog'] as List? ?? const [])

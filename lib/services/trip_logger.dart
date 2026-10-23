@@ -653,6 +653,15 @@ Future<Directory> tripsDirectory() async {
   return dir;
 }
 
+/// Originals moved here after a day is merged into one file. Kept out of
+/// [listTrips] so the UI shows one row per day, but still on disk (and included
+/// in the trip backup) so a merge is never destructive.
+Future<Directory> archivedTripsDirectory() async {
+  final dir = Directory('${(await tripsDirectory()).path}/originals');
+  if (!dir.existsSync()) dir.createSync(recursive: true);
+  return dir;
+}
+
 /// CONTINUOUS WRITE — what keeps a drive that gets cut off mid-way.
 ///
 /// The Takeout trip is ONE JSON document, so it can only be written whole, and
@@ -947,6 +956,18 @@ Future<List<File>> listTrips() async {
   return files;
 }
 
+/// Trips archived by a day merge, newest first.
+Future<List<File>> listArchivedTrips() async {
+  final dir = await archivedTripsDirectory();
+  final files = dir
+      .listSync()
+      .whereType<File>()
+      .where((f) => f.path.endsWith('.json'))
+      .toList();
+  files.sort((a, b) => b.path.compareTo(a.path));
+  return files;
+}
+
 /// A date "bucket" header for the Google-Timeline-like trip list.
 enum TripDateBucket { today, yesterday, thisWeek, older }
 
@@ -1015,6 +1036,26 @@ String readTripName(File f) {
   return base;
 }
 
+/// Split a merged day path at [breaks] (indices of the first point after a
+/// pause). Each returned list is one continuous polyline.
+List<List<LatLng>> splitTripPath(List<LatLng> path, List<int> breaks) {
+  if (path.isEmpty) return const [];
+  final cuts = breaks
+      .where((i) => i > 0 && i < path.length)
+      .toSet()
+      .toList()
+    ..sort();
+  if (cuts.isEmpty) return [path];
+  final out = <List<LatLng>>[];
+  var start = 0;
+  for (final cut in cuts) {
+    out.add(path.sublist(start, cut));
+    start = cut;
+  }
+  out.add(path.sublist(start));
+  return out;
+}
+
 /// A fully-loaded saved trip: the recorded GPS path plus the stops/places.
 class LoadedTrip {
   final String name;
@@ -1023,18 +1064,29 @@ class LoadedTrip {
   final DateTime? startedAt;
   final DateTime? endedAt;
 
+  /// Indices into [path] where a merged-day file resumes after a pause longer
+  /// than the merge gap. A break means "do not draw/distance a straight line
+  /// from the previous point to this one".
+  final List<int> breaks;
+
   const LoadedTrip({
     required this.name,
     required this.path,
     required this.places,
     this.startedAt,
     this.endedAt,
+    this.breaks = const [],
   });
+
+  /// The path split at [breaks], one polyline per continuous drive.
+  List<List<LatLng>> get segments => splitTripPath(path, breaks);
 
   /// Total path length in km.
   double get distanceKm {
+    final set = breaks.toSet();
     var m = 0.0;
     for (var i = 0; i < path.length - 1; i++) {
+      if (set.contains(i + 1)) continue;
       m += distanceMeters(path[i], path[i + 1]);
     }
     return m / 1000.0;
@@ -1071,13 +1123,26 @@ Future<LoadedTrip> loadTrip(File f) async {
   try {
     final data = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
     final path = <LatLng>[];
+    final breaks = <int>[];
+    final breakSources = <int>{
+      for (final b in (data['breaks'] as List? ?? const []))
+        if (b is num) b.toInt(),
+    };
+    var sourceIndex = 0;
+    var pendingBreak = false;
     DateTime? startedAt;
     DateTime? endedAt;
     for (final loc in (data['locations'] as List? ?? const [])) {
       final m = (loc as Map<String, dynamic>);
+      if (breakSources.contains(sourceIndex)) pendingBreak = true;
+      sourceIndex++;
       final latE7 = ((m['latitudeE7'] ?? 0) as num).toInt();
       final lngE7 = ((m['longitudeE7'] ?? 0) as num).toInt();
       if (latE7 == 0 && lngE7 == 0) continue;
+      if (pendingBreak && path.isNotEmpty) {
+        breaks.add(path.length);
+        pendingBreak = false;
+      }
       path.add(LatLng(latE7 / 1e7, lngE7 / 1e7));
       final ms = int.tryParse('${m['timestampMs']}');
       if (ms != null) {
@@ -1097,6 +1162,7 @@ Future<LoadedTrip> loadTrip(File f) async {
       places: places,
       startedAt: startedAt,
       endedAt: endedAt,
+      breaks: breaks,
     );
   } catch (_) {
     return LoadedTrip(name: name, path: const [], places: const []);
@@ -1116,16 +1182,20 @@ double fuelRateL100(String vehicle) {
 }
 
 /// Total path length (km) from a decoded Takeout `locations` list.
-double tripPathKm(List<dynamic> locations) {
+double tripPathKm(List<dynamic> locations, {List<int> breaks = const []}) {
+  final breakSet = breaks.toSet();
   var m = 0.0;
+  var i = 0;
   LatLng? prev;
   for (final loc in locations) {
     final lm = loc as Map<String, dynamic>;
+    final atBreak = breakSet.contains(i);
+    i++;
     final latE7 = ((lm['latitudeE7'] ?? 0) as num).toInt();
     final lngE7 = ((lm['longitudeE7'] ?? 0) as num).toInt();
     if (latE7 == 0 && lngE7 == 0) continue;
     final p = LatLng(latE7 / 1e7, lngE7 / 1e7);
-    if (prev != null) m += distanceMeters(prev, p);
+    if (!atBreak && prev != null) m += distanceMeters(prev, p);
     prev = p;
   }
   return m / 1000.0;

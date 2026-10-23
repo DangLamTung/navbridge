@@ -12,6 +12,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'package:navbridge/services/trip_backup.dart';
 import 'package:navbridge/services/trip_logger.dart';
+import 'package:navbridge/services/trip_merge.dart';
 import 'package:navbridge/core/trip_plan.dart';
 import 'package:navbridge/pages/trip_map_screen.dart';
 import 'package:navbridge/ui/widgets.dart';
@@ -65,7 +66,13 @@ class _TripsScreenState extends State<TripsScreen> {
             .cast<Map<String, dynamic>>())
           TripPlace.fromJson(p),
       ];
-      distanceKm = tripPathKm(data['locations'] as List? ?? const []);
+      distanceKm = tripPathKm(
+        data['locations'] as List? ?? const [],
+        breaks: [
+          for (final b in (data['breaks'] as List? ?? const []))
+            if (b is num) b.toInt(),
+        ],
+      );
     } catch (_) {
       // Unreadable/legacy trip — show name only.
     }
@@ -129,6 +136,57 @@ class _TripsScreenState extends State<TripsScreen> {
     }
   }
 
+
+  /// Merge one day's trips into a single Takeout file. The originals are
+  /// archived under `trips/originals/` (included in the backup), never deleted.
+  Future<void> _mergeDay(DateTime day, List<File> trips) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Gộp chuyến đi trong ngày'),
+        content: Text(
+          'Gộp ${trips.length} chuyến ngày '
+          '${day.day}/${day.month}/${day.year} thành 1 file?\n\n'
+          'Các file gốc được chuyển vào thư mục trips/originals '
+          '(không xoá) và vẫn nằm trong bản backup.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Huỷ'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Gộp'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      final result = await mergeTripsForDay(day);
+      await _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result == null
+                ? 'Không đủ dữ liệu để gộp ngày này.'
+                : 'Đã gộp ${result.sourceCount} chuyến → '
+                      '${result.file.uri.pathSegments.last} '
+                      '(${result.pointCount} điểm, '
+                      '${result.breakCount} lần nghỉ).',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gộp thất bại: $e')),
+        );
+      }
+    }
+  }
 
   void _openTripMap(File f) {
     Navigator.of(context).push(
@@ -400,9 +458,22 @@ class _TripsScreenState extends State<TripsScreen> {
       initiallyExpanded: true,
       tilePadding: const EdgeInsets.symmetric(horizontal: 8),
       leading: const Icon(Icons.calendar_today, color: kAppBlue),
-      title: Text(
-        _dayLabel(day, today),
-        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              _dayLabel(day, today),
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+            ),
+          ),
+          if (dayTrips.length > 1)
+            IconButton(
+              tooltip: 'Gộp thành 1 file',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.merge_type, size: 20, color: kAppBlue),
+              onPressed: () => _mergeDay(day, dayTrips),
+            ),
+        ],
       ),
       subtitle: Text(
         '${dayTrips.length} chuyến • ${km.toStringAsFixed(1)} km',

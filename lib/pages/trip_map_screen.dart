@@ -217,7 +217,8 @@ class _TripMapScreenState extends State<TripMapScreen> {
             ),
             PolylineLayer(
               polylines: [
-                Polyline(points: t.path, color: kAppBlue, strokeWidth: 5),
+                for (final segment in t.segments)
+                  Polyline(points: segment, color: kAppBlue, strokeWidth: 5),
               ],
             ),
             MarkerLayer(

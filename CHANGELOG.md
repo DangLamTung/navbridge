@@ -4,6 +4,39 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
+## 1.1.9 — 2026-10-23 (build 4017)
+
+**Landscape navigation gives the map back, and a day's trips can become one
+file.**
+
+- **Landscape nav uses floating pills.** On a phone held sideways the turn
+  banner and the ETA card no longer span the full width above and below the
+  map. They float as compact pills (64% / 58% of the width, 64 px / 52 px tall)
+  with smaller type, so most of the short screen stays map. The recenter button
+  moves to the free bottom-right corner; the speed island still drags freely.
+- **"Gộp theo ngày" can really merge a day.** Each day group gets a merge
+  action: fixes from every trip that day are sorted by time, duplicate
+  timestamps dropped, and pauses longer than 30 minutes become break indices so
+  the map draws one polyline per continuous drive instead of a straight jump.
+  The result is one `YYYY-MM-DD_…_Gộp_ngày.json`; originals move to
+  `trips/originals/` (never deleted) and are included in the trip backup.
+- **Releases are signed with a persistent upload key.** The previous GitHub
+  APKs were debug-signed with a fresh CI key on every run, so Android refused
+  to update one release over another and users had to uninstall (losing app
+  data). From this build the `ANDROID_*` repository secrets point at one
+  upload keystore, so later releases update in place.
+  *One-time migration:* a device still on a debug-signed 1.1.8 (or older)
+  GitHub APK must uninstall that APK once before installing this signed build;
+  export trips first. After that, updates keep settings, offline data and trips.
+
+### Internal
+
+- `LoadedTrip` carries `breaks` and `segments`; the trip map draws a polyline
+  per segment and distance/statistics skip the gap. Backup format adds an
+  optional `archived` flag so restored originals go back to `trips/originals/`.
+- Compact `NavTopBar` / `NavigationCard` variants are covered by overflow tests
+  at 360 px pill width.
+
 ## 1.1.8 — 2026-10-21 (build 4016)
 
 **Camera data is now nationwide, Google routing finally uses live traffic, and

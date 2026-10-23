@@ -21,6 +21,7 @@ class NavigationCard extends StatefulWidget {
     this.onOverview,
     this.stopLabel = '',
     this.arrivalTime,
+    this.compact = false,
   });
 
   /// Latest navigation progress (null while starting up).
@@ -37,6 +38,9 @@ class NavigationCard extends StatefulWidget {
   /// Fixed arrival moment — the card counts down to it live. Null falls back
   /// to the engine's `etaHour`/`etaMinute`.
   final DateTime? arrivalTime;
+
+  /// Landscape nav: a short floating pill instead of the portrait bottom card.
+  final bool compact;
 
   @override
   State<NavigationCard> createState() => _NavigationCardState();
@@ -102,12 +106,17 @@ class _NavigationCardState extends State<NavigationCard> {
     final a = _arrival;
     final remaining = _remaining;
     return Material(
-      elevation: 10,
+      elevation: widget.compact ? 6 : 10,
       shadowColor: Colors.black26,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
+      borderRadius: widget.compact
+          ? BorderRadius.circular(16)
+          : const BorderRadius.vertical(top: Radius.circular(15)),
       color: Colors.white,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        padding: EdgeInsets.symmetric(
+          horizontal: widget.compact ? 9 : 14,
+          vertical: widget.compact ? 7 : 12,
+        ),
         child: Row(
           children: [
             // Stop navigation button.
@@ -115,8 +124,10 @@ class _NavigationCardState extends State<NavigationCard> {
               icon: Icons.close,
               onTap: widget.onStop,
               tooltip: 'Kết thúc chỉ đường',
+              size: widget.compact ? 36 : 50,
+              iconSize: widget.compact ? 22 : 30,
             ),
-            const SizedBox(width: 14),
+            SizedBox(width: widget.compact ? 8 : 14),
             // Big amber live ETA + distance • arrival.
             Expanded(
               child: Column(
@@ -131,10 +142,10 @@ class _NavigationCardState extends State<NavigationCard> {
                         : _durationText(remaining),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 25,
+                    style: TextStyle(
+                      fontSize: widget.compact ? 18 : 25,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFFFF6F00), // amber[900], Vietmap-style
+                      color: const Color(0xFFFF6F00), // amber[900], Vietmap-style
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -150,18 +161,23 @@ class _NavigationCardState extends State<NavigationCard> {
                           ].join(' • '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 18, color: Colors.black45),
+                    style: TextStyle(
+                      fontSize: widget.compact ? 13 : 18,
+                      color: Colors.black45,
+                    ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 14),
+            SizedBox(width: widget.compact ? 8 : 14),
             // Overview (fit-route) button.
             if (widget.onOverview != null)
               _RoundAction(
                 icon: Icons.route,
                 onTap: widget.onOverview!,
                 tooltip: 'Xem toàn bộ lộ trình',
+                size: widget.compact ? 36 : 50,
+                iconSize: widget.compact ? 22 : 30,
               ),
           ],
         ),
@@ -176,11 +192,15 @@ class _RoundAction extends StatelessWidget {
     required this.icon,
     required this.onTap,
     required this.tooltip,
+    this.size = 50,
+    this.iconSize = 30,
   });
 
   final IconData icon;
   final VoidCallback onTap;
   final String tooltip;
+  final double size;
+  final double iconSize;
 
   @override
   Widget build(BuildContext context) {
@@ -190,14 +210,14 @@ class _RoundAction extends StatelessWidget {
         customBorder: const CircleBorder(),
         onTap: onTap,
         child: Container(
-          width: 50,
-          height: 50,
+          width: size,
+          height: size,
           decoration: BoxDecoration(
             color: Colors.white,
             shape: BoxShape.circle,
             border: Border.all(color: Colors.black45, width: 1),
           ),
-          child: Icon(icon, color: Colors.black45, size: 30),
+          child: Icon(icon, color: Colors.black45, size: iconSize),
         ),
       ),
     );

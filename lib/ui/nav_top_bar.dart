@@ -27,6 +27,7 @@ class NavTopBar extends StatelessWidget {
     this.steps = const [],
     this.expanded = false,
     this.onToggle,
+    this.compact = false,
   });
 
   /// Destination display name.
@@ -54,6 +55,9 @@ class NavTopBar extends StatelessWidget {
   /// Called when the banner is tapped (toggle the step list).
   final VoidCallback? onToggle;
 
+  /// Landscape nav: a short floating pill rather than the portrait banner.
+  final bool compact;
+
   @override
   Widget build(BuildContext context) {
     final nav = progress;
@@ -68,20 +72,20 @@ class NavTopBar extends StatelessWidget {
         GestureDetector(
           onTap: onToggle,
           child: Container(
-            margin: const EdgeInsets.all(10),
-            height: 100,
+            margin: EdgeInsets.all(compact ? 6 : 10),
+            height: compact ? 64 : 100,
             width: double.infinity,
             decoration: BoxDecoration(
-              color: Colors.lightBlue.withValues(alpha: 0.7),
-              borderRadius: BorderRadius.circular(15),
+              color: Colors.lightBlue.withValues(alpha: compact ? 0.82 : 0.7),
+              borderRadius: BorderRadius.circular(compact ? 14 : 15),
             ),
             child: Row(
               children: [
-                const SizedBox(width: 15),
+                SizedBox(width: compact ? 10 : 15),
                 // White circular maneuver icon (52px) — the SDK banner icon.
                 Container(
-                  width: 52,
-                  height: 52,
+                  width: compact ? 40 : 52,
+                  height: compact ? 40 : 52,
                   decoration: const BoxDecoration(
                     color: Colors.white,
                     shape: BoxShape.circle,
@@ -89,10 +93,10 @@ class NavTopBar extends StatelessWidget {
                   child: Icon(
                     nav == null ? Icons.navigation : maneuverIcon(nav.iconCode),
                     color: Colors.lightBlue,
-                    size: 32,
+                    size: compact ? 24 : 32,
                   ),
                 ),
-                const SizedBox(width: 10),
+                SizedBox(width: compact ? 8 : 10),
                 Expanded(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -107,8 +111,8 @@ class NavTopBar extends StatelessWidget {
                             : nav.text,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 22,
+                        style: TextStyle(
+                          fontSize: compact ? 16 : 22,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
                         ),
@@ -124,15 +128,15 @@ class NavTopBar extends StatelessWidget {
                               const TextSpan(text: 'Còn '),
                               TextSpan(
                                 text: formatDistance(nav.meter),
-                                style: const TextStyle(
-                                  fontSize: 22,
+                                style: TextStyle(
+                                  fontSize: compact ? 16 : 22,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
                               TextSpan(
                                 text: ', ${maneuverVerb(nav.iconCode)}',
-                                style: const TextStyle(
-                                  fontSize: 20,
+                                style: TextStyle(
+                                  fontSize: compact ? 14 : 20,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
@@ -149,10 +153,10 @@ class NavTopBar extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     if (recording)
-                      const Icon(
+                      Icon(
                         Icons.fiber_manual_record,
                         color: Colors.white,
-                        size: 14,
+                        size: compact ? 12 : 14,
                       ),
                     if (!kIsWeb)
                       Icon(
@@ -160,20 +164,20 @@ class NavTopBar extends StatelessWidget {
                         color: clockConnected
                             ? const Color(0xFFE3F7EC)
                             : Colors.white38,
-                        size: 18,
+                        size: compact ? 14 : 18,
                       ),
                     const SizedBox(height: 2),
                     InkWell(
                       customBorder: const CircleBorder(),
                       onTap: onExit,
                       child: Container(
-                        width: 28,
-                        height: 28,
+                        width: compact ? 24 : 28,
+                        height: compact ? 24 : 28,
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.28),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.close,
                           color: Colors.white,
                           size: 16,
@@ -193,9 +197,17 @@ class NavTopBar extends StatelessWidget {
         // light map).
         if (nav != null && nav.nextIconCode != 0)
           Padding(
-            padding: const EdgeInsets.fromLTRB(10, 2, 10, 6),
+            padding: EdgeInsets.fromLTRB(
+              compact ? 6 : 10,
+              2,
+              compact ? 6 : 10,
+              compact ? 4 : 6,
+            ),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              padding: EdgeInsets.symmetric(
+                horizontal: compact ? 8 : 10,
+                vertical: compact ? 3 : 5,
+              ),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.94),
                 borderRadius: BorderRadius.circular(12),
@@ -217,7 +229,7 @@ class NavTopBar extends StatelessWidget {
                   Icon(
                     maneuverIcon(nav.nextIconCode),
                     color: kAppBlue,
-                    size: 18,
+                    size: compact ? 16 : 18,
                   ),
                   const SizedBox(width: 6),
                   Flexible(
@@ -225,10 +237,10 @@ class NavTopBar extends StatelessWidget {
                       'Sau đó: ${nav.nextText.isEmpty ? 'đi tiếp' : nav.nextText}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
+                      style: TextStyle(
+                        fontSize: compact ? 11 : 13,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF202124),
+                        color: const Color(0xFF202124),
                       ),
                     ),
                   ),
@@ -236,8 +248,8 @@ class NavTopBar extends StatelessWidget {
                     const SizedBox(width: 6),
                     Text(
                       stopLabel,
-                      style: const TextStyle(
-                        fontSize: 12,
+                      style: TextStyle(
+                        fontSize: compact ? 10 : 12,
                         color: Colors.black54,
                       ),
                     ),
@@ -250,14 +262,14 @@ class NavTopBar extends StatelessWidget {
         if (expanded) ...[
           if (steps.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+              padding: EdgeInsets.fromLTRB(compact ? 6 : 10, compact ? 4 : 8, compact ? 6 : 10, 0),
               child: Container(
                 padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(14),
                 ),
-                constraints: const BoxConstraints(maxHeight: 300),
+                constraints: BoxConstraints(maxHeight: compact ? 170 : 300),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
