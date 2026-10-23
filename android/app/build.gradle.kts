@@ -63,8 +63,13 @@ android {
     signingConfigs {
         create("release") {
             val sf = keystoreProps.getProperty("storeFile")
-            if (sf != null && File(sf).exists()) {
-                storeFile = file(sf)
+            // key.properties is written in android/ and names the keystore
+            // relative to that directory (`app/upload-keystore.jks`). Resolve
+            // it against the root project — `file(sf)` resolved against
+            // android/app and looked for android/app/app/upload-keystore.jks.
+            val sfFile = sf?.let { rootProject.file(it) }
+            if (sfFile != null && sfFile.exists()) {
+                storeFile = sfFile
                 storePassword = keystoreProps.getProperty("storePassword")
                 keyAlias = keystoreProps.getProperty("keyAlias")
                 keyPassword = keystoreProps.getProperty("keyPassword")
