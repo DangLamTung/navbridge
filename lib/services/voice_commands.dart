@@ -401,6 +401,20 @@ class VoiceCommands {
         },
         onError: (e) {
           debugPrint('VOICE: stt error ${e.errorMsg}');
+          final msg = e.errorMsg.toLowerCase();
+          if (msg.contains('network') || msg.contains('offline')) {
+            // The network model is unreachable. Retry with the on-device model
+            // on the next session instead of failing every command in offline
+            // mode.
+            if (!_useOnDevice) {
+              debugPrint('VOICE: network STT failed — retrying on-device');
+            }
+            _useOnDevice = true;
+          } else if (_useOnDevice) {
+            // The on-device model failed (missing, or a one-off error); let the
+            // next session try the network model again.
+            _useOnDevice = false;
+          }
           _listening = false;
           _sessionStatusCallback?.call('error');
         },
@@ -422,9 +436,18 @@ class VoiceCommands {
   /// - RIDING (motorbike): the short-command `search` model (more robust to
   ///   wind/engine noise on short phrases), longer silence tolerance (~7 s),
   ///   and the Bluetooth headset mic is used when paired.
+  /// Set once a network session fails (no connection / network timeout). The
+  /// next session asks the platform for the on-device model, so voice commands
+  /// keep working offline. It is NOT driven by connectivity_plus: that plugin
+  /// reports `none` on some ROMs (itel) even with a working network, and a
+  /// false "offline" here would switch to a model the device may not have.
+  bool _useOnDevice = false;
+
   stt.SpeechListenOptions _listenOptions() => stt.SpeechListenOptions(
     localeId: _vi ? 'vi_VN' : null,
-    onDevice: false,
+    // Network recognition is more accurate; fall back to the on-device model
+    // after a network error (see [_useOnDevice]).
+    onDevice: _useOnDevice,
     listenMode: ridingMode
         ? stt.ListenMode.search
         : stt.ListenMode.dictation,
@@ -512,7 +535,7 @@ class VoiceCommands {
     try {
       debugPrint(
         'VOICE: listen start mode=${ridingMode ? "search" : "dictation"} '
-        'onDevice=false vi=$_vi',
+        'onDevice=$_useOnDevice vi=$_vi',
       );
       final started = await _speech.listen(
         onResult: (r) {
@@ -529,7 +552,13 @@ class VoiceCommands {
         },
         listenOptions: _listenOptions(),
       );
-      if (!started) finish();
+      if (!started) {
+        // The recognizer refused to start. Try the OTHER engine next session:
+        // the network failure may be transient, and an on-device model may not
+        // exist on this phone. Alternating cannot get stuck on either.
+        _useOnDevice = !_useOnDevice;
+        finish();
+      }
       timeoutTimer = Timer(const Duration(seconds: 30), finish);
     } catch (e) {
       debugPrint('VOICE: listen failed: $e');
@@ -591,6 +620,7 @@ class VoiceCommands {
         listenOptions: _listenOptions(),
       );
       if (!started) {
+        _useOnDevice = !_useOnDevice;
         _listening = false;
         if (_alwaysOn) {
           _restartTimer?.cancel();

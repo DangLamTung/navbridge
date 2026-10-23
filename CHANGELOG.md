@@ -34,6 +34,30 @@ the app can tell you how much of the free Google quota this phone has spent.**
 - `NAVBRIDGE_TARGET_SDK` build override, used to probe whether an OEM
   split-screen allowlist is keyed on targetSdk ≥ 34.
 
+### Internal
+
+- **45 HCMC camera points re-geocoded.** The source lists had addresses whose
+  stated district did not match the point (some sat in Vũng Tàu, Thủ Dầu Một or
+  Tân Thành). Each was re-geocoded with district-scoped queries and scored
+  against the expected ADM2 polygon and street tokens; the camera DB is v6
+  (31,979 points, still zero same-focus pairs within 80 m).
+- **Voice callouts fire once per zone.** Far/near/final zones are now a pure
+  function (400/300/100 m, speed-scaled), a stale `await` can no longer speak a
+  maneuver the car has already passed, and the next-street limit write is
+  guarded after every await. Red-light cameras cover the junction with one
+  warning; sign callouts use the 60 m route corridor.
+- **Speech recognition falls back on-device.** A network/start failure switches
+  the recognizer to on-device and alternates engines if that also fails, instead
+  of silently leaving voice commands dead offline.
+- **Heavy data work moved off the UI isolate.** The 5.6 MB camera index, ~8 MB
+  sign index and 14 MB gzipped segment pack are decoded with `compute`; near
+  camera/sign queries use a 0.02° `PointGrid` instead of scanning all 32k/11k
+  rows; the 1 Hz nav layer skips `setState` when the drawn markers are
+  unchanged; the auto tile cache is capped at 300 MB (trimmed to 80%).
+- The voice-callout audit no longer compares a maneuver callout's limit with the
+  limit under the car — that number belongs to the street being entered. The
+  next-street check is `tool/announce_speed_audit.py`.
+
 ## 1.1.7 — 2026-10-14 (build 4015)
 
 **The layer you pick is remembered, and the vector map is always underneath.**

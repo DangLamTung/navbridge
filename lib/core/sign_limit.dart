@@ -37,6 +37,28 @@ const double kSignAdoptM = 400.0;
 /// độ, giới hạn X phía trước" advance warning ([kSignAdoptM]..[kSignWarnM]).
 const double kSignWarnM = 1000.0;
 
+/// How close a red-light camera must be to a traffic-light sign for the two to
+/// describe the SAME junction. The camera alert is more informative (it names
+/// the source and the distance), so the sign callout is dropped inside this
+/// window instead of saying "đèn đỏ/đèn giao thông" twice.
+const double kJunctionCameraToleranceM = 150.0;
+
+/// True when [cameraMeters] is a red-light camera at the same junction as a
+/// traffic-light sign [signMeters] ahead of the car.
+///
+/// Both distances are ALONG THE ROUTE from the car. A missing camera, a
+/// non-red-light camera, or a camera farther than [toleranceM] from the sign
+/// returns false (the light keeps its own callout).
+bool redLightCameraCoversJunction({
+  required double signMeters,
+  required double? cameraMeters,
+  required bool isRedLightCamera,
+  double toleranceM = kJunctionCameraToleranceM,
+}) {
+  if (!isRedLightCamera || cameraMeters == null) return false;
+  return (cameraMeters - signMeters).abs() <= toleranceM;
+}
+
 /// True when the adopted sign ([signValue]) is IN FORCE — not merely previewed.
 ///
 /// [layerKmh] is the posted limit the SEGMENT layer under the car carries

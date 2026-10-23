@@ -96,6 +96,24 @@ bool saneUpdatePack(String name, List<int> bytes) {
   }
 }
 
+/// Async validation: JSON packs are decoded on a worker isolate. A 5–8 MB
+/// `jsonDecode` on the UI isolate is exactly the kind of "background" work
+/// that still drops frames on a low-end phone. The `.tar.gz`/`.bin` checks only
+/// inspect a few magic bytes and stay synchronous.
+Future<bool> saneUpdatePackAsync(String name, List<int> bytes) {
+  if (name.endsWith('.tar.gz') || name.endsWith('.bin')) {
+    return Future.value(saneUpdatePack(name, bytes));
+  }
+  return compute(_saneJsonPack, (name, bytes));
+}
+
+bool _saneJsonPack((String, List<int>) pack) =>
+    saneUpdatePack(pack.$1, pack.$2);
+
+/// `gzip.decode` of the 14 MB segment pack is CPU-bound; keep it off the UI
+/// isolate.
+List<int> _gunzipBytes(List<int> bytes) => gzip.decode(bytes);
+
 /// Last-known remote versions per file, persisted in
 /// `<support>/offline_data/version.json` (the SAME file the server publishes,
 /// so the local copy doubles as the "last synced" marker).
@@ -298,9 +316,9 @@ class OfflineDataUpdater {
             .timeout(const Duration(seconds: 60));
         if (res.statusCode != 200 || res.bodyBytes.isEmpty) continue;
         final bytes = suffix == '.gz'
-            ? gzip.decode(res.bodyBytes)
+            ? await compute(_gunzipBytes, res.bodyBytes)
             : res.bodyBytes;
-        if (!saneUpdatePack(name, bytes)) continue;
+        if (!await saneUpdatePackAsync(name, bytes)) continue;
         final dir = await offlineDataDir();
         final f = File('${dir.path}/$name');
         // Write atomically: a crash mid-write must never leave a truncated

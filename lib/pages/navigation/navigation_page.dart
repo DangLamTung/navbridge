@@ -503,13 +503,26 @@ class _NavigationPageState extends State<NavigationPage>
 
     if (!mounted) return;
 
+    // Repeat speed signs of the SAME limit collapse to ONE icon per stretch
+    // (they occupy the front of the priority list and crowded the map); the
+    // freed slots go to the other kinds. Display only — the limit itself
+    // comes from the sign index, not this list.
+    final keptRoute = collapseRepeatedSpeedSigns(routeSigns);
+    // This runs every second while driving. Rebuild the whole page only when
+    // the drawn set actually changes — the DB objects are stable references,
+    // so identity is enough and avoids a 1 Hz setState/log line over a static
+    // row of markers.
+    var sameCams = routeCams.length == _routeCameras.length;
+    for (var i = 0; sameCams && i < routeCams.length; i++) {
+      if (!identical(routeCams[i], _routeCameras[i])) sameCams = false;
+    }
+    var sameSigns = keptRoute.length == _routeSigns.length;
+    for (var i = 0; sameSigns && i < keptRoute.length; i++) {
+      if (!identical(keptRoute[i], _routeSigns[i])) sameSigns = false;
+    }
+    if (sameCams && sameSigns) return;
     setNavState(() {
       _routeCameras = routeCams;
-      // Repeat speed signs of the SAME limit collapse to ONE icon per stretch
-      // (they occupy the front of the priority list and crowded the map); the
-      // freed slots go to the other kinds. Display only — the limit itself
-      // comes from the sign index, not this list.
-      final keptRoute = collapseRepeatedSpeedSigns(routeSigns);
       _routeSigns = keptRoute;
       // SHOW-vs-ANNOUNCE test: THIS is the list the nav map draws (`signs:` in
       // nav_build.dart), and it is a different pipeline from the browse map's
@@ -745,6 +758,12 @@ class _NavigationPageState extends State<NavigationPage>
   /// Lookup in flight, awaited by the announcement so the first callout already
   /// carries the right number.
   Future<void>? _nextStreetLimitJob;
+
+  /// Bumped by every maneuver callout. A callout that finishes its async
+  /// next-street lookup after a newer one was requested must not speak: the
+  /// car may already be at the next turn, and the resolved limit belongs to
+  /// the street behind it.
+  int _maneuverSpeakToken = 0;
 
   // --- trip logging (Google Takeout) ---
   TripLogger? _trip;

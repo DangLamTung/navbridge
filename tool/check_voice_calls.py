@@ -9,10 +9,14 @@ memory of what it sounded like.
 Checks, per announcement:
   * kind='limit'    — "Tốc độ tối đa N km/h": does N match the limit actually in
                       force at that moment (limitEffective)?
-  * kind='maneuver' — "Đi trên X, sau …, <verb> vào Y. Tốc độ tối đa N km/h":
-                      does X match the street under the car, and N the vehicle's
-                      max on the street being entered
-                      (see tool/announce_speed_audit.py)?
+  * kind='maneuver' — "Đi trên X, sau …, <verb> vào Y. Tốc độ … N km/h":
+                      does X match the street under the car, and does the spoken
+                      verb match the route geometry?
+                      The N inside a maneuver callout belongs to Y, the street
+                      being entered — comparing it with the limit under the car
+                      is wrong by construction. That check lives in
+                      tool/announce_speed_audit.py, which walks the track to the
+                      junction and reads the named street's segment.
 
 NOTE (2026-09-24): every limit announcement uses ONE phrase, "Tốc độ tối đa
 N km/h" (briefly "giới hạn tốc độ" the same day; before that the change said
@@ -20,8 +24,10 @@ N km/h" (briefly "giới hạn tốc độ" the same day; before that the change
 forms are still parsed so trips recorded before the change stay auditable.
 
 Run:  python3 tool/check_voice_calls.py [docs/trips/device]
-Exit code is non-zero when a street/limit mismatch is found, so it can gate a
-release check after a test drive.
+Exit code is non-zero when a street-name, kind='limit' value, or the app's own
+logged turn-angle check fails, so it can gate a release check after a test
+drive. Heading/path turn disagreements are reported but are a heuristic (GPS
+noise, alleys) and do not fail the run.
 
 Measured 2026-09-22 over 11 recorded drives (before the fix below):
   limit announcements  104 checked, 0 wrong
@@ -45,7 +51,6 @@ LIMIT_RX = re.compile(
     r'(?:Gi[ớo]i h[ạa]n(?: t[ốo]c [đd][ộo])?|T[ốo]c [đd][ộo] t[ốo]i [đd]a'
     r'|T[ốo]c [đd][ộo] ti[ếe]p theo l[àa]) (\d+) km/h')
 ON_RX = re.compile(r'^Đi trên (.+?), sau ')
-MAX_RX = LIMIT_RX  # one phrase for every limit announcement since 2026-09-24
 
 # Spoken turn verbs, most specific first. 'nhẹ' (slight) is excluded from the
 # direction check: its heading change is small enough to be ambiguous.
@@ -271,7 +276,7 @@ def main():
         raise SystemExit(f'no trips in {root}')
 
     checked = {'limit': 0, 'maneuver': 0, 'turn': 0}
-    bad = {'limit': [], 'street': [], 'maneuver_limit': [], 'turn': []}
+    bad = {'limit': [], 'street': [], 'turn': []}
     turns = {}
     # Street-anchored turns (reliable) + the app's own logged geometry angle
     # (`extra.turnDeg`, written by the fixed build — the authoritative check).
@@ -317,11 +322,9 @@ def main():
                         bad['street'].append(
                             (os.path.basename(path), m.group(1), f['street'])
                         )
-                m2 = MAX_RX.search(text)
-                if m2 and f['limit'] is not None and int(m2.group(1)) != f['limit']:
-                    bad['maneuver_limit'].append(
-                        (os.path.basename(path), m2.group(1), f['limit'])
-                    )
+                # The limit inside a maneuver callout describes the street being
+                # ENTERED, not the one under the car. Never compare it with
+                # f['limit'] here — see tool/announce_speed_audit.py.
                 # Turn DIRECTION: compare the spoken verb with the heading the
                 # car actually swings through at that maneuver. Ground truth is
                 # free — every fix carries `heading`, and heading increases
@@ -393,7 +396,7 @@ def main():
     print(f"  value WRONG                 : {len(bad['limit'])}")
     print(f"maneuver callouts             : {checked['maneuver']}")
     print(f"  street name WRONG           : {len(bad['street'])}")
-    print(f"  limit inside callout WRONG  : {len(bad['maneuver_limit'])}")
+    print('  limit inside callout        : see tool/announce_speed_audit.py')
     print(f"turn callouts (left/right)    : {checked['turn']}")
     print(f"  DISTINCT turns identified    : {len(turns)}")
     wrong_turns = sum(1 for v in turns.values() if v[1] != v[2])
@@ -456,7 +459,9 @@ def main():
         for b in bad['limit'][:15]:
             print(f"  {b[0][:26]:<26} said {b[1]!r:<26} actual={b[2]} layer={b[3]}")
 
-    failed = any(bad.values()) or bool(direct['wrong'])
+    # Turn direction from heading/path is a HEURISTIC (GPS noise, alleys); the
+    # authoritative result is the app's own logged geometry angle (direct).
+    failed = bool(bad['street']) or bool(bad['limit']) or bool(direct['wrong'])
     print('\nRESULT:', 'FAIL' if failed else 'OK')
     return 1 if failed else 0
 

@@ -8,13 +8,14 @@
 library;
 
 import 'dart:convert';
-import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show compute;
 import 'package:latlong2/latlong.dart';
 
 import 'offline_loader.dart';
 import 'offline_scan.dart';
 import 'offline_scan_isolate.dart';
+import 'point_grid.dart';
 
 /// One offline camera / traffic-sign point.
 class OfflineCamera implements OfflinePoint {
@@ -154,12 +155,32 @@ void reloadOfflineCameras() => _cameras.reload();
 Future<List<OfflineCamera>> _fetchCameras() async {
   // Prefers an auto-updated copy over the bundled asset — see readOfflineText.
   final raw = await readOfflineText('vietnam_cameras.json');
+  // Parsing 5.6 MB / 32k rows on the UI isolate is a visible first-load stall
+  // on a low-end phone. The read stays here (rootBundle needs the root
+  // isolate); decode + object construction move off the main thread.
+  return compute(_parseCameras, raw);
+}
+
+List<OfflineCamera> _parseCameras(String raw) {
   final data = jsonDecode(raw) as Map<String, dynamic>;
   return [
     for (final it
         in (data['cameras'] as List? ?? const []).cast<Map<String, dynamic>>())
       OfflineCamera.fromJson(it),
   ];
+}
+
+PointGrid<OfflineCamera>? _cameraGrid;
+List<OfflineCamera>? _cameraGridSource;
+
+/// Grid for [cams], rebuilt only when the loader hands back a new list (an
+/// auto-update reload). Never mutates the list.
+PointGrid<OfflineCamera> _gridFor(List<OfflineCamera> cams) {
+  if (!identical(cams, _cameraGridSource)) {
+    _cameraGrid = PointGrid(cams, posOf: (c) => c.pos);
+    _cameraGridSource = cams;
+  }
+  return _cameraGrid!;
 }
 
 /// Find cameras AHEAD of [current] along [geometry], ordered by distance along
@@ -223,18 +244,8 @@ Future<List<OfflineCamera>> camerasNearPoint(
   final cams = await loadOfflineCameras();
   if (cams.isEmpty) return const [];
   const Distance d = Distance();
-  final span = maxDistM / 111320.0;
-  // Longitude degrees shrink with cos(lat); without this, cameras due
-  // east/west in range get pruned by the bbox wall before the distance test.
-  final lngSpan = span / math.cos(pos.latitude * math.pi / 180.0);
   final out = <OfflineCamera>[];
-  for (final c in cams) {
-    if (c.lat < pos.latitude - span ||
-        c.lat > pos.latitude + span ||
-        c.lng < pos.longitude - lngSpan ||
-        c.lng > pos.longitude + lngSpan) {
-      continue;
-    }
+  for (final c in _gridFor(cams).near(pos.latitude, pos.longitude, maxDistM)) {
     if (d.as(LengthUnit.Meter, pos, c.pos) <= maxDistM) out.add(c);
   }
   return dedupCameras(out);

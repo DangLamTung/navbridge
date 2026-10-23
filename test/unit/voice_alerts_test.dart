@@ -400,4 +400,46 @@ void main() {
         });
       });
   });
+
+  group('maneuver callout zones', () {
+    ManeuverCalloutZone zone(
+      double m, {
+      bool far = false,
+      bool near = false,
+      bool finalCall = false,
+    }) => maneuverCalloutZone(
+      meters: m,
+      farMeters: 400,
+      nearMeters: 300,
+      finalMeters: 100,
+      spokenFar: far,
+      spokenNear: near,
+      spokenFinal: finalCall,
+    );
+
+    test('a fresh turn far away is silent until it reaches 400 m', () {
+      expect(zone(2000), ManeuverCalloutZone.none);
+      expect(zone(401), ManeuverCalloutZone.none);
+      expect(zone(400), ManeuverCalloutZone.far);
+      expect(zone(350), ManeuverCalloutZone.far);
+    });
+
+    test('each zone fires once, in order', () {
+      expect(zone(400), ManeuverCalloutZone.far);
+      expect(zone(350, far: true), ManeuverCalloutZone.none);
+      expect(zone(300, far: true), ManeuverCalloutZone.near);
+      expect(zone(150, far: true, near: true), ManeuverCalloutZone.none);
+      expect(zone(100, far: true, near: true), ManeuverCalloutZone.finalCall);
+      expect(
+        zone(50, far: true, near: true, finalCall: true),
+        ManeuverCalloutZone.none,
+      );
+    });
+
+    test('a skipped far zone still allows the near and final callouts', () {
+      // The car starts nav at 250 m: no far callout, but near/final must fire.
+      expect(zone(250), ManeuverCalloutZone.near);
+      expect(zone(90, near: true), ManeuverCalloutZone.finalCall);
+    });
+  });
 }

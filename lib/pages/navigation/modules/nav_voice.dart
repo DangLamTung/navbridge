@@ -1,5 +1,30 @@
 part of '../navigation_page.dart';
 
+/// Which maneuver callout zone a fix falls in. Pure so the 400 / 300 / 100 m
+/// contract can be tested without a drive.
+enum ManeuverCalloutZone { none, far, near, finalCall }
+
+ManeuverCalloutZone maneuverCalloutZone({
+  required double meters,
+  required double farMeters,
+  required double nearMeters,
+  required double finalMeters,
+  required bool spokenFar,
+  required bool spokenNear,
+  required bool spokenFinal,
+}) {
+  if (!spokenFar && meters <= farMeters && meters > nearMeters) {
+    return ManeuverCalloutZone.far;
+  }
+  if (!spokenNear && meters <= nearMeters && meters > finalMeters) {
+    return ManeuverCalloutZone.near;
+  }
+  if (!spokenFinal && meters <= finalMeters) {
+    return ManeuverCalloutZone.finalCall;
+  }
+  return ManeuverCalloutZone.none;
+}
+
 extension _NavVoice on _NavigationPageState {
   /// Open the AI assistant chat panel. [question] is auto-sent on open (e.g.
   /// from the voice command "hỏi AI …"); null opens an empty chat.
@@ -14,73 +39,92 @@ extension _NavVoice on _NavigationPageState {
     // Context starts as the fast, already-known pieces (position/route/speed)
     // so the first question is answerable immediately.
     final live = ValueNotifier<AiContext?>(_aiContext());
+    // The sheet can be closed while the slow facts are still being fetched;
+    // writing to a disposed ValueNotifier throws. Keep a flag instead of
+    // disposing only after the future finishes (the panel would then wait for
+    // weather before closing).
+    var closed = false;
     // Compute the slow drive facts in the background; update the notifier.
-    unawaited(_fillAiContextAsync(live));
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      // The modal sheet's builder context reliably reports the on-screen
-      // keyboard via viewInsets — this Padding lifts the whole panel above the
-      // keyboard so the question field is never blocked while typing.
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
-        child: AiChatPanel(
-          context: _aiContext(),
-          liveContext: live,
-          initialQuestion: question?.trim(),
-          // Opened by a voice command → speak the answer aloud while it streams
-          // so the driver never has to look at the screen.
-          speakAloud: question != null && question.trim().isNotEmpty,
-          onSpeak: (sentence) {
-            if (sentence.isEmpty) {
-              _voice.stop(); // flush any queued spoken answer
-            } else {
-              _voice.speakQueued(sentence);
-            }
-          },
-          // "Đi đến" chip on an AI-grounded place → plan the route.
-          onNavigate: (name, lat, lng) {
-            unawaited(_planToPoint(name, lat, lng));
-          },
-          onMicPressed: ({void Function(String partial)? onPartial}) async {
-            final mic = await Permission.microphone.request();
-            if (!mic.isGranted) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Cần quyền micro để nói chuyện với Trợ lý AI.',
-                    ),
-                  ),
-                );
-              }
-              return '';
-            }
-            if (!mounted) return '';
-            return _recognizeOnePhrase(onPartial: onPartial);
-          },
-          onMicCancel: () async {
-            await _commands.stop();
-          },
+    unawaited(_fillAiContextAsync(live, alive: () => !closed));
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.white,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
         ),
-      ),
-    );
-    live.dispose();
+        // The modal sheet's builder context reliably reports the on-screen
+        // keyboard via viewInsets — this Padding lifts the whole panel above the
+        // keyboard so the question field is never blocked while typing.
+        builder: (ctx) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+          child: AiChatPanel(
+            context: _aiContext(),
+            liveContext: live,
+            initialQuestion: question?.trim(),
+            // Opened by a voice command → speak the answer aloud while it streams
+            // so the driver never has to look at the screen.
+            speakAloud: question != null && question.trim().isNotEmpty,
+            onSpeak: (sentence) {
+              if (sentence.isEmpty) {
+                _voice.stop(); // flush any queued spoken answer
+              } else {
+                _voice.speakQueued(sentence);
+              }
+            },
+            // "Đi đến" chip on an AI-grounded place → plan the route.
+            onNavigate: (name, lat, lng) {
+              unawaited(_planToPoint(name, lat, lng));
+            },
+            onMicPressed: ({void Function(String partial)? onPartial}) async {
+              final mic = await Permission.microphone.request();
+              if (!mic.isGranted) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Cần quyền micro để nói chuyện với Trợ lý AI.',
+                      ),
+                    ),
+                  );
+                }
+                return '';
+              }
+              if (!mounted) return '';
+              return _recognizeOnePhrase(onPartial: onPartial);
+            },
+            onMicCancel: () async {
+              await _commands.stop();
+            },
+          ),
+        ),
+      );
+    } finally {
+      closed = true;
+      live.dispose();
+    }
   }
 
   /// Compute the slow route-aware drive facts (weather, cameras/đèo/gas ahead)
   /// in the background and publish them to [live] so the already-open AI panel
   /// gets grounded context as soon as they're ready.
-  Future<void> _fillAiContextAsync(ValueNotifier<AiContext?> live) async {
-    if (!mounted) return;
-    await _ensureWeather();
-    if (!mounted) return;
-    final aiCtx = await _aiContextAsync();
-    if (mounted) live.value = aiCtx;
+  ///
+  /// [alive] is false once the sheet was closed: the notifier is disposed at
+  /// that point, so a late weather/DB answer must be dropped (not written).
+  Future<void> _fillAiContextAsync(
+    ValueNotifier<AiContext?> live, {
+    required bool Function() alive,
+  }) async {
+    try {
+      if (!mounted || !alive()) return;
+      await _ensureWeather();
+      if (!mounted || !alive()) return;
+      final aiCtx = await _aiContextAsync();
+      if (mounted && alive()) live.value = aiCtx;
+    } catch (e) {
+      debugPrint('VOICE: AI context fill failed: $e');
+    }
   }
 
   /// One-shot voice recognition returning the recognized phrase (or '').
@@ -426,11 +470,7 @@ extension _NavVoice on _NavigationPageState {
     // name (complex multi-turn areas) still count as different and each is
     // announced. (The old "distance jumped up by 50 m" test misfired on
     // GPS/SIM jitter, re-announcing the same turn.)
-    final mv = nav.maneuver;
-    final sig =
-        '${nav.iconCode}|${nav.nextText}|'
-        '${mv?.latitude.toStringAsFixed(5) ?? '0'},'
-        '${mv?.longitude.toStringAsFixed(5) ?? '0'}';
+    final sig = _maneuverSignature(nav);
     final isNew = sig != _lastManeuverSig;
     if (isNew) {
       _lastManeuverSig = sig;
@@ -443,29 +483,58 @@ extension _NavVoice on _NavigationPageState {
       // already covers the new segment after the turn.
       unawaited(_refreshRouteCameras());
     }
-    if (isNew && m > far) {
-      // Fresh turn → announce it immediately with its distance.
-      _spokenFar = true;
-      _speakManeuver(nav, m);
-    } else if (!_spokenFar && m <= far && m > near) {
-      _spokenFar = true;
-      _speakManeuver(nav, m);
-    } else if (!_spokenNear && m <= near && m > finalM) {
-      _spokenNear = true;
-      _speakManeuver(nav, m);
-    } else if (!_spokenFinal && m <= finalM) {
-      _spokenFinal = true;
-      _speakManeuver(nav, m, now: true);
+    // Do NOT speak a fresh turn early just because it is the next one: the
+    // three zones are the contract (400 / 300 / 100 m). A turn 2 km away is
+    // only logged as "new"; its first callout comes when it enters [far].
+    switch (maneuverCalloutZone(
+      meters: m.toDouble(),
+      farMeters: far,
+      nearMeters: near,
+      finalMeters: finalM,
+      spokenFar: _spokenFar,
+      spokenNear: _spokenNear,
+      spokenFinal: _spokenFinal,
+    )) {
+      case ManeuverCalloutZone.far:
+        _spokenFar = true;
+        _speakManeuver(nav, m);
+      case ManeuverCalloutZone.near:
+        _spokenNear = true;
+        _speakManeuver(nav, m);
+      case ManeuverCalloutZone.finalCall:
+        _spokenFinal = true;
+        _speakManeuver(nav, m, now: true);
+      case ManeuverCalloutZone.none:
+        break;
     }
+  }
+
+  String _maneuverSignature(NavProgress nav) {
+    final mv = nav.maneuver;
+    return '${nav.iconCode}|${nav.nextText}|'
+        '${mv?.latitude.toStringAsFixed(5) ?? '0'},'
+        '${mv?.longitude.toStringAsFixed(5) ?? '0'}';
   }
 
   /// Speak a maneuver callout, resolving the speed limit of the road being
   /// turned INTO first (that lookup is async — the segment index is O(1) after
   /// load, so the wait is a fraction of a frame, far below the TTS latency).
+  ///
+  /// The lookup can be slow on the first call (the segment layer may still be
+  /// loading) and the car keeps moving. A callout that resolves after a newer
+  /// one was requested, or after the engine moved on to a different maneuver,
+  /// is dropped: speaking the old turn's street/limit at the new turn is worse
+  /// than saying nothing.
   void _speakManeuver(NavProgress nav, int m, {bool now = false}) {
+    final token = ++_maneuverSpeakToken;
+    final sig = _maneuverSignature(nav);
     unawaited(() async {
       await _ensureNextStreetLimit(nav);
-      if (!mounted) return;
+      if (!mounted ||
+          token != _maneuverSpeakToken ||
+          sig != _lastManeuverSig) {
+        return;
+      }
       final txt = _announce(nav, m, now: now);
       _logAnnouncement(txt, kind: 'maneuver', extra: _maneuverExtra(nav));
       _voice.speak(txt, priority: VoiceGuide.priorityCritical);
@@ -512,7 +581,13 @@ extension _NavVoice on _NavigationPageState {
   }
 
   Future<void> _resolveNextStreetLimit(LatLng mv, String engineName) async {
+    // This lookup writes shared fields (`_nextStreetLimit`, `_nextStreetName`).
+    // A newer maneuver may have started while the layer was loading; its values
+    // must not be overwritten by this stale job.
+    bool isCurrent() =>
+        _nextStreetLimitKey == mv && _nextStreetLimitName == engineName;
     try {
+      if (!isCurrent()) return;
       final geo = _route?.geometry ?? const <LatLng>[];
       final cur = _roadInfo?.name ?? '';
       // Sample PAST the maneuver: that is the new street, and the outgoing
@@ -536,6 +611,7 @@ extension _NavVoice on _NavigationPageState {
           headingDeg: brg == 0 ? null : brg,
           expectStreet: engineName.isEmpty ? null : engineName,
         );
+        if (!isCurrent()) return;
         if (r == null || r <= 0) continue;
         final ln = lastWazeStreetName();
         final rank = nextStreetSampleRank(
@@ -549,10 +625,14 @@ extension _NavVoice on _NavigationPageState {
           raw = r;
           layerName = ln;
           p = q;
-          if (rank == 2 && engineName.isEmpty) _nextStreetName = ln!;
+          if (rank == 2 && engineName.isEmpty) {
+            if (!isCurrent()) return;
+            _nextStreetName = ln!;
+          }
         }
         if (rank == 2) break; // named match — nothing better to find
       }
+      if (!isCurrent()) return;
       final target = _nextStreetName;
       if (raw <= 0 || target.isEmpty) {
         // No street established for the turn → do not claim its limit (the
@@ -587,19 +667,21 @@ extension _NavVoice on _NavigationPageState {
       // road under the car, the zone ceiling (60 in town / 70 rural for a mô
       // tô) still keeps a divided-road 60 from being clamped by a two-way
       // assumption while a genuinely posted 50 stays 50.
+      final urban = await _townAt(p);
+      if (!isCurrent()) return;
       final capped = effectiveLimit(
         // No graph road here: the layer value IS the authority and only the
         // vehicle's own legal ceiling caps it (see effectiveLimit).
         '',
         vehicle: vehicleType,
         taggedKmh: raw,
-        urban: await _townAt(p),
+        urban: urban,
         postedSrc: srcSegment,
         formKnown: false,
       );
       _nextStreetLimit = capped > 0 ? capped : 0;
     } catch (_) {
-      _nextStreetLimit = 0;
+      if (isCurrent()) _nextStreetLimit = 0;
     }
   }
 

@@ -11,7 +11,7 @@ library;
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show compute, debugPrint;
 import 'package:latlong2/latlong.dart';
 
 import '../core/nav_protocol.dart' show formatDistanceSpoken;
@@ -19,6 +19,7 @@ import 'offline_geo.dart';
 import 'offline_loader.dart';
 import 'offline_scan.dart';
 import 'offline_scan_isolate.dart';
+import 'point_grid.dart';
 
 /// The kind of road sign — drives the map icon and the spoken warning.
 ///
@@ -255,6 +256,12 @@ void reloadOfflineRoadSigns() => _signs.reload();
 Future<List<RoadSign>> _fetchSigns() async {
   // Prefers an auto-updated copy over the bundled asset — see readOfflineText.
   final raw = await readOfflineText('vietnam_signs.json');
+  // Decode + construct the 11k-row sign index off the UI isolate: the JSON is
+  // ~8 MB and object construction was a visible first-load stall.
+  return compute(_parseSigns, raw);
+}
+
+List<RoadSign> _parseSigns(String raw) {
   final data = jsonDecode(raw) as Map<String, dynamic>;
   final rows = [
     for (final it
@@ -406,6 +413,18 @@ Future<List<RoadSign>> signsNearRoute(
 /// rider's elbow were dropped (user: "why so too many sign far away"). The tier
 /// order now only breaks ties at equal distance, and it still decides the
 /// DISPLAY order of what the cap keeps.
+PointGrid<RoadSign>? _signGrid;
+List<RoadSign>? _signGridSource;
+
+/// Grid for [signs], rebuilt only when the loader hands back a new list.
+PointGrid<RoadSign> _gridFor(List<RoadSign> signs) {
+  if (!identical(signs, _signGridSource)) {
+    _signGrid = PointGrid(signs, posOf: (s) => s.pos);
+    _signGridSource = signs;
+  }
+  return _signGrid!;
+}
+
 Future<List<RoadSign>> signsNearPoint(
   LatLng pos, {
   double maxDistM = 4000,
@@ -414,18 +433,8 @@ Future<List<RoadSign>> signsNearPoint(
   final signs = await loadOfflineRoadSigns();
   if (signs.isEmpty) return const [];
   const Distance d = Distance();
-  final span = maxDistM / kMetersPerDegLat;
-  // Longitudes shrink with cos(lat); without this the bbox prunes signs that
-  // are within range but due east/west (up to ~7% loss for Việt Nam).
-  final lngSpan = maxDistM / metersPerDegLng(pos.latitude);
   final out = <(RoadSign, double)>[];
-  for (final s in signs) {
-    if (s.lat < pos.latitude - span ||
-        s.lat > pos.latitude + span ||
-        s.lng < pos.longitude - lngSpan ||
-        s.lng > pos.longitude + lngSpan) {
-      continue;
-    }
+  for (final s in _gridFor(signs).near(pos.latitude, pos.longitude, maxDistM)) {
     final m = d.as(LengthUnit.Meter, pos, s.pos);
     if (m <= maxDistM) out.add((s, m));
   }

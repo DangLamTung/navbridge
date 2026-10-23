@@ -94,6 +94,11 @@ extension _NavSigns on _NavigationPageState {
       snapped,
       geometry,
       maxAheadMeters: kSignWarnM,
+      // 60 m, not kRoadsideLateralMeters (40 m): sign coordinates come from
+      // the source packs (often the road segment, not the carriageway edge),
+      // so 60 m keeps a roadside post on a wide avenue while still excluding
+      // the next block. The route MAP uses the same corridor; zone signs keep
+      // their wider kZoneLateralMeters.
       lateralMeters: 60.0,
     );
     if (!mounted) return;
@@ -333,8 +338,11 @@ extension _NavSigns on _NavigationPageState {
     final cam = _nextCamera;
     if (cam == null) return false;
     final c = cam.camera;
-    if (c.focus != 'red_light' && c.type != 'red_light') return false;
-    return (cam.routeMeters - signMeters).abs() <= 150;
+    return redLightCameraCoversJunction(
+      signMeters: signMeters,
+      cameraMeters: cam.routeMeters,
+      isRedLightCamera: c.focus == 'red_light' || c.type == 'red_light',
+    );
   }
 }
 

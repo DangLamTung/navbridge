@@ -744,6 +744,63 @@ Future<File> tileFile(int z, int x, int y, {String? source}) async {
   return File('${root.path}/$z/$x/$y.png');
 }
 
+/// Cap for the AUTO cache (viewed tiles + synthesized parents). Downloaded
+/// regions live under `carto/` and are user-managed, so they are excluded.
+/// Without a cap the cache grew forever on a phone with a 32 GB eMMC.
+const int kAutoTileCacheMaxBytes = 300 * 1024 * 1024;
+DateTime? _lastTileTrimAt;
+
+/// Delete the oldest auto-cached tiles once the cache exceeds
+/// [kAutoTileCacheMaxBytes]. Runs at most every 5 minutes, fire-and-forget
+/// after a successful write. Trims to 80% so the next few screenfuls do not
+/// immediately re-trigger the directory walk.
+Future<void> _maybeTrimTileCache() async {
+  final now = DateTime.now();
+  final last = _lastTileTrimAt;
+  if (last != null &&
+      now.difference(last) < const Duration(minutes: 5)) {
+    return;
+  }
+  _lastTileTrimAt = now;
+  try {
+    final sup = await getApplicationSupportDirectory();
+    final root = Directory('${sup.path}/offline_tiles');
+    final files = <(File, DateTime, int)>[];
+    var total = 0;
+    await for (final e in root.list(recursive: true)) {
+      if (e is! File || !e.path.endsWith('.png')) continue;
+      // User-downloaded regions and the bundled overview pack are not
+      // auto-cache; the region manager / clear-cache owns them.
+      if (e.path.contains('${Platform.pathSeparator}carto${Platform.pathSeparator}') ||
+          e.path.contains('${Platform.pathSeparator}overview${Platform.pathSeparator}')) {
+        continue;
+      }
+      try {
+        final st = await e.stat();
+        files.add((e, st.modified, st.size));
+        total += st.size;
+      } catch (_) {}
+    }
+    if (total <= kAutoTileCacheMaxBytes) return;
+    final target = (kAutoTileCacheMaxBytes * 0.8).round();
+    files.sort((a, b) => a.$2.compareTo(b.$2));
+    var removed = 0;
+    for (final (f, _, size) in files) {
+      if (total <= target) break;
+      try {
+        await f.delete();
+        total -= size;
+        removed++;
+      } catch (_) {}
+    }
+    debugPrint(
+      'TILE: auto-cache trimmed ($removed files, now ${total ~/ (1024 * 1024)} MB)',
+    );
+  } catch (e) {
+    debugPrint('TILE: auto-cache trim failed: $e');
+  }
+}
+
 /// Total size of every stored tile (auto-cache + downloaded regions).
 Future<int> tileCacheBytes() async {
   final root = await tileStoreDir();
@@ -1098,6 +1155,7 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
           final f = await tileFile(z, x, y, source: source);
           await f.create(recursive: true);
           await f.writeAsBytes(res.bodyBytes);
+          unawaited(_maybeTrimTileCache());
         } catch (_) {}
         _putToMem(keyStr, res.bodyBytes);
         try {
@@ -1158,6 +1216,7 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
         try {
           await synthFile.create(recursive: true);
           await synthFile.writeAsBytes(synthesized, flush: true);
+          unawaited(_maybeTrimTileCache());
         } catch (_) {}
         _putToMem(keyStr, synthesized);
         return _decode(decode, synthesized);
