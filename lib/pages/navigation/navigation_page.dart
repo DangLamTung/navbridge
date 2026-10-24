@@ -716,6 +716,10 @@ class _NavigationPageState extends State<NavigationPage>
   /// layer can name, so the line is emitted at most once per 250 m.
   LatLng? _keepNoticeAt;
 
+  /// Where the last khu dân cư boundary callout was spoken — paces the next one
+  /// by [kZoneCalloutGapM], see `_announceSigns`.
+  LatLng? _lastZoneCalloutAt;
+
   /// Confirmation gate for the road's VALUE (class + limit) while the NAME does
   /// not change — see `_gateValue` in `nav_gps.dart`. Tighter than the name
   /// gate: 15 m is enough to prove a class change is not one bad fix.
@@ -1353,6 +1357,8 @@ class _NavigationPageState extends State<NavigationPage>
     _limitAnnouncedSrc = '';
     _speedChangeDedupe.reset();
     _motorwayWarned = false;
+    _lastZoneCalloutAt = null;
+    _keepNoticeAt = null;
   }
 
   /// Fetch the last-known GPS position so the nav map opens centered on the
