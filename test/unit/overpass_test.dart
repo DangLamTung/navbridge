@@ -93,6 +93,24 @@ void main() {
       expect(statutoryLimit('primary', vehicle: 'motorbike'), 60);
       expect(statutoryLimit('secondary', vehicle: 'motorbike'), 60);
       expect(statutoryLimit('residential', vehicle: 'motorbike'), 50);
+      // …but a divided / one-way ≥2-lane through road outside town gets 70.
+      expect(
+        statutoryLimit(
+          'primary',
+          vehicle: 'motorbike',
+          oneway: true,
+          lanes: 2,
+        ),
+        70,
+      );
+      expect(
+        statutoryLimit('trunk', vehicle: 'motorbike', divided: true),
+        70,
+      );
+      expect(
+        statutoryLimit('secondary', vehicle: 'motorbike'),
+        60, // two-way
+      );
       // Trucks lower still.
       expect(statutoryLimit('primary', vehicle: 'truck'), 60);
     });
@@ -110,6 +128,24 @@ void main() {
       (() {
         expect(effectiveLimit('primary', vehicle: 'car'), 80);
         expect(effectiveLimit('motorway', vehicle: 'car'), 120);
+      })();
+
+      // ---- case: untagged divided rural road gives a mô tô 70, not 60 ----
+      (() {
+        expect(
+          effectiveLimit(
+            'primary',
+            vehicle: 'motorbike',
+            oneway: true,
+            lanes: 2,
+          ),
+          70,
+        );
+        expect(
+          effectiveLimit('primary', vehicle: 'motorbike', divided: true),
+          70,
+        );
+        expect(effectiveLimit('primary', vehicle: 'motorbike'), 60);
       })();
 
       // ---- case: motorbike never inherits the car posted limit (OSM is car data) ----
@@ -177,6 +213,83 @@ void main() {
         expect(
           effectiveLimit(
             'secondary',
+            vehicle: 'motorbike',
+            taggedKmh: 60,
+            divided: false,
+            urban: true,
+            postedSrc: srcSegment,
+          ),
+          50,
+        );
+      })();
+
+      // ---- case: a Waze 90 on a stale two-way QL1 means the road is divided ----
+      (() {
+        expect(
+          effectiveLimit(
+            'primary',
+            vehicle: 'motorbike',
+            taggedKmh: 90,
+            divided: false,
+            urban: false,
+            postedSrc: srcSegment,
+          ),
+          70,
+        );
+        // 80 is a valid two-way car limit; not evidence of a median.
+        expect(
+          effectiveLimit(
+            'primary',
+            vehicle: 'motorbike',
+            taggedKmh: 80,
+            divided: false,
+            urban: false,
+            postedSrc: srcSegment,
+          ),
+          60,
+        );
+        // A real 90 also says the place is not built-up: 90 is not a town
+        // limit, so a false-positive urban probe must not cap it to 60.
+        expect(
+          effectiveLimit(
+            'primary',
+            vehicle: 'motorbike',
+            taggedKmh: 90,
+            divided: false,
+            urban: true,
+            postedSrc: srcSegment,
+          ),
+          70,
+        );
+        // 70/80 are also illegal in an urban area, so they prove the probe is
+        // wrong too: a two-way rural road stays the mô tô 60, never the town 50.
+        expect(
+          effectiveLimit(
+            'primary',
+            vehicle: 'motorbike',
+            taggedKmh: 80,
+            divided: false,
+            urban: true,
+            postedSrc: srcSegment,
+          ),
+          60,
+        );
+        expect(
+          effectiveLimit(
+            'primary',
+            vehicle: 'motorbike',
+            taggedKmh: 70,
+            divided: false,
+            urban: true,
+            postedSrc: srcSegment,
+          ),
+          60,
+        );
+        // A 60 limit is still ambiguous (urban divided 60 / rural two-way 60);
+        // the two-way town rule applies when no form is known.
+        expect(
+          effectiveLimit(
+            'primary',
             vehicle: 'motorbike',
             taggedKmh: 60,
             divided: false,
@@ -426,8 +539,9 @@ void main() {
         );
         expect(
           inTown.speedLimit,
-          50,
-          reason: 'mô tô trong khu đông dân cư, hai chiều: 50',
+          60,
+          reason: 'Waze 70 is not a legal town limit; it proves the road is '
+              'outside the built-up area, so the two-way mô tô limit is 60',
         );
         final rural = applyPostedLayer(
           tagged,
@@ -467,7 +581,9 @@ void main() {
             layerSrc: srcSegment,
             inTown: true,
           ).speedLimit,
-          60,
+          70,
+          reason: 'Waze 70 is illegal in town; it proves the road is rural '
+              'and divided, so the mô tô ceiling is 70',
         );
         // Falling back to the road's own flag keeps the old behaviour.
         expect(
@@ -476,6 +592,59 @@ void main() {
             kmh: 70,
             vehicle: 'motorbike',
             layerSrc: srcSegment,
+          ).speedLimit,
+          60,
+        );
+        // ⭐ Waze 90 is evidence the road is now divided even when OSM/graph
+        // still says two-way: an upgraded QL1 must give a mô tô 70, not 60.
+        final ql1 = roadInfoFromRoad(
+          name: 'Quốc lộ 1A',
+          highway: 'primary',
+          vehicle: 'motorbike',
+          oneway: false, // stale two-way shape
+        );
+        expect(ql1.formKnown, isTrue);
+        expect(
+          applyPostedLayer(
+            ql1,
+            kmh: 90,
+            vehicle: 'motorbike',
+            layerSrc: srcSegment,
+            inTown: false,
+          ).speedLimit,
+          70,
+        );
+        // A 70/80 Waze value is not evidence of a median; still 60 two-way.
+        expect(
+          applyPostedLayer(
+            ql1,
+            kmh: 80,
+            vehicle: 'motorbike',
+            layerSrc: srcSegment,
+            inTown: false,
+          ).speedLimit,
+          60,
+        );
+        // Waze 90 also overrides a false-positive urban probe: 90 is not a
+        // legal town limit, so this is a divided rural road.
+        expect(
+          applyPostedLayer(
+            ql1,
+            kmh: 90,
+            vehicle: 'motorbike',
+            layerSrc: srcSegment,
+            inTown: true,
+          ).speedLimit,
+          70,
+        );
+        // 70/80 are rural too; a stale two-way shape gives 60, not town 50.
+        expect(
+          applyPostedLayer(
+            ql1,
+            kmh: 80,
+            vehicle: 'motorbike',
+            layerSrc: srcSegment,
+            inTown: true,
           ).speedLimit,
           60,
         );

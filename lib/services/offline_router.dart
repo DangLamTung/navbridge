@@ -223,6 +223,7 @@ class OfflineRouter {
     bool avoidMotorway = false,
     bool avoidFerry = false,
     double? startHeading,
+    RouteProfile profile = RouteProfile.car,
   }) async {
     if (points.length < 2 || !_loaded) return const [];
     try {
@@ -236,6 +237,7 @@ class OfflineRouter {
         'alternatives': maxAlternatives,
         'avoidMotorway': avoidMotorway,
         'avoidFerry': avoidFerry,
+        'profile': profile == RouteProfile.motorbike ? 'motorcycle' : 'car',
       };
       if (startHeading != null) args['heading'] = startHeading;
       // Platform-channel maps decode as Map<Object?, Object?>, so a typed
@@ -316,9 +318,15 @@ class OfflineRouter {
 // ---- graph storage / download -------------------------------------------
 
 /// Folder that holds the extracted GraphHopper graph.
+///
+/// `_v2` because the archive now carries BOTH the car and motorcycle profiles.
+/// A graph built before that (car-only) does not match the native profile list
+/// and GraphHopper refuses to load it ("Profiles do not match"), so a new path
+/// keeps the old archive out of the way. Old app versions keep using the old
+/// `routing_graph` path and the old asset.
 Future<String> routingGraphDir() async {
   final sup = await getApplicationSupportDirectory();
-  return '${sup.path}/routing_graph';
+  return '${sup.path}/routing_graph_v2';
 }
 
 /// Delete the on-device routing graph and all downloaded source files to free phone storage.
@@ -827,7 +835,7 @@ Future<GraphState> offlineGraphState() async {
 /// unloadable graph folder) shadows the good archive forever — see
 /// [graphFolderCorrupt] and [GraphState.corrupt].
 const String graphGhUrl =
-    'https://github.com/DangLamTung/navbridge/releases/download/routing-latest/vietnam_graph.ghz';
+    'https://github.com/DangLamTung/navbridge/releases/download/routing-latest/vietnam_graph_v2.ghz';
 
 /// Alternative source: the Geofabrik Việt Nam OSM extract (`.osm.pbf`).
 ///
@@ -1402,6 +1410,7 @@ Future<List<OsrmRoute>> _routeVia(
         avoidMotorway: avoidHighway,
         avoidFerry: avoidFerry,
         startHeading: startHeading,
+        profile: profile,
       );
     case RouteProvider.osrm:
       return fetchOsrmRoutes(

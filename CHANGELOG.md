@@ -4,6 +4,39 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
+## 1.2.0 — 2026-10-24 (build 4018)
+
+**Motorbike routing uses a motorcycle graph, and Waze limits are no longer
+capped by a false “urban” guess.**
+
+- **Offline motorbike graph.** The routing archive now carries both `car` and
+  `motorcycle` profiles. The motorcycle profile bans motorways, so a motorbike
+  route no longer follows the car graph onto an expressway. The app downloads
+  the new `vietnam_graph_v2.ghz` (~257 MB) once; the old car graph is left
+  untouched for older app versions.
+- **Khu dân cư comes from R.420/R.421 signs.** At navigation start the route's
+  first boundary sign seeds the built-up state; crossing later signs flips it.
+  The POI/road-density probe is only a fallback when the route has no boundary
+  sign at all. QL1 near Dầu Giây was being called urban by the density probe
+  and capping a real Waze 90 to 60.
+- **Waze >60 forces a rural ceiling.** 70/80/90 are not legal urban limits, so
+  a posted Waze/VietMap value above 60 is treated as rural: 90 also implies a
+  divided road (mô tô 70), 70/80 use the rural two-way 60 unless the graph form
+  says divided. Waze 60 remains form-dependent (urban divided 60 / urban
+  two-way 50).
+- **Repeated KDC callouts are suppressed by zone state.** Once already inside
+  or outside by sign, another same-direction R.420/R.421 point does not speak
+  again.
+
+### Internal
+
+- Graph builder emits `car` + `motorcycle`; Android loads both profiles and
+  passes the requested profile through the routing MethodChannel.
+- New `_v2` graph path so a car-only archive cannot be loaded against the new
+  profile list (GraphHopper refuses mismatched profiles).
+- Boundary-sign seed is best-effort and runs at navigation/simulation start;
+  no boundary data keeps the density fallback.
+
 ## 1.1.9 — 2026-10-23 (build 4017)
 
 **Landscape navigation gives the map back, and a day's trips can become one

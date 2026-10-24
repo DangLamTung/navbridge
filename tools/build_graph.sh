@@ -3,8 +3,9 @@
 #
 #   ./build_graph.sh <in.osm.pbf> <out-name>
 #
-# Produces <out-name>.ghz next to the pbf. The graph uses the same car
-# profile as the app (see GraphHopperRouting.carProfile).
+# Produces <out-name>.ghz next to the pbf. The graph carries BOTH the car and
+# motorcycle profiles (see GraphHopperRouting.carProfile/motorcycleProfile);
+# the app picks one per route request.
 set -euo pipefail
 
 PBF="$1"

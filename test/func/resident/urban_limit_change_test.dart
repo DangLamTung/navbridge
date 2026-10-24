@@ -113,15 +113,16 @@ void main() {
         statutoryLimit(road, vehicle: 'truck', urban: false),
         60,
       );
-      // Only two values exist for a mô tô on this road — nothing in between,
-      // so a "part-way in town" limit cannot be shown by accident.
+      // A mô tô on this road has exactly three legal values: 50 two-way in
+      // town, 60 two-way outside, and 70 on a divided road outside. Nothing in
+      // between, so a "part-way in town" limit cannot be shown by accident.
       final moto = {
         for (final divided in [false, true])
           for (final urban in [false, true])
             statutoryLimit(road,
                 vehicle: 'motorbike', urban: urban, divided: divided),
       };
-      expect(moto, {50, 60});
+      expect(moto, {50, 60, 70});
       expect(
         statutoryLimit(road,
             vehicle: 'motorbike', urban: true, divided: true),
@@ -129,15 +130,13 @@ void main() {
         reason: 'in town a đường đôi is 60 — the value the Cộng Hòa fixes '
             'showed (2026-09-24)',
       );
-      // The CLASS table is form-blind outside town: `urban: false` returns the
-      // class default whatever the form, so the đường đôi 70 for a mô tô is not
-      // a table row at all — it only ever comes from [vehicleCeiling] capping a
-      // posted value. Pinned here because it is the asymmetry that made the
-      // trunk row (car 90 / truck 70) look form-aware when it is not.
+      // The class table is form-aware outside town for a mô tô: a divided
+      // through road is the 70 case, a two-way one is 60. Inside town the
+      // divided case is 60 (the Cộng Hòa value).
       expect(statutoryLimit(road, vehicle: 'motorbike', urban: false), 60);
       expect(
         statutoryLimit(road, vehicle: 'motorbike', urban: false, divided: true),
-        60,
+        70,
       );
       expect(vehicleCeiling('motorbike', divided: true), 70);
       expect(vehicleCeiling('motorbike'), 60);
@@ -342,7 +341,11 @@ void main() {
         layerSrc: srcSegment,
         inTown: true,
       );
-      expect(capped.speedLimit, 50, reason: 'mô tô hai chiều trong town = 50');
+      // A posted 70 is itself proof that this is NOT an urban road: 70 is not
+      // a legal town limit. A false-positive POI/density probe must not pull it
+      // down to the town 50; the rural two-way mô tô limit is 60.
+      expect(capped.speedLimit, 60,
+          reason: 'Waze 70 means rural; mô tô hai chiều = 60');
       expect(capped.src, srcSegment,
           reason: 'the layer still owns the number it posted');
       expect(capped.fromLayer, isTrue);

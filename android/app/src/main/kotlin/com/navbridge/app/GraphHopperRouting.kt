@@ -61,6 +61,10 @@ class GraphHopperRouting {
     private fun carProfile(): Profile =
         Profile("car").setVehicle("car").setWeighting("fastest")
 
+    /** The motorcycle profile: bans motorways, which the car profile does not. */
+    private fun motorcycleProfile(): Profile =
+        Profile("motorcycle").setVehicle("motorcycle").setWeighting("fastest")
+
     /** Load a pre-built graph folder, or convert a `.ghz` zip / `.osm.pbf` on-device at [graphPath]. */
     fun load(graphPath: String, result: MethodChannel.Result) {
         executor.execute {
@@ -84,9 +88,9 @@ class GraphHopperRouting {
                 config.putObject("graph.dataaccess", "MMAP")
                 config.putObject("graph.location", loc)
                 config.putObject("import.osm.ignored_highways", "")
-                config.putObject("graph.vehicles", "car")
+                config.putObject("graph.vehicles", "car,motorcycle")
                 config.putObject("graph.encoded_values", "")
-                config.setProfiles(listOf(carProfile()))
+                config.setProfiles(listOf(carProfile(), motorcycleProfile()))
 
                 if (isPbf) {
                     android.util.Log.i("NavBridgeRouter", "Converting OSM on device: ${f.absolutePath} -> $loc...")
@@ -318,15 +322,21 @@ class GraphHopperRouting {
         avoidMotorway: Boolean,
         avoidFerry: Boolean,
         heading: Double?,
+        profile: String?,
         result: MethodChannel.Result
     ) {
         executor.execute {
             try {
                 val gh = hopper
                     ?: throw IllegalStateException("Chưa tải bộ dữ liệu chỉ đường")
+                // The graph carries both profiles. Keep a safe fallback for an
+                // older car-only graph that somehow got loaded: never ask it for
+                // a motorcycle profile it does not have.
+                val requested = if (profile == "motorcycle") "motorcycle" else "car"
+                val profileName = if (gh.profiles.any { it.name == requested }) requested else "car"
                 val req = GHRequest()
                 for (p in points) req.addPoint(p)
-                req.setProfile("car")
+                req.setProfile(profileName)
                 // Depart along the car's travel heading so an off-route
                 // reroute continues forward instead of U-turning back onto the
                 // original road (Google-Maps-style "find the next good road").
@@ -356,7 +366,7 @@ class GraphHopperRouting {
                 if (rsp.hasErrors() && maxPaths > 1) {
                     val plain = GHRequest()
                     for (p in points) plain.addPoint(p)
-                    plain.setProfile("car")
+                    plain.setProfile(profileName)
                     rsp = gh.route(plain)
                 }
                 if (rsp.hasErrors()) {

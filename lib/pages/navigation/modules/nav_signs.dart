@@ -79,6 +79,51 @@ String signCalloutSig(RoadSign sign, {required bool near}) =>
     '${sign.lng.toStringAsFixed(5)}/${near ? 'near' : 'far'}';
 
 extension _NavSigns on _NavigationPageState {
+  /// Seed the built-up state from the first R.420/R.421 boundary sign along
+  /// the route, before the first GPS fix.
+  ///
+  /// The POI/segment-density probe in `urban_area.dart` is only a fallback: it
+  /// cannot distinguish a highway passing a dense district from the district
+  /// itself (QL1 near Dầu Giây was called urban on every sampled Waze segment,
+  /// capping a real 90 to 60). A boundary sign IS the legal zone transition, so
+  /// when the route has one within 30 km it owns `_inTown` from the start.
+  /// No boundary sign on the route keeps the old density seed.
+  Future<void> _seedTownFromRouteSigns() async {
+    final route = _route;
+    if (route == null || route.geometry.length < 2) return;
+    try {
+      final ahead = await signsAheadOnRoute(
+        route.geometry.first,
+        route.geometry,
+        maxAheadMeters: 30000,
+        lateralMeters: 60.0,
+      );
+      if (!mounted || !identical(_route, route)) return;
+      SignAhead? first;
+      for (final a in ahead) {
+        final k = a.sign.kind;
+        if (k == RoadSignKind.populated || k == RoadSignKind.populatedEnd) {
+          first = a;
+          break;
+        }
+      }
+      if (first == null) return; // no boundary data: density fallback stands
+      final inTown = first.sign.kind == RoadSignKind.populatedEnd;
+      setNavState(() {
+        _inTownBySign = true;
+        _inTown = inTown;
+        _inTownPos = null;
+      });
+      _updateRoadForTownChange(inTown, at: _current);
+      debugPrint(
+        'TOWN: seeded inTown=$inTown from '
+        '${first.sign.kind.key} @ ${first.routeMeters.round()} m',
+      );
+    } catch (_) {
+      // Best-effort: no sign seed leaves the density fallback untouched.
+    }
+  }
+
   /// Per-GPS-fix check (throttled ~1 s): find the next stop/give-way sign
   /// ahead on the route and speak it when within ~400 m.
   void _checkSignAhead(LatLng snapped, List<LatLng> geometry) {
@@ -260,11 +305,27 @@ extension _NavSigns on _NavigationPageState {
     RoadSign? next;
     var m = 0.0;
     var bestTier = 1 << 30;
+    final seenZoneKind = <RoadSignKind>{};
     for (final a in ahead) {
       // Only announce signs inside the adoption window.
       if (a.routeMeters > kSignAdoptM) break;
       final k = a.sign.kind;
       if (!announcedSignKinds.contains(k)) continue;
+      // Built-up boundaries are ZONE state, not one-off plates: the source
+      // packs carry many R.420/R.421 points along the same boundary (and Waze
+      // repeats them every few hundred metres). Once we are already inside /
+      // outside by sign, another same-direction boundary is noise — announce
+      // only the first transition, and only the nearest boundary of each kind
+      // in this scan.
+      if (k == RoadSignKind.populated || k == RoadSignKind.populatedEnd) {
+        if (!seenZoneKind.add(k)) continue;
+        if (k == RoadSignKind.populated && _inTownBySign && _inTown) {
+          continue;
+        }
+        if (k == RoadSignKind.populatedEnd && _inTownBySign && !_inTown) {
+          continue;
+        }
+      }
       // Announce at most TWICE per sign: once far (the first time it enters the
       // 400 m range) and once near (~100 m) as the final reminder. The old
       // per-25 m bucket re-spoke every ~25 m, which nagged the driver.

@@ -245,6 +245,18 @@ int statutoryLimit(
     _ => car,
   };
   final base = table[highway] ?? 50;
+  // Outside a built-up area a mô tô gets 70 on a divided road / one-way with
+  // two motor lanes (Thông tư 38/2024). The class table above only carries the
+  // two-way 60, and [vehicleCeiling] was applied solely to POSTED layer values,
+  // so an untagged divided QL still showed 60. Only through-road classes take
+  // the 70; ramps and service/residential streets keep their stricter class
+  // value.
+  if (!urban &&
+      vehicle == 'motorbike' &&
+      const {'trunk', 'primary', 'secondary', 'tertiary'}.contains(highway) &&
+      dividedForm(divided: divided, oneway: oneway, lanes: lanes)) {
+    return math.max(base, 70);
+  }
   // Inside a built-up area the limit is set by the road's FORM, not its class
   // (Thông tư 38/2024/TT-BGTVT): đường đôi / một chiều từ hai làn = 60, đường
   // hai chiều / một làn = 50 (ô tô, mô tô); xe tải 50/40. `urban` comes from
@@ -349,15 +361,28 @@ int effectiveLimit(
     // Last place: the tag may still make the driver slower, never faster.
     return math.min(statutory, taggedKmh);
   }
+  // Waze/VietMap 90 on a through road is evidence of a divided carriageway
+  // even when the OSM/graph shape still says two-way (see applyPostedLayer).
+  final postedDivided =
+      vehicle == 'motorbike' &&
+      postedSrc != srcOsm &&
+      taggedKmh >= 90 &&
+      const {'trunk', 'primary', 'secondary', 'tertiary'}.contains(highway);
+  final postedAboveUrban =
+      postedSrc != srcOsm &&
+      taggedKmh > 60 &&
+      const {'trunk', 'primary', 'secondary', 'tertiary'}.contains(highway);
+  final urbanForCeiling =
+      (postedDivided || postedAboveUrban) ? false : urban;
   final ceiling = formKnown
       ? vehicleCeiling(
           vehicle,
-          urban: urban,
-          divided: divided,
+          urban: urbanForCeiling,
+          divided: divided || postedDivided,
           oneway: oneway,
           lanes: lanes,
         )
-      : vehicleZoneCeiling(vehicle, urban: urban);
+      : vehicleZoneCeiling(vehicle, urban: urbanForCeiling);
   return math.min(ceiling, taggedKmh);
 }
 
@@ -695,12 +720,42 @@ RoadInfo applyPostedLayer(
   final formGenuinelyKnown =
       sameRoad && road.name.trim().isNotEmpty && road.formKnown;
 
+  // ⭐ A Waze/motorway-free segment posting 90 is EVIDENCE of a divided road.
+  // In Việt Nam 90 km/h is the car limit on a divided road outside a built-up
+  // area; a two-way road without a median is 80. The GraphHopper graph often
+  // lacks `lanes`, and OSM/VietMap can still describe an upgraded QL1 as a
+  // two-way way long after the median was built — so letting that stale form
+  // cap a Waze 90 at the mô tô two-way 60 was wrong. Only through-road classes
+  // and only 90+ (not a generic 60/70/80) are treated as this evidence.
+  final fastDivided =
+      vehicle == 'motorbike' &&
+      kmh >= 90 &&
+      const {'trunk', 'primary', 'secondary', 'tertiary'}.contains(
+        road.highway,
+      );
+  // Any posted limit above the urban maximum (60) is proof the place is NOT
+  // built-up: 70/80/90 are rural limits. The POI/road-density probe can call a
+  // highway outside Dầu Giây “urban” because many Waze segments surround it —
+  // that must not cap a real 70/80/90 to the town table.
+  final postedAboveUrban =
+      layerSrc != srcOsm &&
+      kmh > 60 &&
+      const {'trunk', 'primary', 'secondary', 'tertiary'}.contains(
+        road.highway,
+      );
+  // Use the posted limit only to choose the CEILING; do not rewrite the
+  // zone flag itself. A 70/80/90 is not a legal town limit, so it must not be
+  // capped by a false-positive urban probe, but calling the whole place rural
+  // is a separate claim this function is not entitled to make.
+  final ceilingUrban =
+      (fastDivided || postedAboveUrban) ? false : (inTown ?? road.urban);
+
   final int ceiling;
   if (formGenuinelyKnown) {
     ceiling = vehicleCeiling(
       vehicle,
-      urban: inTown ?? road.urban,
-      divided: road.divided,
+      urban: ceilingUrban,
+      divided: road.divided || fastDivided,
       oneway: road.oneway,
       lanes: road.lanes,
     );
@@ -709,15 +764,14 @@ RoadInfo applyPostedLayer(
     // use the vehicle zone ceiling (60 in town, 70 rural for motorbikes)
     // so valid divided-road posted limits (60 on Lũy Bán Bích, Trường Chinh)
     // are not clamped by a two-way assumption.
-    ceiling = vehicleZoneCeiling(vehicle, urban: inTown ?? road.urban);
+    ceiling = vehicleZoneCeiling(vehicle, urban: ceilingUrban);
   }
 
   final effective = vehicle == 'car'
       ? math.min(kmh, kVnMaxPostedKmh)
       : math.min(ceiling, kmh);
 
-  final effectiveTown = inTown ?? road.urban;
-  final newDivided = sameRoad ? road.divided : false;
+  final newDivided = sameRoad ? (road.divided || fastDivided) : fastDivided;
 
   return RoadInfo(
     name: hasName ? name : road.name,
@@ -728,7 +782,7 @@ RoadInfo applyPostedLayer(
     oneway: road.oneway,
     lanes: road.lanes,
     divided: newDivided,
-    urban: effectiveTown,
+    urban: inTown ?? road.urban,
     // ⭐ Carry the form's provenance through, not just the form. Without this
     // the value we just published goes back to `formKnown: true` (the field's
     // default), so the NEXT application for the same street would re-classify

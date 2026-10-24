@@ -21,7 +21,13 @@ public class BuildGraph {
         GraphHopper gh = new GraphHopper();
         gh.setOSMFile(osm);
         gh.setGraphHopperLocation(out);
-        gh.setProfiles(new Profile("car").setVehicle("car").setWeighting("fastest"));
+        // TWO profiles: the car graph car users already had, plus the motorcycle
+        // graph a motorbike needs (the car profile happily routes onto
+        // expressways, where a motorbike is banned). Both are stored in the same
+        // archive; the app selects one per route request.
+        gh.setProfiles(
+            new Profile("car").setVehicle("car").setWeighting("fastest"),
+            new Profile("motorcycle").setVehicle("motorcycle").setWeighting("fastest"));
         gh.importOrLoad();
         gh.close();
         System.out.println("GRAPH_READY: " + out);

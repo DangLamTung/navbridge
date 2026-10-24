@@ -628,6 +628,7 @@ extension _NavNavigation on _NavigationPageState {
       _speedingSpoken = false;
       _lastOverspeedAt = null;
       _resetSignSpeed(); // speed-limit sign + announce reset per session
+      unawaited(_seedTownFromRouteSigns());
       _gpsWeakSpoken = false;
       _lastGpsWeakAt = null;
       _offRouteSince = null;
@@ -660,6 +661,7 @@ extension _NavNavigation on _NavigationPageState {
     _speedingSpoken = false;
     _lastOverspeedAt = null;
     _resetSignSpeed(); // speed-limit sign + announce reset per session
+    unawaited(_seedTownFromRouteSigns());
     _gpsWeakSpoken = false;
     _lastGpsWeakAt = null;
     _offRouteSince = null;
@@ -718,6 +720,7 @@ extension _NavNavigation on _NavigationPageState {
     _speedingSpoken = false;
     _lastOverspeedAt = null;
     _resetSignSpeed(); // speed-limit sign + announce reset per session
+    unawaited(_seedTownFromRouteSigns());
     _gpsWeakSpoken = false;
     _lastGpsWeakAt = null;
     _cameraDedupe.reset();

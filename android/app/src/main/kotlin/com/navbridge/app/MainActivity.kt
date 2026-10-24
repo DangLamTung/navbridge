@@ -284,7 +284,8 @@ class MainActivity : FlutterActivity() {
                         val avoidMotorway = call.argument<Boolean>("avoidMotorway") ?: false
                         val avoidFerry = call.argument<Boolean>("avoidFerry") ?: false
                         val heading = call.argument<Double>("heading")
-                        routing.route(points, maxPaths, avoidMotorway, avoidFerry, heading, result)
+                        val profile = call.argument<String>("profile")
+                        routing.route(points, maxPaths, avoidMotorway, avoidFerry, heading, profile, result)
                     }
                     "isLoaded" -> result.success(routing.isLoaded())
                     "roadInfo" -> {
