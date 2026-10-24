@@ -377,13 +377,21 @@ Object? _runQuery(
 ) {
   if (msg is _QueryAhead) {
     return switch (msg.kind) {
-      _Kind.cameras => pointsAheadOnRoute<OfflineCamera>((
-        msg.current,
-        msg.geometry,
-        cams ?? const [],
-        msg.maxAheadMeters,
-        msg.lateralMeters,
-      )),
+      _Kind.cameras => pointsAheadOnRoute<OfflineCamera>(
+        (
+          msg.current,
+          msg.geometry,
+          cams ?? const [],
+          msg.maxAheadMeters,
+          msg.lateralMeters,
+        ),
+        // A camera watches ONE direction of travel: Waze carries it as `heading`
+        // on 23 569 of the 31 979 rows, and the app used to discard the field —
+        // so a camera pointed at the other carriageway was announced on this one
+        // (user, 2026-10-24: "waze cũng có hướng mà m quăng"). Rows without a
+        // heading (police / OSM) keep the old behaviour.
+        facingFor: (c) => c.heading,
+      ),
       _Kind.signs => pointsAheadOnRoute<RoadSign>(
         (
           msg.current,

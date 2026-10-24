@@ -50,6 +50,11 @@ class OfflineCamera implements OfflinePoint {
   /// Optional district / province label.
   final String? district;
 
+  /// Compass heading (°) of the traffic this camera watches — the direction a
+  /// driver must be travelling to be caught. 23 569 of the 31 979 rows carry
+  /// it. Null when the source has none (police lists, OSM).
+  final double? heading;
+
   /// Data source that produced this point: `waze` | `police` | `osm`.
   /// (Waze = community speed-camera tiles, police = phạt nguội fine lists,
   /// osm = OSM Overpass.) Shown on the map icon so the driver can trust a
@@ -68,6 +73,7 @@ class OfflineCamera implements OfflinePoint {
     this.devices,
     this.district,
     this.source = 'osm',
+    this.heading,
   });
 
   @override
@@ -88,6 +94,7 @@ class OfflineCamera implements OfflinePoint {
     devices: (j['devices'] as num?)?.toInt(),
     district: j['district'] as String?,
     source: (j['source'] ?? 'osm') as String,
+    heading: (j['heading'] as num?)?.toDouble(),
   );
 }
 
