@@ -65,9 +65,7 @@ extension _NavWeather on _NavigationPageState {
   /// thunderstorm)? One helper so every rain test in this file agrees.
   bool _isRainCode(int? code) =>
       code != null &&
-      ((code >= 51 && code <= 67) ||
-          (code >= 80 && code <= 86) ||
-          code >= 95);
+      ((code >= 51 && code <= 67) || (code >= 80 && code <= 86) || code >= 95);
 
   /// Speak ONLY when rain starts or stops AT THE CAR — the transitions are the
   /// useful signal, not a periodic "still raining" (user 2026-09-18).
@@ -108,21 +106,26 @@ extension _NavWeather on _NavigationPageState {
   /// route").
   Future<void> _refreshWeatherAhead() async {
     final geometry = _route?.geometry;
-    if (geometry == null || geometry.length < 2) return;
+    final cur = _current ?? _origin;
+    if (geometry == null || geometry.length < 2 || cur == null) return;
     final samples = <(LatLng, int)>[];
-    // Walk the polyline, collecting a point roughly every 1.5 km, up to ~4.5
-    // km ahead of the current position (with its distance in metres).
+    // Walk the polyline FROM THE CAR (not from the route start), collecting a
+    // point roughly every 1.5 km up to ~4.5 km ahead. The old loop started at
+    // geometry[1] and used a cumulative distance from the route START, so on a
+    // long trip it sampled the first few km behind the car; it also reset the
+    // distance after each sample, so every point read as ~1.5 km instead of
+    // 1.5 / 3 / 4.5 km.
+    final startIdx = nearestVertexIndex(geometry, cur);
     const dist = Distance();
     var ahead = 0.0;
-    for (var i = 1; i < geometry.length && samples.length < 4; i++) {
-      final a = geometry[i - 1];
-      final b = geometry[i];
-      final seg = dist.as(LengthUnit.Meter, a, b);
-      ahead += seg;
-      if (ahead >= 1500) {
-        samples.add((b, ahead.round()));
-        ahead = 0.0; // restart the window from this sample point
+    var nextSampleAt = 1500.0;
+    for (var i = startIdx + 1; i < geometry.length && samples.length < 4; i++) {
+      ahead += dist.as(LengthUnit.Meter, geometry[i - 1], geometry[i]);
+      if (ahead >= nextSampleAt) {
+        samples.add((geometry[i], ahead.round()));
+        nextSampleAt += 1500;
       }
+      if (ahead >= 4500) break;
     }
     if (samples.isEmpty) return;
     final results = await Future.wait(
@@ -226,7 +229,8 @@ extension _NavWeather on _NavigationPageState {
     }
     _rainEndSpoken = true;
     final est = lastWet == null
-        ? (firstDry / 2).round() // dry from the very first sample → imminent
+        ? (firstDry / 2)
+              .round() // dry from the very first sample → imminent
         : ((lastWet + firstDry) / 2).round();
     final speed = _simulating ? 16.0 : _lastSpeedMps;
     final mins = speed > 2 ? (est / speed / 60).round() : null;
@@ -323,8 +327,10 @@ extension _NavWeather on _NavigationPageState {
       // gap than a plain surveillance camera, because the driver acts on them.
       final kind = next.camera.type ?? next.camera.focus;
       final enforcement =
-          kind == 'speed_camera' || kind == 'penalty_camera' ||
-          next.camera.focus == 'speed' || next.camera.focus == 'red_light' ||
+          kind == 'speed_camera' ||
+          kind == 'penalty_camera' ||
+          next.camera.focus == 'speed' ||
+          next.camera.focus == 'red_light' ||
           kind == 'red_light';
       final last = _lastCameraSpokeAt;
       final gap = enforcement
@@ -363,9 +369,13 @@ extension _NavWeather on _NavigationPageState {
           // it "Camera tốc độ" is wrong. Only the posted speed-limit layer
           // (waze_speed_limits.json) carries this point; don't announce it as
           // a camera at all.
-          if (_voiceOn) unawaited(NavForegroundService.instance.notifyCamera(cam, m));
-          debugPrint('CAMERA: Waze speed-limit point, not a camera — '
-              '${cam.name} (${cam.source}), skipped voice');
+          if (_voiceOn) {
+            unawaited(NavForegroundService.instance.notifyCamera(cam, m));
+          }
+          debugPrint(
+            'CAMERA: Waze speed-limit point, not a camera — '
+            '${cam.name} (${cam.source}), skipped voice',
+          );
           return;
         } else {
           switch (cam.type) {

@@ -802,14 +802,21 @@ class _VectorNavMapState extends State<VectorNavMap>
     // map. (user, 2026-10-14: "this must be default fallback if everything else
     // not worked".)
     //
-    // Now the picked layer renders as the raster basemap BELOW the vector layers:
-    // it shows through wherever the vector has no data (outside its coverage,
-    // zoomed out), and the vector map — which paints its own background, landuse
-    // and water — is what is left when the layer cannot be fetched at all. The
-    // map can no longer come up empty.
+    // Inside the archive, the picked layer renders as the raster basemap BELOW
+    // the vector layers, so the vector map — which paints its own background,
+    // landuse and water — is what is left when the layer cannot be fetched at
+    // all. Outside the archive the vector has no tiles and is skipped entirely
+    // (below), so the picked layer is not hidden by an empty vector style.
     if (_baseStyle == null) {
       // No archive on this device: the picked (online / cached) raster layer is
       // all there is, which is the pre-download state.
+      return _rasterFallbackStyle();
+    }
+    // Outside the archive's bbox the vector source has NO tiles, so keeping the
+    // vector style only hides the picked raster layer under an empty vector
+    // map — the "OSM layer does not show outside HCMC" bug. The vector archive
+    // cannot contribute anything there; render the chosen layer directly.
+    if (_outsideCoverage) {
       return _rasterFallbackStyle();
     }
     final style = applyTerrainToStyle(
@@ -830,9 +837,19 @@ class _VectorNavMapState extends State<VectorNavMap>
     // area the vector tiles don't cover) shows a real map instead of the flat
     // background. Vector tiles paint over it where they exist; at low zoom /
     // outside coverage the basemap fills the view — no more white.
+    //
+    // An ON-DEVICE layer inside the archive's coverage gets NO basemap: the
+    // vector tiles ARE the map there, so a raster underneath them is invisible
+    // — and now that the tile server falls back ONLINE for a spot the archive
+    // does not cover, building it would also spend mobile data on tiles nobody
+    // can see. Outside coverage the whole style is the raster one instead
+    // ([_rasterFallbackStyle]), so this never removes the fallback where it is
+    // actually needed.
     final src = style['sources'] as Map<String, dynamic>;
     final layers = style['layers'] as List<dynamic>;
-    final basemapTiles = _basemapTiles();
+    final basemapTiles = NavTileServer.isOnDeviceSource(widget.tileSource)
+        ? const <String>[]
+        : _basemapTiles();
     // Insert right after the background layer so it's the bottom-most visible
     // layer (everything else renders above it).
     var insertAt = 0;
@@ -1101,9 +1118,19 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// leaving a blank map. So CARTO subdomains are expanded to all four hosts.
   List<String> _fallbackTiles([String? sourceOverride]) {
     final src = sourceOverride ?? widget.tileSource;
-    // The offline source has NO online templates by definition — it draws the
-    // on-device archive and downloaded tiles only.
-    if (src == 'offline') return const [];
+    if (src == 'offline') {
+      // INSIDE the archive the vector layers ARE the map, so a raster basemap
+      // underneath them would fetch (and cache) tiles nobody can see — a data
+      // cost on a metered phone. Only outside its bbox, or with no archive at
+      // all, is there nothing else to draw: then use the network, exactly like
+      // the loopback tile server does per missing tile. An EMPTY tile list
+      // would otherwise render a flat background — the blank-map bug.
+      if (_baseStyle != null && !_outsideCoverage) return const [];
+      return NavTileServer.templatesForSource(
+        NavTileServer.emergencySources.first,
+        nightMode: widget.nightMode,
+      );
+    }
     if (src == 'vietmap' && VietmapConfig.hasKeys) {
       return [VietmapConfig.mapTiles];
     }

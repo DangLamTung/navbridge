@@ -4,6 +4,41 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
+## 1.2.1 — 2026-10-24 (build 4019)
+
+**The map no longer goes blank when the on-device layer has nothing, and the
+rain announcement stops firing on another province's weather.**
+
+- **A missing tile now switches source instead of drawing nothing.** When the
+  chosen layer is `offline` / `vector` and the downloaded tiles or the vector
+  archive do not cover the position, the loopback tile server asks the network
+  (OSM first, then ESRI Street) instead of returning a 1×1 transparent tile.
+  With no connection there is still nothing to fetch, and the log says so once
+  per session. CARTO is deliberately not a fallback: its keyless endpoint
+  answers with a uniform 2 KB placeholder in every city (measured 2026-10-24),
+  which is the same blank map under a different name.
+- **Outside the vector archive, the vector style is dropped.** The archive only
+  covers the HCMC box, so past it the chosen raster layer was hidden under a
+  vector style with no tiles. It now renders the raster style directly.
+- **No wasted basemap inside the archive.** With an on-device layer over HCMC
+  the vector tiles are the map; the raster basemap under them was invisible and
+  would now have downloaded tiles on mobile data for nothing.
+- **Rain is announced from the car's own weather, not an airport's.** The METAR
+  radius drops from 60 km to 15 km, `VCSH` / `VCTS` / `NSW` no longer read as
+  rain at the car, and a point forecast at the car's coordinates now beats a
+  coarse source that reports precipitation elsewhere.
+- **“Weather ahead” is sampled from the car.** It walked the route from its
+  start and reset the window at each sample, so every point read ~1.5 km; it now
+  measures 1.5 / 3.0 / 4.5 km ahead of the current position.
+
+### Internal
+
+- `NavTileServer.resolvePlan()` is pure and unit-tested: on-device layers get an
+  online fallback only while connected, online layers keep their own
+  style-matched mirrors.
+- `metarWeatherCode` and `pickWeatherCodePreferPoint` are `@visibleForTesting`
+  and covered by `test/unit/weather_test.dart`.
+
 ## 1.2.0 — 2026-10-24 (build 4018)
 
 **Motorbike routing uses a motorcycle graph, and Waze limits are no longer

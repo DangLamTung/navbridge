@@ -38,8 +38,7 @@ Future<String> resolveWindyApiKey() async {
 String pickWindyApiKey({
   String? stored,
   String buildTime = windyApiKeyBuiltIn,
-}) =>
-    (stored != null && stored.trim().isNotEmpty) ? stored.trim() : buildTime;
+}) => (stored != null && stored.trim().isNotEmpty) ? stored.trim() : buildTime;
 
 /// Current weather at a location. Nullable fields are null when the feed
 /// doesn't include them (or the call failed).
@@ -319,15 +318,17 @@ Future<WeatherInfo?> fetchMetarWeather(
     feelsLikeC: temp, // METAR has no feels-like — use the measured temp
     windKmh: wspdKt == null ? null : wspdKt * 1.852, // knots → km/h
     windDir: wdir,
-    weatherCode: _metarWeatherCode(best),
+    weatherCode: metarWeatherCode(best),
     source: 'METAR',
   );
 }
 
-/// How far a METAR station may be and still describe where the car is. 60 km is
-/// the scale of a Vietnamese province — beyond it the observation is about a
-/// different climate, not about the road.
-const double kMetarMaxMeters = 60000;
+/// How far a METAR station may be and still describe where the car is. 15 km is
+/// the scale of a city / district — beyond it the observation is about the
+/// airport's weather, not the road's. This used to be 60 km ("the scale of a
+/// Vietnamese province"), which let Tân Sơn Nhất's rain override a dry Dầu Giây
+/// ~55 km away and made the car announce "Trời bắt đầu mưa" with no rain there.
+const double kMetarMaxMeters = 15000;
 
 /// The station nearest [lat]/[lng] that is within [maxMeters], else null.
 /// Pure (no network), so the radius policy is unit-tested.
@@ -364,18 +365,26 @@ int _cloudRank(String c) => switch (c) {
 };
 
 /// Map a METAR observation to an Open-Meteo-style WMO code (for the emoji).
-int? _metarWeatherCode(Map<String, dynamic> m) {
-  final wxcodes = (m['wxcodes'] as List?) ?? const [];
-  final wx = wxcodes.join(' ').toUpperCase();
-  if (wx.contains('TS') || wx.contains('VCTS')) return 95; // thunder
+///
+/// `VCSH` / `VCTS` mean showers / thunderstorms IN THE VICINITY, not at the
+/// station. Treating them as precipitation made the app announce rain at the
+/// car while the airport itself was dry, so vicinity codes are dropped here.
+/// `NSW` ("no significant weather") is likewise not rain.
+@visibleForTesting
+int? metarWeatherCode(Map<String, dynamic> m) {
+  final wxcodes = ((m['wxcodes'] as List?) ?? const [])
+      .map((e) => e.toString().toUpperCase())
+      .where((e) => e.isNotEmpty && e != 'NSW' && !e.startsWith('VC'));
+  final wx = wxcodes.join(' ');
+  if (wx.contains('TS')) return 95; // thunder
   if (wx.contains('SH')) return 80; // showers
   if (wx.contains('RA')) return 61; // rain
   if (wx.contains('DZ')) return 51; // drizzle
   if (wx.contains('SN')) return 71; // snow
+  if (wx.contains('GR') || wx.contains('GS')) return 61; // hail
   if (wx.contains('FG')) return 45; // fog
   if (wx.contains('BR') || wx.contains('HZ')) return 45; // mist / haze
-  if (wx.isNotEmpty) return 61; // some other precipitation
-  // No precipitation → derive from the highest cloud cover.
+  // No precipitation AT THE STATION → derive from the highest cloud cover.
   var cover = '';
   for (final c in (m['clouds'] as List?) ?? const []) {
     final cv = (c as Map?)?['cover'] as String?;
@@ -458,10 +467,7 @@ Future<WeatherInfo?> fetchWindyWeather(double lat, double lng) async {
     if (warn is String && warn.isNotEmpty) {
       debugPrint('WEATHER: Windy API notice: $warn');
     }
-    return windyInfoFromJson(
-      doc,
-      nowMs: DateTime.now().millisecondsSinceEpoch,
-    );
+    return windyInfoFromJson(doc, nowMs: DateTime.now().millisecondsSinceEpoch);
   } catch (e) {
     debugPrint('WEATHER: Windy failed: $e');
     return null;
@@ -472,10 +478,7 @@ Future<WeatherInfo?> fetchWindyWeather(double lat, double lng) async {
 /// closest to [nowMs]. Pure, so the unit handling is pinned by a test built from
 /// a REAL response payload (see `test/unit/weather_test.dart`).
 @visibleForTesting
-WeatherInfo? windyInfoFromJson(
-  Map<String, dynamic> d, {
-  required int nowMs,
-}) {
+WeatherInfo? windyInfoFromJson(Map<String, dynamic> d, {required int nowMs}) {
   final ts = (d['ts'] as List?)?.cast<num>();
   if (ts == null || ts.isEmpty) return null;
   // Index of the forecast point closest to now. The series commonly starts
@@ -575,6 +578,7 @@ int windyWmoCode({double? ptype, List<double?> cloudPct = const []}) {
 /// ACCUWEATHER_API_KEY` (.env). Empty = AccuWeather disabled (the app uses
 /// Windy → METAR → Open-Meteo).
 const String accuWeatherApiKey = String.fromEnvironment('ACCUWEATHER_API_KEY');
+
 /// AccuWeather WeatherIcon (1–44) → Open-Meteo WMO code, so the existing
 /// emoji / merge / rain-ahead logic just works.
 int? _accuIconToWmo(int icon) {
@@ -717,18 +721,15 @@ Future<WeatherInfo?> fetchBestWeather(double lat, double lng) async {
     windKmh: primary.windKmh ?? om?.windKmh,
     windDir: primary.windDir ?? om?.windDir,
     precipMm: primary.precipMm ?? om?.precipMm,
-    // ⭐ The CODE is decided separately from the rest: see [pickWeatherCode].
-    // Windy's code comes from a 3-hourly `ptype` and Open-Meteo's from the
-    // current hour, so letting the primary win it unconditionally would let a
-    // coarse "dry" reading silence a drizzle/storm the other source had
-    // already seen — and the rain start/stop announcements key on this.
-    weatherCode: pickWeatherCode([
-      primary.weatherCode,
-      windy?.weatherCode,
-      metar?.weatherCode,
-      om?.weatherCode,
-      accu?.weatherCode,
-    ]),
+    // ⭐ The CODE is decided separately from the rest. Point sources
+    // (AccuWeather current + Open-Meteo at the car's exact coordinates) win
+    // over coarse ones (Windy's 3-hourly GFS `ptype`, airport METAR). Letting
+    // a distant airport's precipitation override a dry point forecast is what
+    // produced "Trời bắt đầu mưa" outside HCMC when it was not raining there.
+    weatherCode: pickWeatherCodePreferPoint(
+      point: [accu?.weatherCode, om?.weatherCode],
+      coarse: [windy?.weatherCode, metar?.weatherCode],
+    ),
     rainProb: om?.rainProb,
     source: primary.source,
   );
@@ -764,3 +765,17 @@ int? pickWeatherCode(Iterable<int?> codes) {
   }
   return first;
 }
+
+/// Resolve the weather code from point observations/forecasts first, and only
+/// fall back to coarse sources when no point source answered.
+///
+/// This is the fix for false rain announcements: a METAR 15-60 km away (or
+/// Windy's 3-hourly `ptype`) must not say "it is raining HERE" when the code
+/// at the car's own coordinates says dry. Within the point group the existing
+/// "any precipitation wins" rule still applies, so a drizzle Open-Meteo sees
+/// is not silenced by a dry AccuWeather reading.
+@visibleForTesting
+int? pickWeatherCodePreferPoint({
+  required Iterable<int?> point,
+  required Iterable<int?> coarse,
+}) => pickWeatherCode(point) ?? pickWeatherCode(coarse);

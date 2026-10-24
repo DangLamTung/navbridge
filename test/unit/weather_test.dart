@@ -34,7 +34,7 @@ void main() {
     },
     'warning':
         'The testing API version is for development purposes only. This data is '
-            'randomly shuffled and slightly modified.',
+        'randomly shuffled and slightly modified.',
     'temp-surface': [299.4676585201401, 303.8364914898399, 298.9554012796625],
     'rh-surface': [88.26514945768803, 94.96789958556174, 87.53645972525588],
     'ptype-surface': [0, 1, 1],
@@ -103,13 +103,20 @@ void main() {
     expect(windyWmoCode(ptype: 0, cloudPct: const [50, 50, 50]), 2);
     expect(windyWmoCode(ptype: 0, cloudPct: const [20, 20, 20]), 1);
     expect(windyWmoCode(ptype: 0, cloudPct: const [2, 3, 0]), 0);
-    expect(windyWmoCode(), 0, reason: 'nothing known → clear (Open-Meteo fills)');
+    expect(
+      windyWmoCode(),
+      0,
+      reason: 'nothing known → clear (Open-Meteo fills)',
+    );
   });
 
-  test('a payload with no timeline is rejected (never a half-filled sample)', () {
-    expect(windyInfoFromJson(const {'units': {}}, nowMs: now), isNull);
-    expect(windyInfoFromJson(const {'ts': []}, nowMs: now), isNull);
-  });
+  test(
+    'a payload with no timeline is rejected (never a half-filled sample)',
+    () {
+      expect(windyInfoFromJson(const {'units': {}}, nowMs: now), isNull);
+      expect(windyInfoFromJson(const {'ts': []}, nowMs: now), isNull);
+    },
+  );
 
   group('METAR is a NEIGHBOURHOOD source', () {
     // Real ICAO stations, from _vnAirports.
@@ -128,15 +135,34 @@ void main() {
       // Pleiku: Đà Nẵng is ~250 km, so its METAR says nothing about here.
       expect(nearestMetarWithin(batch, 13.9833, 108.0000), isNull);
       expect(
-        nearestMetarWithin(batch, 13.9833, 108.0000, maxMeters: 400000)?['icao'],
+        nearestMetarWithin(
+          batch,
+          13.9833,
+          108.0000,
+          maxMeters: 400000,
+        )?['icao'],
         'VVDN',
       );
     });
 
+    test('a station 23 km away no longer describes the road', () {
+      // Biên Hòa is ~23 km from Tân Sơn Nhất. The old 60 km radius used the
+      // airport's rain/temperature there; 15 km keeps it local.
+      expect(nearestMetarWithin(batch, 10.95, 106.82), isNull);
+      expect(
+        nearestMetarWithin(batch, 10.95, 106.82, maxMeters: 60000)?['icao'],
+        'VVTS',
+      );
+    });
+
     test('skips entries with no temperature', () {
-      final m = nearestMetarWithin(const [
-        {'icao': 'VVTX', 'lat': 10.79, 'lon': 106.63},
-      ], 10.7903, 106.6374);
+      final m = nearestMetarWithin(
+        const [
+          {'icao': 'VVTX', 'lat': 10.79, 'lon': 106.63},
+        ],
+        10.7903,
+        106.6374,
+      );
       expect(m, isNull);
     });
   });
@@ -158,7 +184,82 @@ void main() {
     });
   });
 
+  group('METAR weather codes are local to the station', () {
+    test('vicinity showers/thunder are not rain at the car', () {
+      expect(
+        metarWeatherCode({
+          'wxcodes': ['VCSH'],
+          'clouds': [
+            {'cover': 'BKN'},
+          ],
+        }),
+        3,
+      );
+      expect(
+        metarWeatherCode({
+          'wxcodes': ['VCTS'],
+          'clouds': [
+            {'cover': 'SCT'},
+          ],
+        }),
+        2,
+      );
+    });
+
+    test('NSW is dry, not "some other precipitation"', () {
+      expect(
+        metarWeatherCode({
+          'wxcodes': ['NSW'],
+          'clouds': [
+            {'cover': 'FEW'},
+          ],
+        }),
+        1,
+      );
+    });
+
+    test('rain at the station still wins, even next to a vicinity code', () {
+      expect(
+        metarWeatherCode({
+          'wxcodes': ['-RA'],
+        }),
+        61,
+      );
+      expect(
+        metarWeatherCode({
+          'wxcodes': ['VCSH', '-RA'],
+        }),
+        61,
+      );
+      expect(
+        metarWeatherCode({
+          'wxcodes': ['+TSRA'],
+        }),
+        95,
+      );
+    });
+  });
+
   group('the published weather code', () {
+    test('point sources beat a coarse source that reports rain', () {
+      // Open-Meteo at the car says clear; an airport METAR 23 km away says
+      // rain. The car is dry.
+      expect(pickWeatherCodePreferPoint(point: [0], coarse: [61]), 0);
+      expect(pickWeatherCodePreferPoint(point: [0], coarse: [80]), 0);
+    });
+
+    test(
+      'point sources still promote precipitation within their own group',
+      () {
+        expect(pickWeatherCodePreferPoint(point: [0, 51], coarse: [0]), 51);
+      },
+    );
+
+    test('coarse codes are used only when no point source answered', () {
+      expect(pickWeatherCodePreferPoint(point: [null], coarse: [80]), 80);
+      expect(pickWeatherCodePreferPoint(point: [null], coarse: [null]), isNull);
+    });
+
     test('any source reporting precipitation wins', () {
       // Windy (the authority) says dry, Open-Meteo says drizzle → the drizzle
       // stands. Without this, activating Windy would silence the rain

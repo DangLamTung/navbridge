@@ -22,11 +22,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 
 import 'package:navbridge/services/offline_tiles.dart'
-    show
-        fetchOnlineTileBytes,
-        tileFile,
-        isDefinitelyOffline,
-        forceOffline;
+    show fetchOnlineTileBytes, tileFile, isDefinitelyOffline, forceOffline;
 import 'package:navbridge/services/vietmap_config.dart'
     show VietmapConfig, appendCartoApiKey;
 
@@ -36,6 +32,10 @@ class NavTileServer {
 
   /// One-shot so the offline notice is not repeated per tile.
   bool _loggedOfflineTiles = false;
+
+  /// One-shot so the "on-device layer ran out, using the network" notice is not
+  /// repeated per tile.
+  bool _loggedEmergency = false;
 
   HttpServer? _server;
   int? _port;
@@ -52,8 +52,51 @@ class NavTileServer {
   int? get port => _port;
   bool get isRunning => _server != null;
 
+  /// Sources that live ONLY on the device: the vector archive plus whatever
+  /// raster tiles were downloaded. They have no online templates by design.
+  static bool isOnDeviceSource(String source) =>
+      source == 'offline' || source == 'vector';
+
+  /// Online sources used, IN ORDER, when an on-device layer has no tile for
+  /// this spot — the driver left the downloaded area, or drove out of the
+  /// vector archive's bbox. Serving a transparent tile there leaves a blank
+  /// map, which is worse than a real raster from the network.
+  ///
+  /// OSM first: it is the same data the vector archive is built from, so the
+  /// look does not change. ESRI Street is the second opinion for when the
+  /// volunteer servers are rate-limiting or blocking. CARTO is deliberately
+  /// NOT in this list — measured 2026-10-24, its keyless endpoint answers with
+  /// a uniform 2049-byte placeholder in every city, which reads as "blank map"
+  /// and is exactly the bug this list exists to fix.
+  static const List<String> emergencySources = ['osm', 'esri-street'];
+
+  /// Tile sources to try for [activeSource], in order. Pure so the "never leave
+  /// the driver staring at a blank tile" rule is pinned by a test instead of
+  /// being re-derived in the request handler.
+  ///
+  /// Only ON-DEVICE layers get the online fallback: an online layer already
+  /// fails over across its own style-matched mirrors inside the fetcher, and
+  /// swapping ITS look for another provider is the "map type keeps changing"
+  /// complaint, not a fix.
+  @visibleForTesting
+  static List<String> resolvePlan(
+    String? activeSource, {
+    required bool online,
+  }) {
+    if (activeSource == null || !online) {
+      return [?activeSource];
+    }
+    if (isOnDeviceSource(activeSource)) {
+      return [activeSource, ...emergencySources];
+    }
+    return [activeSource];
+  }
+
   /// Map a known tile source to its online raster templates.
-  static List<String> templatesForSource(String source, {bool nightMode = false}) {
+  static List<String> templatesForSource(
+    String source, {
+    bool nightMode = false,
+  }) {
     switch (source) {
       // No templates BY DESIGN: this source is the on-device data — the vector
       // archive plus whatever raster tiles were downloaded. Without an explicit
@@ -150,11 +193,7 @@ class NavTileServer {
     String? sourceName,
     bool? nightMode,
   }) async {
-    update(
-      templates: templates,
-      sourceName: sourceName,
-      nightMode: nightMode,
-    );
+    update(templates: templates, sourceName: sourceName, nightMode: nightMode);
     if (_server != null) return _port!;
     if (_starting) return _startFuture!;
     _starting = true;
@@ -282,17 +321,31 @@ class NavTileServer {
     final own = await _cachedTile(z, x, y, activeSource);
     if (own != null) return own;
 
-    // 2. Online fetch when connected — and NOT when the platform already says
-    //    there is no connection: `isOnline()` always returns true on purpose
-    //    (only a real HTTP result is trusted for routing), so asking it here
-    //    made every uncached tile wait for a fetch that could not succeed.
+    // 2. Everything the selected source can still offer. NOT attempted when the
+    //    platform already says there is no connection: `isOnline()` always
+    //    returns true on purpose (only a real HTTP result is trusted for
+    //    routing), so asking it here made every uncached tile wait for a fetch
+    //    that could not succeed.
     final online = !forceOffline && !await isDefinitelyOffline();
-    if (online) {
-      final fetched = await _fetchOnline(z, x, y, source: activeSource);
-      if (fetched != null) return fetched;
-    } else if (!_loggedOfflineTiles) {
+    if (!online && !_loggedOfflineTiles) {
       _loggedOfflineTiles = true;
       debugPrint('TILESRV: offline — serving cached tiles only');
+    }
+
+    for (final src in resolvePlan(activeSource, online: online)) {
+      final isSelected = src == activeSource;
+      // A fallback source may already hold this tile from an earlier request
+      // (or from a region download) — check its store before going online.
+      if (!isSelected) {
+        final cached = await _cachedTile(z, x, y, src);
+        if (cached != null) return cached;
+      }
+      if (!online) continue; // nothing left to try on disk
+      final fetched = await _fetchOnline(z, x, y, source: src);
+      if (fetched != null) {
+        if (!isSelected) _noteEmergency(activeSource, src);
+        return fetched;
+      }
     }
 
     // 3. ⭐ The bundled BULK OVERVIEW pack — only NOW, after the network.
@@ -311,6 +364,18 @@ class NavTileServer {
 
     // 4. Transparent fallback (keeps MapLibre from erroring out).
     return await _transparentPng();
+  }
+
+  /// Say ONCE per session that the on-device layer ran out and the map is being
+  /// served from the network here, so a "why is my offline map online?" report
+  /// has a trace instead of a silent switch.
+  void _noteEmergency(String? activeSource, String used) {
+    if (_loggedEmergency) return;
+    _loggedEmergency = true;
+    debugPrint(
+      'TILESRV: "$activeSource" has no tile for this area — '
+      'serving $used while online',
+    );
   }
 
   /// One cached tile from [source]'s store, normalised to a decodable PNG, or
@@ -407,12 +472,12 @@ class NavTileServer {
     0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR
     0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
     0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, // 8-bit RGBA
-    0x89,                                           // IHDR crc
+    0x89, // IHDR crc
     0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, // IDAT
     0x78, 0x9C, 0x63, 0x60, 0x00, 0x02, 0x00, 0x00, // payload
-    0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F,       // IDAT crc
+    0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F, // IDAT crc
     0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, // IEND
-    0xAE, 0x42, 0x60, 0x82,                         // IEND crc
+    0xAE, 0x42, 0x60, 0x82, // IEND crc
   ]);
 
   Future<Uint8List> _transparentPng() async => _transparentPngBytes;
