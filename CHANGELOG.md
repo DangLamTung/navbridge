@@ -4,11 +4,12 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
-## Unreleased
+## 1.2.2 — 2026-10-24 (build 4020)
 
 **The sign that governs the driver's direction is the one on the RIGHT, the
-mô tô number is read from the law instead of the car's posted value, and a
-built-up boundary only speaks for the zone the car is actually in.**
+mô tô number is read from the law instead of the car's posted value, a
+built-up boundary only speaks for the zone the car is actually in — and the
+Waze camera layer finally carries the direction it always had.**
 
 - **Only the right-hand sign is read.** A speed/prohibition plate is erected on
   the right verge for the traffic it governs (QCVN 41:2019); the same plate on
@@ -39,6 +40,29 @@ built-up boundary only speaks for the zone the car is actually in.**
   (one per direction) and a zone sign is accepted from 150 m, so one fix could
   reach both: the car entered and immediately left the zone, and the final
   state depended on which record sorted last. The NEAREST boundary now decides.
+- **A plate is only read if it FACES our direction.** VietMap carries the
+  facing angle on its rows, so the two plates of a boundary can be told apart;
+  measured on the 2026-10-24 drive, of 59 boundary plates within 150 m of the
+  path only 9 faced the way the car was going and 22 faced the opposite way.
+  Roadside and boundary plates reach the voice only when both the side and the
+  facing agree (`signFacesTravel`, 60°). Measured on the same path: boundary
+  and cấm-vượt plates reached by the scan drop from 25 to 9.
+- **The 500 m voice pacing from the previous build is gone** — with the
+  wrong-direction plates dropped there is nothing left to pace.
+- **"80" plates that are really khu dân cư plates are dropped at load** (6 rows
+  in the bundled pack: VietMap publishes a TYPE 1 and a TYPE 2 row for one
+  post, same coordinates and heading; entering a town is never an 80 sign).
+- **No boundary plate on the route? A posted-limit STEP decides the zone**:
+  80/90 → 60 or less is a town entry, the reverse is the exit.
+- **Waze cameras now carry their own direction.** The export always had it
+  (`FWD` 16 908 / `REV` 13 252 / `BOTH` 5 104) and the pipeline dropped it, so
+  every Waze camera was announced on both carriageways. The FWD/REV flag is
+  converted to a compass heading from the crawled segment geometry (35 249 of
+  35 264 alerts resolve) and written onto 3 731 rows; the ahead scan filters
+  them like the signs. On the 2026-10-24 drive the camera hits within range
+  fall from 477 to 258.
+- **The Waze right-hand rule is pinned by a test** on a real Waze plate: read
+  from the right of the path, dropped from the left (`waze_side_test.dart`).
 - **A layer miss no longer flips the chip back to the built-up guess.** When the
   road lookup answers NOTHING (no name, no class — the web build, or a phone
   outside the downloaded area) and the segment layer misses at that fix, the
