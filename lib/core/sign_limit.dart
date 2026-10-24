@@ -28,17 +28,6 @@ import 'road_match.dart';
 /// [kSignAdoptM] and sets the distance to 0 once it is behind the car.
 const double kSignReachedM = 50.0;
 
-/// Minimum distance the car must travel between two khu dân cư boundary
-/// callouts, metres.
-///
-/// The sign packs carry MANY plates per boundary — both directions of travel,
-/// plus duplicates from three sources. Measured on the 2026-10-24 drive: 87
-/// khu dân cư callouts, 32 of which flipped direction inside 500 m, five of
-/// them alternating in 21 s at 02:42 ("Hết … phía trước" → "Bắt đầu …" →
-/// "Hết" → …). One transition per 500 m is the useful rate; a town narrower
-/// than that still changes the limit, just without the voice.
-const double kZoneCalloutGapM = 500.0;
-
 /// How far ahead of the car a speed sign is ADOPTED (becomes the preview
 /// limit / the next-limit wording). Beyond this the sign is not looked at, so
 /// the held value is treated as in force ([kSignReachedM]).

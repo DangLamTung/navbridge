@@ -716,10 +716,6 @@ class _NavigationPageState extends State<NavigationPage>
   /// layer can name, so the line is emitted at most once per 250 m.
   LatLng? _keepNoticeAt;
 
-  /// Where the last khu dân cư boundary callout was spoken — paces the next one
-  /// by [kZoneCalloutGapM], see `_announceSigns`.
-  LatLng? _lastZoneCalloutAt;
-
   /// Confirmation gate for the road's VALUE (class + limit) while the NAME does
   /// not change — see `_gateValue` in `nav_gps.dart`. Tighter than the name
   /// gate: 15 m is enough to prove a class change is not one bad fix.
@@ -746,6 +742,14 @@ class _NavigationPageState extends State<NavigationPage>
   bool _inTown = false;
   LatLng? _inTownPos;
   bool _inTownBySign = false;
+
+  /// The built-up verdict INFERRED from a posted-limit STEP, used when the route
+  /// carries no R.420/R.421 boundary plate — see `NavGps._noteLayerStep`.
+  bool _inTownByLayer = false;
+
+  /// The last posted layer value (the CAR value, before the vehicle cap), so a
+  /// step down to 60 / up to 70+ can be read as a town entry / exit.
+  int _lastLayerKmh = 0;
 
   // --- the road AFTER the next maneuver, for the spoken callout -------------
   // The callout names the street you turn INTO, so it quotes THAT street's
@@ -1350,6 +1354,8 @@ class _NavigationPageState extends State<NavigationPage>
     _signSpeedLimitRoad = null;
     _signAheadM = 0;
     _inTownBySign = false;
+    _inTownByLayer = false;
+    _lastLayerKmh = 0;
     _aheadSigns = const [];
     _alertBarCollapsed = false;
     _limitAnnouncer.reset();
@@ -1357,7 +1363,6 @@ class _NavigationPageState extends State<NavigationPage>
     _limitAnnouncedSrc = '';
     _speedChangeDedupe.reset();
     _motorwayWarned = false;
-    _lastZoneCalloutAt = null;
     _keepNoticeAt = null;
   }
 

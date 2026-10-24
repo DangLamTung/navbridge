@@ -1129,6 +1129,9 @@ extension _NavGps on _NavigationPageState {
       // The layer answered for THIS road from HERE: that is the anchor the hold
       // is measured from (see [LayerHold]).
       _layerHold.note(layerName ?? road.name, pos);
+      // A posted-limit STEP is the fallback evidence of a town boundary when the
+      // route has no plate for it (see [_noteLayerStep]).
+      _noteLayerStep(hit.limit, pos);
       return applyPostedLayer(
         road,
         kmh: hit.limit,
@@ -1149,12 +1152,39 @@ extension _NavGps on _NavigationPageState {
   /// [builtUpRuleApplies] (POI / road segment density) cached per 150 m as the
   /// cold-start seed.
   Future<bool> _townAt(LatLng pos) async {
-    if (_inTownBySign) return _inTown;
+    if (_inTownBySign || _inTownByLayer) return _inTown;
     final prev = _inTownPos;
     if (prev != null && distanceMeters(prev, pos) < 150) return _inTown;
     _inTownPos = pos;
     _inTown = await builtUpRuleApplies(pos, hasPosted: false);
     return _inTown;
+  }
+
+  /// Read a posted-limit STEP as a built-up boundary when the route has no
+  /// plate for it (user, 2026-10-24: "nếu vào kdc mà ko có biển ngoài thì xét
+  /// waze đổi tốc độ để xét").
+  ///
+  /// Outside a built-up area the CAR values posted on the layer are 80 (hai
+  /// chiều) / 90 (đường đôi); inside they are 50/60. So a step DOWN to 60 or
+  /// less is the town entry and a step back UP to 70+ is the exit. It is only a
+  /// FALLBACK: a boundary plate, once reached, keeps the authority
+  /// ([_inTownBySign]) and this never overrides it.
+  void _noteLayerStep(int kmh, LatLng at) {
+    final prev = _lastLayerKmh;
+    _lastLayerKmh = kmh;
+    if (_inTownBySign || prev <= 0 || kmh <= 0) return;
+    final entering = prev >= 70 && kmh <= 60;
+    final leaving = prev <= 60 && kmh >= 70;
+    if (!entering && !leaving) return;
+    if (_inTownByLayer && _inTown == entering) return;
+    _inTown = entering;
+    _inTownByLayer = true;
+    _inTownPos = at;
+    debugPrint(
+      'TOWN: ${entering ? 'vào' : 'ra'} khu dân cư suy ra từ Waze '
+      '$prev → $kmh km/h (không có biển ranh giới trên đường)',
+    );
+    _updateRoadForTownChange(entering, at: at);
   }
 
   /// Update the current road's statutory speed limit when crossing a built-up
@@ -1339,7 +1369,10 @@ extension _NavGps on _NavigationPageState {
     // "nothing changed, return" shortcut below, or a value the layer keeps
     // re-confirming would never refresh its anchor — and the hold would then
     // look stale 150 m into a stretch the layer covers perfectly.
-    if (lim != null && limitUsable) _layerHold.note(name, pos);
+    if (lim != null && limitUsable) {
+      _layerHold.note(name, pos);
+      _noteLayerStep(lim, pos); // town entry/exit from a posted STEP
+    }
     if (lim == null || !limitUsable) {
       if (lim != null) {
         debugPrint(

@@ -363,17 +363,6 @@ extension _NavSigns on _NavigationPageState {
         if (k == RoadSignKind.populatedEnd && _inTownBySign && !_inTown) {
           continue;
         }
-        // One transition per [kZoneCalloutGapM] of road. The pack carries MANY
-        // plates per boundary (both directions of travel, plus duplicates), and
-        // each plate used to get its own far + near callout: measured on the
-        // 2026-10-24 drive, 87 khu dân cư callouts with 32 direction flips
-        // inside 500 m — five alternations in 21 s at 02:42. The limit still
-        // changes silently at the plate; only the VOICE is paced.
-        final lastAt = _lastZoneCalloutAt;
-        if (lastAt != null &&
-            distanceMeters(lastAt, snapped) < kZoneCalloutGapM) {
-          continue;
-        }
       }
       // Announce at most TWICE per sign: once far (the first time it enters the
       // 400 m range) and once near (~100 m) as the final reminder. The old
@@ -408,10 +397,6 @@ extension _NavSigns on _NavigationPageState {
     if (next == null) return;
     final near = m <= 100;
     final phrase = signCalloutPhrase(next.kind, m, near: near);
-    if (next.kind == RoadSignKind.populated ||
-        next.kind == RoadSignKind.populatedEnd) {
-      _lastZoneCalloutAt = snapped; // paces the NEXT boundary callout
-    }
     _logAnnouncement(phrase, kind: 'sign');
     // The built-up boundary and the "obey now" set are worth interrupting the
     // AI assistant / a camera line for; a turn or lane plate is not. They were

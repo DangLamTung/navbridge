@@ -198,6 +198,17 @@ class RoadSign implements OfflinePoint {
   /// Data source that produced this point: `vietmap` | `osm` | `waze`.
   final String source;
 
+  /// Compass direction (°) the plate FACES — i.e. the traffic it governs, as
+  /// carried by the VietMap feed (`heading`, present on 36 839 of 59 200 rows).
+  /// Null when the source has none (every OSM row, most Waze rows).
+  ///
+  /// This is the only honest way to tell OUR plate from the other direction's
+  /// at a boundary: the pack holds R.420 and R.421 a few metres apart, each
+  /// facing the traffic it applies to. Measured on the 2026-10-24 drive, of 59
+  /// boundary plates within 150 m of the driven path only 9 faced the way the
+  /// car was going and 22 faced the opposite way.
+  final double? heading;
+
   /// Major regulatory or safety sign eligible for overview / zoomed-out views.
   bool get isImportant => kind.isImportant;
 
@@ -208,6 +219,7 @@ class RoadSign implements OfflinePoint {
     required this.kind,
     this.value,
     this.source = 'osm',
+    this.heading,
   });
 
   @override
@@ -228,6 +240,7 @@ class RoadSign implements OfflinePoint {
       kind: RoadSignKind.fromKey((j['kind'] ?? 'signal') as String),
       value: (j['value'] as num?)?.toInt(),
       source: source,
+      heading: (j['heading'] as num?)?.toDouble(),
     );
   }
 }
@@ -295,7 +308,86 @@ List<RoadSign> _parseSigns(String raw) {
       '(> $kVnMaxPostedKmh km/h)',
     );
   }
-  return kept;
+  final filtered = dropSpeedPlatesOnBuiltUpPosts(kept);
+  if (filtered.length != kept.length) {
+    debugPrint(
+      'SIGNS: dropped ${kept.length - filtered.length} "80" plate(s) that stand '
+      'on a BẮT ĐẦU khu dân cư post facing the same way — entering a town is '
+      'never an 80 km/h sign',
+    );
+  }
+  return filtered;
+}
+
+/// Drop an `80` speed plate that IS a khu dân cư plate.
+///
+/// The VietMap feed carries both rows for one physical post: an EDOG TYPE 1
+/// ("Hạn chế tốc độ 80") and a TYPE 2 ("Khu đông dân cư"), on the same
+/// coordinates and the same `heading`. Entering a built-up area a car is capped
+/// at 50/60, so an 80 facing INTO the town is not a speed sign — reading it made
+/// the app say "Tốc độ tối đa … km/h phía trước" at a town entry instead of
+/// "Bắt đầu khu dân cư" (user, 2026-10-24: "có những biển vietmap 80 thực chất
+/// là biển kdc").
+///
+/// Deliberately narrow: only the value 80, only a plate that stands within
+/// [kKdcPostToleranceM] of a [`populated`] (start) plate, and only when BOTH
+/// carry a `heading` that agrees within [kKdcSameFacingDeg]. An 80 posted at the
+/// END of a town facing out is legitimate (it is the rural limit that takes
+/// effect there) and is kept. Measured over the bundled pack 2026-10-24: 59
+/// speed-80 rows share a post with a boundary plate, but just 5 of them face the
+/// same way as a town START.
+List<RoadSign> dropSpeedPlatesOnBuiltUpPosts(List<RoadSign> signs) {
+  const cell = 0.0003; // ~33 m
+  final grid = <String, List<RoadSign>>{};
+  String key(double lat, double lng) =>
+      '${(lat / cell).floor()},${(lng / cell).floor()}';
+  for (final s in signs) {
+    if (s.kind == RoadSignKind.populated) {
+      (grid[key(s.lat, s.lng)] ??= <RoadSign>[]).add(s);
+    }
+  }
+  if (grid.isEmpty) return signs;
+  final out = <RoadSign>[];
+  for (final s in signs) {
+    if (s.kind == RoadSignKind.speed &&
+        s.value == 80 &&
+        s.heading != null &&
+        _standsOnBuiltUpPost(s, grid, key)) {
+      continue;
+    }
+    out.add(s);
+  }
+  return out;
+}
+
+/// Is [s] within [kKdcPostToleranceM] of a [`populated`] plate facing the same
+/// way (within [kKdcSameFacingDeg])?
+const double kKdcPostToleranceM = 40.0;
+const double kKdcSameFacingDeg = 60.0;
+
+bool _standsOnBuiltUpPost(
+  RoadSign s,
+  Map<String, List<RoadSign>> grid,
+  String Function(double, double) key,
+) {
+  final gy = (s.lat / 0.0003).floor();
+  final gx = (s.lng / 0.0003).floor();
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      for (final p in grid['${gy + dy},${gx + dx}'] ?? const <RoadSign>[]) {
+        final h = p.heading;
+        if (h == null) continue;
+        var d = (h - s.heading!) % 360.0;
+        if (d < 0) d += 360.0;
+        if (d > 180.0) d = 360.0 - d;
+        if (d > kKdcSameFacingDeg) continue;
+        if (_approxM(s.lat, s.lng, p.lat, p.lng) <= kKdcPostToleranceM) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 /// Decimal places a coordinate must carry to be worth trusting on the ground.
@@ -329,7 +421,8 @@ const int kMinSignDecimals = 4;
 /// a fraction of a percent of the fine rows, traded against warnings that point
 /// at the wrong street.
 bool signCoordsAreUsable(RoadSign s) =>
-    _decimals(s.lat) >= kMinSignDecimals && _decimals(s.lng) >= kMinSignDecimals;
+    _decimals(s.lat) >= kMinSignDecimals &&
+    _decimals(s.lng) >= kMinSignDecimals;
 
 int _decimals(double v) {
   final text = v.toString();

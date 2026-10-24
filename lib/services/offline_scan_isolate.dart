@@ -403,9 +403,17 @@ Object? _runQuery(
         // carriageway, and reading it is how the app announced (and adopted as
         // the limit) the other direction's number — the 50/60 that swap either
         // way (user, 2026-10-24: "biển có hiệu lực cần đọc là biển bên tay
-        // phải"). Zone signs are exempt: they are area vertices, and their side
-        // carries no meaning (see [kZoneLateralMeters]).
-        rightSideFor: (s) => !zoneSignKinds.contains(s.kind),
+        // phải"). Boundaries included: the measured 2026-10-24 drive had 59
+        // boundary plates within 150 m of the path, 14 of them LEFT and
+        // heading-less.
+        rightSideFor: (_) => true,
+        // ⭐ …and the plate must FACE the way the car is going. VietMap carries
+        // `heading` on its rows (the traffic the plate governs), which is how a
+        // boundary's two plates are told apart: at 2026-10-24's drive 22 of the
+        // 59 plates faced the opposite direction and were announced anyway —
+        // five "vào/ra khu dân cư" alternations in 21 s. A plate with no
+        // heading in the data keeps the side test alone.
+        facingFor: (s) => s.heading,
       ),
     };
   }
