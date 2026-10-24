@@ -35,10 +35,17 @@ abstract interface class OfflinePoint {
 /// [current] and the item lie inside the same window.
 List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
   (LatLng, List<LatLng>, List<T>, double, double) args, {
+
   /// Per-item override of the lateral limit. A zone-referenced sign is stored
   /// at an area vertex rather than on the carriageway, so it needs a wider
   /// corridor than a roadside post — see [kZoneLateralMeters].
   double Function(T item)? lateralFor,
+
+  /// When this returns true for an item, the item must ALSO stand on the
+  /// RIGHT-hand side of the direction of travel (see
+  /// [signedLateralOffsetMeters]) — that is the side whose signs govern this
+  /// traffic.
+  bool Function(T item)? rightSideFor,
 }) {
   final (current, geometry, items, maxAheadMeters, lateralMeters) = args;
   if (geometry.length < 2 || items.isEmpty) return const [];
@@ -54,9 +61,16 @@ List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
     // crossing / parallel road), so it is not "ahead on this route" — see
     // [lateralOffsetMeters]. Callers pass 0 to keep the old behaviour.
     final limit = lateralFor?.call(items[i]) ?? lateralMeters;
-    if (limit > 0) {
-      final off = lateralOffsetMeters(window, p);
-      if (off == null || off > limit) continue;
+    final requiresRight = rightSideFor?.call(items[i]) ?? false;
+    if (limit > 0 || requiresRight) {
+      final off = signedLateralOffsetMeters(window, p);
+      if (off == null) continue;
+      if (limit > 0 && off.abs() > limit) continue;
+      // LEFT of the centreline ⇒ the opposite direction's sign. A stored
+      // coordinate worth less than [kLeftSideToleranceM] is not evidence of a
+      // side (most speed-sign rows carry the road segment itself), so those are
+      // kept.
+      if (requiresRight && off < -kLeftSideToleranceM) continue;
     }
     final m = routeMetersAhead(current, p, window);
     if (m != null && m >= 0 && m <= maxAheadMeters) {
@@ -66,6 +80,24 @@ List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
   out.sort((a, b) => a.$2.compareTo(b.$2));
   return out;
 }
+
+/// How far LEFT of the centreline a sign may sit and still count as a sign of
+/// THIS direction, metres.
+///
+/// Two different things sit left of the centreline and they are not the same:
+///
+///   * a plate on the MEDIAN of a divided road (or a row whose stored
+///     coordinate is the road centreline itself, which is most speed rows —
+///     see `tools/signs/snap_sign_roads.py`), a few metres away at most;
+///   * the opposite direction's verge, which on a divided road is the width of
+///     both carriageways plus the median away.
+///
+/// Measured on the 66 km QL13 fixture (2026-10-24): every plate within 60 m of
+/// the route sits either at −9.5 m or farther LEFT (all 70 km/h — the other
+/// direction's), or at ≥ 0 m on our own side. Nothing lands between −9.5 and 0,
+/// so 6 m separates the two classes with room to spare, and it also keeps a
+/// plate on an undivided road whose surveyed centreline is a metre or two off.
+const double kLeftSideToleranceM = 6.0;
 
 /// The slice of [geometry] that can hold a point within [maxAheadMeters] AHEAD
 /// of [current]: a short lead-in behind the car (a fix that lands just past a

@@ -58,19 +58,18 @@ const Set<RoadSignKind> announcedSignKinds = {
 /// on the 22-trip batch had no callout within 3 km
 /// (`tool/resident_misses.py`).
 int signAnnounceTier(RoadSignKind kind) => switch (kind) {
-      RoadSignKind.populated || RoadSignKind.populatedEnd => 0,
-      RoadSignKind.stop ||
-      RoadSignKind.giveWay ||
-      RoadSignKind.noPassing ||
-      RoadSignKind.noPassingEnd ||
-      RoadSignKind.tollBooth ||
-      RoadSignKind.railwayCrossing ||
-      RoadSignKind.tunnel ||
-      RoadSignKind.slowDown ||
-      RoadSignKind.signal =>
-        1,
-      _ => 2,
-    };
+  RoadSignKind.populated || RoadSignKind.populatedEnd => 0,
+  RoadSignKind.stop ||
+  RoadSignKind.giveWay ||
+  RoadSignKind.noPassing ||
+  RoadSignKind.noPassingEnd ||
+  RoadSignKind.tollBooth ||
+  RoadSignKind.railwayCrossing ||
+  RoadSignKind.tunnel ||
+  RoadSignKind.slowDown ||
+  RoadSignKind.signal => 1,
+  _ => 2,
+};
 
 /// Dedupe key for a sign callout: kind + the sign's own position + far/near.
 /// Pure, so "far then near, and never twice" can be pinned by a test.
@@ -85,9 +84,10 @@ extension _NavSigns on _NavigationPageState {
   /// The POI/segment-density probe in `urban_area.dart` is only a fallback: it
   /// cannot distinguish a highway passing a dense district from the district
   /// itself (QL1 near Dầu Giây was called urban on every sampled Waze segment,
-  /// capping a real 90 to 60). A boundary sign IS the legal zone transition, so
-  /// when the route has one within 30 km it owns `_inTown` from the start.
-  /// No boundary sign on the route keeps the old density seed.
+  /// capping a real 90 to 60). A boundary sign IS the legal zone transition — but
+  /// only the NEXT one describes the zone the driver is in now, so the seed is
+  /// bounded by [kTownSeedAheadM]; see [townSeedFromBoundary]. Farther out the
+  /// density seed stands (it describes where the car actually is).
   Future<void> _seedTownFromRouteSigns() async {
     final route = _route;
     if (route == null || route.geometry.length < 2) return;
@@ -108,7 +108,18 @@ extension _NavSigns on _NavigationPageState {
         }
       }
       if (first == null) return; // no boundary data: density fallback stands
-      final inTown = first.sign.kind == RoadSignKind.populatedEnd;
+      final inTown = townSeedFromBoundary(
+        isEndSign: first.sign.kind == RoadSignKind.populatedEnd,
+        aheadM: first.routeMeters,
+      );
+      if (inTown == null) {
+        debugPrint(
+          'TOWN: not seeded from ${first.sign.kind.key} @ '
+          '${first.routeMeters.round()} m — too far to describe the zone '
+          'here; density decides',
+        );
+        return;
+      }
       setNavState(() {
         _inTownBySign = true;
         _inTown = inTown;
@@ -151,9 +162,33 @@ extension _NavSigns on _NavigationPageState {
     // below — so "biển báo phía trước" works with the voice off.
     _setSignsAhead(ahead);
     // 1. Process signs reached within [kSignReachedM] (50 m):
-    final reachedSigns = ahead.where((a) => a.routeMeters <= kSignReachedM).toList();
+    final reachedSigns = ahead
+        .where((a) => a.routeMeters <= kSignReachedM)
+        .toList();
     var reachedTownBoundary = false;
     var stateChanged = false;
+
+    // ⭐ ONE boundary per fix — the NEAREST one. R.420 and R.421 are posted as a
+    // PAIR a few metres apart (one per direction) at every real transition, and
+    // a zone sign is accepted from 150 m off the route (it is stored at an area
+    // vertex, not on the carriageway), so a single fix can "reach" both plates.
+    // Applying both entered and immediately left the zone, and the state then
+    // depended on which record happened to sort last: the driver was told
+    // "Bắt đầu khu dân cư" and then given the rural table, or the reverse (user,
+    // 2026-10-24: "sai cái vụ ra vào khu dân cư"). The nearest plate is the
+    // transition the car is actually crossing.
+    RoadSignKind? reachedZone;
+    var nearestZoneM = double.infinity;
+    for (final a in reachedSigns) {
+      final k = a.sign.kind;
+      if (k != RoadSignKind.populated && k != RoadSignKind.populatedEnd) {
+        continue;
+      }
+      if (a.routeMeters < nearestZoneM) {
+        nearestZoneM = a.routeMeters;
+        reachedZone = k;
+      }
+    }
 
     // Macro-regulatory and zone transitions:
     for (final a in reachedSigns) {
@@ -167,7 +202,10 @@ extension _NavSigns on _NavigationPageState {
           _signAheadM = 0;
           stateChanged = true;
         }
-      } else if (k == RoadSignKind.populated) {
+        continue;
+      }
+      if (k != reachedZone) continue; // one boundary per fix — see above
+      if (k == RoadSignKind.populated) {
         // Sign R.420: Bắt đầu khu đông dân cư
         reachedTownBoundary = true;
         if (!_inTownBySign || !_inTown) {
@@ -189,9 +227,9 @@ extension _NavSigns on _NavigationPageState {
     }
 
     // Explicit speed limit signs reached (P.127):
-    final reachedSpeed = reachedSigns.where(
-      (a) => a.sign.kind == RoadSignKind.speed && a.sign.value != null,
-    ).firstOrNull;
+    final reachedSpeed = reachedSigns
+        .where((a) => a.sign.kind == RoadSignKind.speed && a.sign.value != null)
+        .firstOrNull;
 
     if (reachedSpeed != null) {
       if (reachedSpeed.sign.value != _signSpeedLimit) {
@@ -377,7 +415,8 @@ extension _NavSigns on _NavigationPageState {
   /// Rebuilds only when the nearest sign changes or its distance moves a whole
   /// metre, so a 1 Hz scan does not repaint the nav screen every second.
   void _setSignsAhead(List<SignAhead> ahead) {
-    final sorted = [...ahead]..sort((a, b) => a.routeMeters.compareTo(b.routeMeters));
+    final sorted = [...ahead]
+      ..sort((a, b) => a.routeMeters.compareTo(b.routeMeters));
     final unchanged =
         sorted.length == _aheadSigns.length &&
         List.generate(sorted.length, (i) => i).every(
@@ -428,121 +467,121 @@ String signShortLabel(RoadSignKind kind) {
 ///
 /// [near] is the ~100 m (final) callout; otherwise the far one. Zone-referenced
 /// kinds carry NO distance — see [signAheadTail] and [zoneSignKinds].
-    String signCalloutPhrase(
+String signCalloutPhrase(
   RoadSignKind kind,
   double meters, {
   required bool near,
 }) => switch (kind) {
-      RoadSignKind.stop =>
-        near
-            ? 'Biển STOP sắp tới'
-            : 'Biển STOP phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.giveWay =>
-        near
-            ? 'Biển nhường đường sắp tới'
-            : 'Biển nhường đường phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.noPassing =>
-        near
-            ? 'Cấm vượt sắp tới'
-            : 'Cấm vượt phía trước${signAheadTail(kind, meters)}',
-      RoadSignKind.noLeftTurn =>
-        near
-            ? 'Cấm rẽ trái sắp tới'
-            : 'Cấm rẽ trái phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.noRightTurn =>
-        near
-            ? 'Cấm rẽ phải sắp tới'
-            : 'Cấm rẽ phải phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.noUTurn =>
-        near
-            ? 'Cấm quay đầu sắp tới'
-            : 'Cấm quay đầu phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.noLeftUTurn =>
-        near
-            ? 'Cấm rẽ trái và quay đầu sắp tới'
-            : 'Cấm rẽ trái và quay đầu phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.noRightUTurn =>
-        near
-            ? 'Cấm rẽ phải và quay đầu sắp tới'
-            : 'Cấm rẽ phải và quay đầu phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.noPassingEnd =>
-        near
-            ? 'Hết cấm vượt sắp tới'
-            : 'Hết cấm vượt phía trước${signAheadTail(kind, meters)}',
-      RoadSignKind.onlyStraight =>
-        near
-            ? 'Chỉ đi thẳng sắp tới'
-            : 'Chỉ được đi thẳng phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.onlyRight =>
-        near
-            ? 'Chỉ rẽ phải sắp tới'
-            : 'Chỉ được rẽ phải phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.onlyLeft =>
-        near
-            ? 'Chỉ rẽ trái sắp tới'
-            : 'Chỉ được rẽ trái phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.endProhibitions =>
-        near
-            ? 'Hết mọi lệnh cấm sắp tới'
-            : 'Hết mọi lệnh cấm phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.slowDown =>
-        near
-            ? 'Giảm tốc độ sắp tới'
-            : 'Giảm tốc độ phía trước${signAheadTail(kind, meters)}',
-      RoadSignKind.tollBooth =>
-        near
-            ? 'Trạm thu phí sắp tới'
-            : 'Trạm thu phí phía trước${signAheadTail(kind, meters)}',
-      RoadSignKind.railwayCrossing =>
-        near
-            ? 'Đường ngang giao với đường sắt sắp tới'
-            : 'Đường ngang giao với đường sắt phía trước'
-                  '${signAheadTail(kind, meters)}',
-      RoadSignKind.tunnel =>
-        near
-            ? 'Hầm đường bộ sắp tới'
-            : 'Hầm đường bộ phía trước${signAheadTail(kind, meters)}',
-      RoadSignKind.noAuto =>
-        near
-            ? 'Cấm ô tô sắp tới'
-            : 'Cấm ô tô phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.noMoto =>
-        near
-            ? 'Cấm xe máy sắp tới'
-            : 'Cấm xe máy phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.noParking =>
-        near
-            ? 'Cấm đỗ xe sắp tới'
-            : 'Cấm đỗ xe phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.noStraight =>
-        near
-            ? 'Cấm đi thẳng sắp tới'
-            : 'Cấm đi thẳng phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.noTurnBoth =>
-        near
-            ? 'Cấm rẽ trái và rẽ phải sắp tới'
-            : 'Cấm rẽ trái và rẽ phải phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.oneWay =>
-        near
-            ? 'Đường một chiều sắp tới'
-            : 'Đường một chiều phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.reservedLane =>
-        near
-            ? 'Làn dành riêng sắp tới'
-            : 'Làn dành riêng phía trước ${formatDistanceSpoken(meters)}',
-      RoadSignKind.signal =>
-        // Near-only (see above), so the `near` branch is the one used.
-        near
-            ? 'Đèn giao thông sắp tới'
-            : 'Đèn giao thông phía trước ${formatDistanceSpoken(meters)}',
-      // Khu đông dân cư boundaries, in the driver's own words. No distance is
-      // spoken: the point may be a zone-dump vertex (see [zoneSignKinds]).
-      RoadSignKind.populated =>
-        near ? 'Bắt đầu khu dân cư' : 'Bắt đầu khu dân cư phía trước',
-      RoadSignKind.populatedEnd =>
-        near ? 'Hết khu dân cư' : 'Hết khu dân cư phía trước',
-      _ =>
-        near
-            ? 'Cấm rẽ phải và quay đầu sắp tới'
-            : 'Cấm rẽ phải và quay đầu phía trước ${formatDistanceSpoken(meters)}',
-    };
+  RoadSignKind.stop =>
+    near
+        ? 'Biển STOP sắp tới'
+        : 'Biển STOP phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.giveWay =>
+    near
+        ? 'Biển nhường đường sắp tới'
+        : 'Biển nhường đường phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.noPassing =>
+    near
+        ? 'Cấm vượt sắp tới'
+        : 'Cấm vượt phía trước${signAheadTail(kind, meters)}',
+  RoadSignKind.noLeftTurn =>
+    near
+        ? 'Cấm rẽ trái sắp tới'
+        : 'Cấm rẽ trái phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.noRightTurn =>
+    near
+        ? 'Cấm rẽ phải sắp tới'
+        : 'Cấm rẽ phải phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.noUTurn =>
+    near
+        ? 'Cấm quay đầu sắp tới'
+        : 'Cấm quay đầu phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.noLeftUTurn =>
+    near
+        ? 'Cấm rẽ trái và quay đầu sắp tới'
+        : 'Cấm rẽ trái và quay đầu phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.noRightUTurn =>
+    near
+        ? 'Cấm rẽ phải và quay đầu sắp tới'
+        : 'Cấm rẽ phải và quay đầu phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.noPassingEnd =>
+    near
+        ? 'Hết cấm vượt sắp tới'
+        : 'Hết cấm vượt phía trước${signAheadTail(kind, meters)}',
+  RoadSignKind.onlyStraight =>
+    near
+        ? 'Chỉ đi thẳng sắp tới'
+        : 'Chỉ được đi thẳng phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.onlyRight =>
+    near
+        ? 'Chỉ rẽ phải sắp tới'
+        : 'Chỉ được rẽ phải phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.onlyLeft =>
+    near
+        ? 'Chỉ rẽ trái sắp tới'
+        : 'Chỉ được rẽ trái phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.endProhibitions =>
+    near
+        ? 'Hết mọi lệnh cấm sắp tới'
+        : 'Hết mọi lệnh cấm phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.slowDown =>
+    near
+        ? 'Giảm tốc độ sắp tới'
+        : 'Giảm tốc độ phía trước${signAheadTail(kind, meters)}',
+  RoadSignKind.tollBooth =>
+    near
+        ? 'Trạm thu phí sắp tới'
+        : 'Trạm thu phí phía trước${signAheadTail(kind, meters)}',
+  RoadSignKind.railwayCrossing =>
+    near
+        ? 'Đường ngang giao với đường sắt sắp tới'
+        : 'Đường ngang giao với đường sắt phía trước'
+              '${signAheadTail(kind, meters)}',
+  RoadSignKind.tunnel =>
+    near
+        ? 'Hầm đường bộ sắp tới'
+        : 'Hầm đường bộ phía trước${signAheadTail(kind, meters)}',
+  RoadSignKind.noAuto =>
+    near
+        ? 'Cấm ô tô sắp tới'
+        : 'Cấm ô tô phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.noMoto =>
+    near
+        ? 'Cấm xe máy sắp tới'
+        : 'Cấm xe máy phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.noParking =>
+    near
+        ? 'Cấm đỗ xe sắp tới'
+        : 'Cấm đỗ xe phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.noStraight =>
+    near
+        ? 'Cấm đi thẳng sắp tới'
+        : 'Cấm đi thẳng phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.noTurnBoth =>
+    near
+        ? 'Cấm rẽ trái và rẽ phải sắp tới'
+        : 'Cấm rẽ trái và rẽ phải phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.oneWay =>
+    near
+        ? 'Đường một chiều sắp tới'
+        : 'Đường một chiều phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.reservedLane =>
+    near
+        ? 'Làn dành riêng sắp tới'
+        : 'Làn dành riêng phía trước ${formatDistanceSpoken(meters)}',
+  RoadSignKind.signal =>
+    // Near-only (see above), so the `near` branch is the one used.
+    near
+        ? 'Đèn giao thông sắp tới'
+        : 'Đèn giao thông phía trước ${formatDistanceSpoken(meters)}',
+  // Khu đông dân cư boundaries, in the driver's own words. No distance is
+  // spoken: the point may be a zone-dump vertex (see [zoneSignKinds]).
+  RoadSignKind.populated =>
+    near ? 'Bắt đầu khu dân cư' : 'Bắt đầu khu dân cư phía trước',
+  RoadSignKind.populatedEnd =>
+    near ? 'Hết khu dân cư' : 'Hết khu dân cư phía trước',
+  _ =>
+    near
+        ? 'Cấm rẽ phải và quay đầu sắp tới'
+        : 'Cấm rẽ phải và quay đầu phía trước ${formatDistanceSpoken(meters)}',
+};

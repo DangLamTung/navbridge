@@ -398,6 +398,14 @@ Object? _runQuery(
         lateralFor: (s) => zoneSignKinds.contains(s.kind)
             ? kZoneLateralMeters
             : msg.lateralMeters,
+        // ⭐ Only the post on OUR side of the road governs our traffic: a plate
+        // standing LEFT of the direction of travel belongs to the opposite
+        // carriageway, and reading it is how the app announced (and adopted as
+        // the limit) the other direction's number — the 50/60 that swap either
+        // way (user, 2026-10-24: "biển có hiệu lực cần đọc là biển bên tay
+        // phải"). Zone signs are exempt: they are area vertices, and their side
+        // carries no meaning (see [kZoneLateralMeters]).
+        rightSideFor: (s) => !zoneSignKinds.contains(s.kind),
       ),
     };
   }

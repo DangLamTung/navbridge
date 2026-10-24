@@ -97,7 +97,9 @@ bool withinCoarseCorridor(List<LatLng> geo, LatLng p, double corridorMeters) {
   for (var i = 0; i < geo.length - 1; i += step) {
     final j = math.min(i + step, geo.length - 1);
     final proj = projectOnSegment(geo[i], geo[j], p);
-    if (fastDistanceMeters(proj, p) <= thresh) return true; // close enough — early out
+    if (fastDistanceMeters(proj, p) <= thresh) {
+      return true; // close enough — early out
+    }
   }
   return false;
 }
@@ -124,15 +126,48 @@ double? routeMetersAhead(LatLng from, LatLng target, List<LatLng> geo) {
 ///
 /// Returns null when [p] is farther than 200 m from [geo] (not this route at
 /// all).
-double? lateralOffsetMeters(List<LatLng> geo, LatLng p) {
+double? lateralOffsetMeters(List<LatLng> geo, LatLng p) =>
+    signedLateralOffsetMeters(geo, p)?.abs();
+
+/// Signed perpendicular offset (m) from the polyline [geo] to [p]: POSITIVE
+/// when [p] stands to the RIGHT of the direction of travel, NEGATIVE when it
+/// stands to the LEFT, `0` when it sits on the centreline.
+///
+/// A biển báo hiệu is erected on the RIGHT-hand verge for the traffic it
+/// governs (QCVN 41:2019 — "đặt về phía tay phải theo chiều đi"); the same sign
+/// on the LEFT belongs to the opposite carriageway. [lateralOffsetMeters]
+/// throws the sign away, so the ahead scan could not tell our post from the
+/// other direction's, and the driver heard (and adopted as the limit) BOTH
+/// numbers — the 50/60 that swap on every divided road (user, 2026-10-24:
+/// "biển nào m cũng đọc như con vẹt óc lợn, trong khi biển có hiệu lực cần đọc
+/// là biển bên tay phải").
+///
+/// Returns null when [p] is farther than 200 m from [geo] (not this route at
+/// all). The magnitude is the same perpendicular distance
+/// [lateralOffsetMeters] reports.
+double? signedLateralOffsetMeters(List<LatLng> geo, LatLng p) {
   var best = double.infinity;
+  var rightOfTravel = true;
   for (var i = 0; i < geo.length - 1; i++) {
-    final proj = projectOnSegment(geo[i], geo[i + 1], p);
+    final a = geo[i];
+    final b = geo[i + 1];
+    final proj = projectOnSegment(a, b, p);
     final off = fastDistanceMeters(proj, p);
-    if (off < best) best = off;
+    if (off >= best) continue;
+    best = off;
+    // Local planar frame (x = east, y = north). The cross product of the
+    // segment direction with the projection→point vector is POSITIVE on the
+    // right-hand side of travel: heading north + point east ⇒ +, heading east
+    // + point south ⇒ +, and so on.
+    final segX = (b.longitude - a.longitude) * metersPerDegLng(a.latitude);
+    final segY = (b.latitude - a.latitude) * kMetersPerDegLat;
+    final toX = (p.longitude - proj.longitude) * metersPerDegLng(a.latitude);
+    final toY = (p.latitude - proj.latitude) * kMetersPerDegLat;
+    rightOfTravel = segY * toX - segX * toY >= 0;
   }
   if (best > 200) return null;
-  return best;
+  if (best == 0) return 0; // on the centreline — the side is not recorded
+  return rightOfTravel ? best : -best;
 }
 
 /// Cumulative distance from the polyline start to the nearest point on it to

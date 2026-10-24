@@ -122,3 +122,34 @@ Future<Map<int, int>> _loadGrid() async {
 
 /// Drop the cached index (after an asset update). Test hook.
 void resetUrbanAreaCache() => _grid = null;
+
+/// How far ahead of the car a built-up boundary sign may still be read as
+/// describing the zone the driver is ALREADY in, metres.
+///
+/// A boundary sign marks where the zone CHANGES from here on, so the zone
+/// before it is the other one — but only while it is the next thing the driver
+/// will actually cross. 1.5 km is a town's worth of street; beyond that the
+/// sign belongs to a different place (the next town on a long rural leg).
+const double kTownSeedAheadM = 1500.0;
+
+/// The built-up state implied by the nearest boundary sign AHEAD of the car, or
+/// null when that sign says nothing about the zone under the wheels.
+///
+/// `hết khu dân cư` 300 m ahead ⇒ we are still INSIDE the zone now (true);
+/// `bắt đầu khu dân cư` 300 m ahead ⇒ we are outside it now (false).
+///
+/// The old seed took the first boundary anywhere within 30 km and then OWNED
+/// the flag for the rest of the drive (`_inTownBySign`), so one distant sign
+/// decided every kilometre: starting in a city whose exit is not in the pack,
+/// the next `bắt đầu` 25 km away — a DIFFERENT town — declared the driver
+/// outside, and the density probe could no longer correct it (user, 2026-10-24:
+/// "sai cái vụ ra vào khu dân cư"). Past [maxAheadM] the question is left to
+/// the density probe, which describes where the car IS.
+bool? townSeedFromBoundary({
+  required bool isEndSign,
+  required double aheadM,
+  double maxAheadM = kTownSeedAheadM,
+}) {
+  if (aheadM < 0 || aheadM > maxAheadM) return null;
+  return isEndSign;
+}

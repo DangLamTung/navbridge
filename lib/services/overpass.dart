@@ -372,8 +372,34 @@ int effectiveLimit(
       postedSrc != srcOsm &&
       taggedKmh > 60 &&
       const {'trunk', 'primary', 'secondary', 'tertiary'}.contains(highway);
-  final urbanForCeiling =
-      (postedDivided || postedAboveUrban) ? false : urban;
+  // ⭐ A layer value is a CAR limit, so the one thing a mô tô may read from it is
+  // the road FORM. Điều 8 TT31/2019, outside a built-up area: ô tô 80 on a
+  // two-way road with no median, 90 on a divided one — so a 65-85 value is a
+  // TWO-WAY road, where a mô tô is 60. 70 is a divided-road number and must not
+  // be handed to a bike (user, 2026-10-24: "waze nó kêu 70 tức là tốc độ chỗ đó
+  // ô tô 70 … xe máy phải là 60 chứ đéo phải 70"). Without this a 70 came out as
+  // 70 whenever the shape read one-way — which is EVERY divided carriageway, and
+  // the graph encodes a divided road exactly that way.
+  //
+  // A road whose DIVISION is actually evidenced ([divided]: an opposite-way
+  // carriageway of the same street runs alongside) keeps the 70: there the bike
+  // really may do 70. Only the one-way GUESS loses. The road CLASS plays no part
+  // — the value itself says this is a rural through road, which is also the case
+  // when no road lookup has answered yet (`highway` is '' then, and the zone
+  // ceiling below would otherwise hand the bike a car's 70).
+  final carTwoWayRoad =
+      vehicle == 'motorbike' &&
+      postedSrc != srcOsm &&
+      taggedKmh >= 65 &&
+      taggedKmh < 90 &&
+      !divided;
+  // …and the mirror case IN TOWN is deliberately NOT derived from the layer: a
+  // town 60 could be a đường-đôi value or a posted 60 sign on a hai-chiều
+  // street, and the layer may only ever TIGHTEN a non-car class (see the
+  // 103 measured fixes on 56 recorded drives). The side-of-road rule is what
+  // fixes a wrong 60/50 pairing in town — see
+  // [signedLateralOffsetMeters]: the opposite carriageway's sign is not ours.
+  final urbanForCeiling = (postedDivided || postedAboveUrban) ? false : urban;
   final ceiling = formKnown
       ? vehicleCeiling(
           vehicle,
@@ -383,7 +409,8 @@ int effectiveLimit(
           lanes: lanes,
         )
       : vehicleZoneCeiling(vehicle, urban: urbanForCeiling);
-  return math.min(ceiling, taggedKmh);
+  final capped = math.min(ceiling, taggedKmh);
+  return carTwoWayRoad ? math.min(capped, 60) : capped;
 }
 
 /// The vehicle's absolute legal MAXIMUM in [urban] / rural zone regardless of
@@ -730,9 +757,12 @@ RoadInfo applyPostedLayer(
   final fastDivided =
       vehicle == 'motorbike' &&
       kmh >= 90 &&
-      const {'trunk', 'primary', 'secondary', 'tertiary'}.contains(
-        road.highway,
-      );
+      const {
+        'trunk',
+        'primary',
+        'secondary',
+        'tertiary',
+      }.contains(road.highway);
   // Any posted limit above the urban maximum (60) is proof the place is NOT
   // built-up: 70/80/90 are rural limits. The POI/road-density probe can call a
   // highway outside Dầu Giây “urban” because many Waze segments surround it —
@@ -740,15 +770,35 @@ RoadInfo applyPostedLayer(
   final postedAboveUrban =
       layerSrc != srcOsm &&
       kmh > 60 &&
-      const {'trunk', 'primary', 'secondary', 'tertiary'}.contains(
-        road.highway,
-      );
+      const {
+        'trunk',
+        'primary',
+        'secondary',
+        'tertiary',
+      }.contains(road.highway);
   // Use the posted limit only to choose the CEILING; do not rewrite the
   // zone flag itself. A 70/80/90 is not a legal town limit, so it must not be
   // capped by a false-positive urban probe, but calling the whole place rural
   // is a separate claim this function is not entitled to make.
-  final ceilingUrban =
-      (fastDivided || postedAboveUrban) ? false : (inTown ?? road.urban);
+  final ceilingUrban = (fastDivided || postedAboveUrban)
+      ? false
+      : (inTown ?? road.urban);
+
+  // ⭐ The same car-value-as-FORM evidence as [effectiveLimit] — this is the
+  // path the road chip actually takes (every posted layer value), so the two
+  // must agree or the dial and the callout disagree.
+  //
+  // 65-85 outside town: the car row there is 80 (hai chiều) / 90 (đường đôi),
+  // so 70 is a TWO-WAY value ⇒ mô tô 60 (user, 2026-10-24: "waze nó kêu 70 …
+  // xe máy phải là 60 chứ đéo phải 70"). A road whose median is actually
+  // evidenced (`road.divided`) keeps its 70 — only the one-way GUESS at the
+  // form loses.
+  final carTwoWayRoad =
+      vehicle == 'motorbike' &&
+      layerSrc != srcOsm &&
+      kmh >= 65 &&
+      kmh < 90 &&
+      !road.divided;
 
   final int ceiling;
   if (formGenuinelyKnown) {
@@ -769,6 +819,8 @@ RoadInfo applyPostedLayer(
 
   final effective = vehicle == 'car'
       ? math.min(kmh, kVnMaxPostedKmh)
+      : carTwoWayRoad
+      ? math.min(math.min(ceiling, kmh), 60)
       : math.min(ceiling, kmh);
 
   final newDivided = sameRoad ? (road.divided || fastDivided) : fastDivided;

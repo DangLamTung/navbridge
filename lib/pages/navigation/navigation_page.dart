@@ -50,6 +50,7 @@ import 'package:navbridge/services/offline_data_updater.dart';
 import 'package:navbridge/services/offline_geo.dart';
 import 'package:navbridge/services/offline_poi.dart';
 import 'package:navbridge/services/offline_road_signs.dart';
+import 'package:navbridge/services/urban_area.dart';
 import 'package:navbridge/services/offline_speed_limits.dart';
 import 'package:navbridge/ui/sign_icons.dart';
 import 'package:navbridge/ui/resume_trip_bar.dart';
@@ -710,6 +711,11 @@ class _NavigationPageState extends State<NavigationPage>
   /// Where the last road was published, for the hysteresis distance.
   LatLng? _lastRoadPublishPos;
 
+  /// Where the "nothing knows this road — keeping N" notice was last printed.
+  /// The condition is true on every fix of a stretch neither the graph nor the
+  /// layer can name, so the line is emitted at most once per 250 m.
+  LatLng? _keepNoticeAt;
+
   /// Confirmation gate for the road's VALUE (class + limit) while the NAME does
   /// not change — see `_gateValue` in `nav_gps.dart`. Tighter than the name
   /// gate: 15 m is enough to prove a class change is not one bad fix.
@@ -882,6 +888,7 @@ class _NavigationPageState extends State<NavigationPage>
   /// on the mic button. Keeps the recognizer running and only acts when the
   /// wake word is heard, so hands-free commands work without touching the map.
   bool _alwaysOnVoice = false;
+
   /// Spoken turn-by-turn guidance on/off — PERSISTED (Settings → Giọng nói →
   /// "Thông báo giọng nói"; the nav rail's speaker button and the "tắt tiếng"
   /// voice command write it too). It used to be per-session page state, so a
@@ -911,8 +918,7 @@ class _NavigationPageState extends State<NavigationPage>
 
   /// Is the heading taken from the phone rather than from the direction of
   /// travel? (`?heading=phone` overrides the setting for this run.)
-  bool get _phoneHeading =>
-      _phoneHeadingOverride ?? (headingSource == 'phone');
+  bool get _phoneHeading => _phoneHeadingOverride ?? (headingSource == 'phone');
   bool _spokenFar = false;
   bool _spokenNear = false;
   bool _spokenFinal = false;

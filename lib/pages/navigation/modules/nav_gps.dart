@@ -73,34 +73,35 @@ extension _NavGps on _NavigationPageState {
     // itel and is what made the GPS feel laggy at launch. The 1 Hz stream
     // then takes over.
     unawaited(_seedGpsFix());
-    _gpsSub = Geolocator.getPositionStream(
-      locationSettings: AndroidSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 0,
-        intervalDuration: const Duration(milliseconds: 1000),
-      ),
-    ).listen(
-      _onGpsFix,
-      onError: (Object e) {
-        if (e is LocationServiceDisabledException) {
-          debugPrint('GPS: location service disabled (stream)');
-          if (mounted) {
-            ScaffoldMessenger.of(context)
-              ..hideCurrentSnackBar()
-              ..showSnackBar(
-                const SnackBar(
-                  content: Text('Bật định vị (GPS) trên điện thoại.'),
-                  duration: Duration(seconds: 4),
-                ),
-              );
-          }
-          return; // don't hot-restart into the same wall — wait for toggle
-        }
-        debugPrint('GPS: stream error: $e — restarting');
-        _restartGps();
-      },
-      onDone: _restartGps,
-    );
+    _gpsSub =
+        Geolocator.getPositionStream(
+          locationSettings: AndroidSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 0,
+            intervalDuration: const Duration(milliseconds: 1000),
+          ),
+        ).listen(
+          _onGpsFix,
+          onError: (Object e) {
+            if (e is LocationServiceDisabledException) {
+              debugPrint('GPS: location service disabled (stream)');
+              if (mounted) {
+                ScaffoldMessenger.of(context)
+                  ..hideCurrentSnackBar()
+                  ..showSnackBar(
+                    const SnackBar(
+                      content: Text('Bật định vị (GPS) trên điện thoại.'),
+                      duration: Duration(seconds: 4),
+                    ),
+                  );
+              }
+              return; // don't hot-restart into the same wall — wait for toggle
+            }
+            debugPrint('GPS: stream error: $e — restarting');
+            _restartGps();
+          },
+          onDone: _restartGps,
+        );
   }
 
   /// [preloaded] is the list the console just parsed for this run. Re-loading
@@ -576,8 +577,10 @@ extension _NavGps on _NavigationPageState {
       // real recording has it (`TripLogger.addFix(streetName:)`), but a
       // hand-made fixture must set it (found 2026-10-08 on a synthetic QL20
       // trip: zero ROAD lines and no explanation).
-      debugPrint('REPLAY: recorded street is EMPTY — road not published; the '
-          'trip needs a `street` per fix');
+      debugPrint(
+        'REPLAY: recorded street is EMPTY — road not published; the '
+        'trip needs a `street` per fix',
+      );
       return;
     }
     final hw = f.highway.trim().isEmpty ? 'unclassified' : f.highway.trim();
@@ -585,17 +588,20 @@ extension _NavGps on _NavigationPageState {
     // baseline the layer falls back to, and the road on screen may be a
     // LAYER-DERIVED value. Storing it made the fallback a no-op that returned the
     // layer's own last number — see _publishReplayRoad for the measurement.
-    final key = '$street\u0000$hw\u0000${f.divided}\u0000${f.oneway}\u0000'
+    final key =
+        '$street\u0000$hw\u0000${f.divided}\u0000${f.oneway}\u0000'
         '${f.lanes}';
     if (key == _replayRoadKey && _roadInfo != null) return;
     _replayRoadKey = key;
-    unawaited(_publishReplayRoad(f).catchError((Object e) {
-      // Nothing was published, so clear the optimistic key: leaving it set would
-      // wedge this recorded road for the rest of the drive (the key is the only
-      // thing _applyReplayRoad compares against).
-      _replayRoadKey = '';
-      debugPrint('REPLAY: road publish failed for "$street": $e');
-    }));
+    unawaited(
+      _publishReplayRoad(f).catchError((Object e) {
+        // Nothing was published, so clear the optimistic key: leaving it set would
+        // wedge this recorded road for the rest of the drive (the key is the only
+        // thing _applyReplayRoad compares against).
+        _replayRoadKey = '';
+        debugPrint('REPLAY: road publish failed for "$street": $e');
+      }),
+    );
   }
 
   Future<void> _publishReplayRoad(ReplayFix f) async {
@@ -604,14 +610,16 @@ extension _NavGps on _NavigationPageState {
     final at = _current;
     final urban = at == null ? false : await _townAt(at);
     if (!mounted) return;
-    if (TripReplay.streetAt(_lastGpsFixTime ?? DateTime.now())?.street
-            .trim() != street) {
+    if (TripReplay.streetAt(_lastGpsFixTime ?? DateTime.now())?.street.trim() !=
+        street) {
       // The fix moved on while this publish was queued, so the road was NOT
       // published — clear the key _applyReplayRoad set optimistically, or the
       // rest of the drive skips this road (the key is the whole comparison).
       _replayRoadKey = '';
-      debugPrint('REPLAY: road publish skipped — the fix moved on before '
-          '"$street" was published');
+      debugPrint(
+        'REPLAY: road publish skipped — the fix moved on before '
+        '"$street" was published',
+      );
       return;
     }
     // ⭐ ONE constructor for both publishers ([statutoryRoad]): built inline here
@@ -659,9 +667,11 @@ extension _NavGps on _NavigationPageState {
     // 60"). With the baseline stored instead, the same fallback lands on the
     // road's own statutory value.
     _roadOsm = base;
-    debugPrint('ROAD: replay "${_roadInfo?.name ?? ''}" -> "$street" '
-        '($hw, ${urban ? 'in town' : 'outside town'}, ${info.speedLimit}'
-        '${info.src.isEmpty ? '' : ', src=${info.src}'})');
+    debugPrint(
+      'ROAD: replay "${_roadInfo?.name ?? ''}" -> "$street" '
+      '($hw, ${urban ? 'in town' : 'outside town'}, ${info.speedLimit}'
+      '${info.src.isEmpty ? '' : ', src=${info.src}'})',
+    );
     _lastRoadPublishPos = at;
     _roadNameGate.reset();
     setNavState(() => _roadInfo = _gateValue(info, at: at));
@@ -694,10 +704,11 @@ extension _NavGps on _NavigationPageState {
     // The engine's "carry on" text is NOT a street name: feeding it in as one
     // made every real street disagree with the route, which vetoed every posted
     // limit on a route whose steps have no names (see [routeRoadNames]).
-    return routeRoadNames(
-      [nav.text, nav.nextText, nav.nextNextText],
-      placeholder: kContinuePlaceholder,
-    );
+    return routeRoadNames([
+      nav.text,
+      nav.nextText,
+      nav.nextNextText,
+    ], placeholder: kContinuePlaceholder);
   }
 
   /// Does the road NAME we are holding come from a source independent of the app
@@ -1243,8 +1254,8 @@ extension _NavGps on _NavigationPageState {
       final roadName = _roadInfo?.name ?? '';
       debugPrint(
         'LAYER: ${hit == null ? 'miss' : '${hit.limit} via ${hit.source} '
-            'street="${hit.streetName}" seg=${hit.segmentId} '
-            'agrees=${_layerNameAgrees(hit.streetName, ridden: hit.aligned)}'}'
+                  'street="${hit.streetName}" seg=${hit.segmentId} '
+                  'agrees=${_layerNameAgrees(hit.streetName, ridden: hit.aligned)}'}'
         ' @${pos.latitude.toStringAsFixed(4)},${pos.longitude.toStringAsFixed(4)}'
         ' hdg=${(_heading ?? 0).toStringAsFixed(0)} keep=$keep expect="$curName"'
         ' road=${roadName.isEmpty ? '-' : roadName}'
@@ -1319,7 +1330,10 @@ extension _NavGps on _NavigationPageState {
     // limit shown (display 'Lũy Bán Bích' with a 50 from the crossing
     // 'Độc Lập'; display 'Thống Nhất' with a 60 from 'Lũy Bán Bích'). Only the
     // NAME went through the veto — the value travelled with the segment record.
-    final limitUsable = _layerNameAgrees(wazeName, ridden: hit?.aligned ?? false);
+    final limitUsable = _layerNameAgrees(
+      wazeName,
+      ridden: hit?.aligned ?? false,
+    );
     // ⭐ The layer just answered for the road on screen, from HERE: that is the
     // anchor a later MISS is measured from (see [LayerHold]). Noted BEFORE the
     // "nothing changed, return" shortcut below, or a value the layer keeps
@@ -1328,8 +1342,10 @@ extension _NavGps on _NavigationPageState {
     if (lim != null && limitUsable) _layerHold.note(name, pos);
     if (lim == null || !limitUsable) {
       if (lim != null) {
-        debugPrint('ROAD: dropped layer limit $lim from "$wazeName" — the road '
-            'on screen is "${_settledName(name)}"');
+        debugPrint(
+          'ROAD: dropped layer limit $lim from "$wazeName" — the road '
+          'on screen is "${_settledName(name)}"',
+        );
       }
       final osm = _roadOsm;
       RoadInfo fallbackRoad;
@@ -1359,6 +1375,38 @@ extension _NavGps on _NavigationPageState {
           // cannot re-open the Cộng Hòa ⇄ Cộng Hoà churn.)
           fallbackRidden = true;
         } else {
+          // ⭐ NO EVIDENCE AT ALL ⇒ NO NEW DECISION.
+          //
+          // Both lookups came back empty: the graph does not know this road (no
+          // name, no class — the web build, or a phone outside the downloaded
+          // area) and the segment layer had no record at this fix. The guess
+          // below would then be `unclassified` + the built-up probe, which on a
+          // highway lined with Waze segments reads "in town" and returns 50 —
+          // and because the layer MISS is intermittent (GPS jitter at the 25 m
+          // gate), the chip alternated 60 ⇄ 50 on the SAME road, once per fix.
+          // Measured on the QL13 trace, 2026-10-24: with the vehicle rule fixed
+          // but this guard absent, the published value alternated 34 times in 35
+          // publishes (Đại lộ Bình Dương / Quốc lộ 13) — "waze limit=70 -> 60"
+          // then "back to city 50", repeating. With the guard: 6 in 7.
+          //
+          // Keeping the layer's value is the honest answer here: the layer DID
+          // find the road, it is our own lookup that failed. This is not the
+          // 300 m timer that was removed on 2026-10-13 — that one held a value
+          // across a road the layer knew nothing about. This only fires when the
+          // road on screen has no NAME to compare against, i.e. when there is
+          // nothing that could say the car has left the posted stretch.
+          if (name.trim().isEmpty && cur.fromLayer) {
+            final lastAt = _keepNoticeAt;
+            if (lastAt == null || distanceMeters(lastAt, pos) > 250) {
+              _keepNoticeAt = pos;
+              debugPrint(
+                'ROAD: nothing knows this road at '
+                '${pos.latitude.toStringAsFixed(5)},${pos.longitude.toStringAsFixed(5)}'
+                ' — keeping ${cur.src} ${cur.speedLimit}',
+              );
+            }
+            return;
+          }
           final urban = await _townAt(pos);
           fallbackRoad = RoadInfo(
             name: name,
@@ -1399,9 +1447,11 @@ extension _NavGps on _NavigationPageState {
       if (cur.fromLayer ||
           cur.speedLimit != fallbackRoad.speedLimit ||
           cur.src != fallbackRoad.src) {
-        debugPrint('ROAD: layer has nothing for "${fallbackRoad.name}" — back to '
-            '${fallbackRoad.src} ${fallbackRoad.speedLimit} (was ${cur.src} ${cur.speedLimit})'
-            '${fallbackRidden ? ' [ridden]' : ''}');
+        debugPrint(
+          'ROAD: layer has nothing for "${fallbackRoad.name}" — back to '
+          '${fallbackRoad.src} ${fallbackRoad.speedLimit} (was ${cur.src} ${cur.speedLimit})'
+          '${fallbackRidden ? ' [ridden]' : ''}',
+        );
         // ⭐ [ridden]: this publish was ADOPTING a new road (the layer had
         // nothing for the one under the car), and when that road came from the
         // heading-checked graph the car is demonstrably riding it — so the
@@ -1425,9 +1475,12 @@ extension _NavGps on _NavigationPageState {
       // only through the route veto + hysteresis (a segment the car is not on
       // must not rename the road; see lib/core/road_match.dart).
       if (name == cur.name) return;
-        debugPrint('ROAD: waze street "$name" (was "${cur.name}")');
-      _publishRoad(cur.copyWith(name: name), at: pos,
-          ridden: hit?.aligned ?? false);
+      debugPrint('ROAD: waze street "$name" (was "${cur.name}")');
+      _publishRoad(
+        cur.copyWith(name: name),
+        at: pos,
+        ridden: hit?.aligned ?? false,
+      );
       return;
     }
     // The Waze value IS the authority for the limit (applyPostedLayer): our

@@ -4,6 +4,63 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
+## Unreleased
+
+**The sign that governs the driver's direction is the one on the RIGHT, the
+mô tô number is read from the law instead of the car's posted value, and a
+built-up boundary only speaks for the zone the car is actually in.**
+
+- **Only the right-hand sign is read.** A speed/prohibition plate is erected on
+  the right verge for the traffic it governs (QCVN 41:2019); the same plate on
+  the left belongs to the opposite carriageway. The ahead scan kept every sign
+  inside a 60 m corridor regardless of side, so the opposite direction's number
+  was announced — and adopted as the live limit — which is exactly the 50/60
+  pairing that swapped either way on a divided road. `pointsAheadOnRoute` now
+  takes a `rightSideFor` predicate (`signedLateralOffsetMeters`), applied to
+  every roadside sign kind; zone kinds (khu dân cư boundaries, toll, tunnel,
+  railway, cấm vượt) are exempt — they are stored at an area vertex, not on a
+  verge. The tolerance is 6 m LEFT, not 0: a plate on the median of a divided
+  road, or a row whose stored coordinate is the road centreline, sits a couple
+  of metres off it. Measured on the 66 km QL13 fixture, every plate within 60 m
+  of the route is either ≥ 9.5 m LEFT (the other direction's) or on our side —
+  nothing in between.
+- **A Waze 70 is a CAR value: the mô tô sees 60.** Outside a built-up area the
+  car rows are 80 (hai chiều) / 90 (đường đôi), so a 65-85 value is evidence of
+  a two-way road, where a mô tô is 60 (Điều 8 TT31/2019) — it is no longer
+  copied as the bike's limit. The road chip (`applyPostedLayer`) and the
+  statutory path (`effectiveLimit`) take the same decision. A road whose median
+  is actually evidenced keeps its legal 70; only the one-way guess loses.
+- **The built-up zone is seeded only from the boundary the car is near.** One
+  boundary sign anywhere within 30 km used to own the flag for the whole drive,
+  so a distant "bắt đầu khu dân cư" of a DIFFERENT town declared the driver
+  outside town and the density probe could not correct it
+  (`townSeedFromBoundary`, 1.5 km window).
+- **One boundary per fix.** R.420/R.421 are posted as a pair a few metres apart
+  (one per direction) and a zone sign is accepted from 150 m, so one fix could
+  reach both: the car entered and immediately left the zone, and the final
+  state depended on which record sorted last. The NEAREST boundary now decides.
+- **A layer miss no longer flips the chip back to the built-up guess.** When the
+  road lookup answers NOTHING (no name, no class — the web build, or a phone
+  outside the downloaded area) and the segment layer misses at that fix, the
+  app used to publish `unclassified` + the density probe, which on a highway
+  lined with Waze segments reads "in town" and returns 50. Because the miss is
+  intermittent (GPS jitter at the 25 m gate), the chip alternated **60 ⇄ 50 on
+  the same road, once per fix**. It now keeps the layer's value when the road on
+  screen has no name to compare against — the layer DID find the road, it is our
+  own lookup that failed. Measured on the 66 km QL13 trace, 2026-10-24: with the
+  vehicle rule fixed but this guard absent, the published value alternated 34
+  times in 35 publishes; with the guard, 6 in 7 — and the value went from 50 for
+  192 of 198 announcements (release build) to 60 for 128 of 234.
+
+### Internal
+
+- `signedLateralOffsetMeters` (the sign of the cross product in a local
+  east/north frame) is the ONE side rule; `lateralOffsetMeters` delegates to it,
+  so the corridor filter and the right-hand filter cannot disagree.
+- Covered by `test/unit/sign_side_test.dart`,
+  `test/unit/motorbike_car_value_test.dart` and
+  `test/unit/town_seed_test.dart`.
+
 ## 1.2.1 — 2026-10-24 (build 4019)
 
 **The map no longer goes blank when the on-device layer has nothing, and the
