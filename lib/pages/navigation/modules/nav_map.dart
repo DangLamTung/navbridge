@@ -633,15 +633,27 @@ extension _NavMap on _NavigationPageState {
                   ),
                 // Road-sign layer: real sign icons near the user (cấm vượt /
                 // STOP / khu dân cư …). Density + visibility follow zoom.
-                for (final s in _signSlice(_cameraZoom))
+                for (final s in collapseBoundaryPairs(_signSlice(_cameraZoom)))
                   Marker(
                     point: s.pos,
-                    width: 32,
-                    height: 32,
+                    width: 34,
+                    height: 34,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () => _showSignInfo(s),
-                      child: SignIcon(kind: s.kind, value: s.value, size: 30),
+                      child: Container(
+                        // The RING names the source: a VietMap "80" and a Waze
+                        // "50" are not the same evidence (user, 2026-10-25) —
+                        // purple = VietMap, blue = Waze, grey = OSM.
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: signSourceColor(s.source),
+                            width: 2,
+                          ),
+                        ),
+                        child: SignIcon(kind: s.kind, value: s.value, size: 30),
+                      ),
                     ),
                   ),
                 // Camera layer: the SAME camera PNG the navigation map draws

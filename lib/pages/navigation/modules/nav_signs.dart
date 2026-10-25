@@ -71,11 +71,16 @@ int signAnnounceTier(RoadSignKind kind) => switch (kind) {
   _ => 2,
 };
 
-/// Dedupe key for a sign callout: kind + the sign's own position + far/near.
-/// Pure, so "far then near, and never twice" can be pinned by a test.
-String signCalloutSig(RoadSign sign, {required bool near}) =>
+/// Dedupe key for a sign callout: kind + the sign's own position.
+///
+/// ⭐ ONE callout per plate — no far + near pair. The pair was designed as
+/// "approach, then final reminder", but at 1 Hz with a corridor full of plates
+/// it reads as spam: "biển KDC nói đúng 1 lần, cấm vượt nói đúng 1 lần chứ trái
+/// phải nói hết" (user, 2026-10-25). The distance is in the sentence, so the
+/// driver hears where it is on the first callout.
+String signCalloutSig(RoadSign sign) =>
     '${sign.kind.key}/${sign.lat.toStringAsFixed(5)},'
-    '${sign.lng.toStringAsFixed(5)}/${near ? 'near' : 'far'}';
+    '${sign.lng.toStringAsFixed(5)}';
 
 extension _NavSigns on _NavigationPageState {
   /// Seed the built-up state from the first R.420/R.421 boundary sign along
@@ -386,7 +391,7 @@ extension _NavSigns on _NavigationPageState {
       }
       // Already spoken in this zone → try the next candidate instead of giving
       // up on this fix (that was the starvation bug above).
-      if (_signDedupe.seen(signCalloutSig(a.sign, near: near))) continue;
+      if (_signDedupe.seen(signCalloutSig(a.sign))) continue;
       final tier = signAnnounceTier(k);
       if (tier < bestTier || (tier == bestTier && a.routeMeters < m)) {
         next = a.sign;

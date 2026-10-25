@@ -11,11 +11,7 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:navbridge/pages/navigation/navigation_page.dart'
-    show
-        announcedSignKinds,
-        signAnnounceTier,
-        signCalloutSig,
-        signShortLabel;
+    show announcedSignKinds, signAnnounceTier, signCalloutSig, signShortLabel;
 import 'package:navbridge/services/offline_road_signs.dart';
 
 /// The kinds the whole design rests on. If a refactor drops one of these the
@@ -36,8 +32,11 @@ void main() {
   group('the announced-kind set', () {
     test('carries every kind the driver is promised', () {
       for (final k in _mustAnnounce) {
-        expect(announcedSignKinds.contains(k), isTrue,
-            reason: '$k is announced in the field but missing from the set');
+        expect(
+          announcedSignKinds.contains(k),
+          isTrue,
+          reason: '$k is announced in the field but missing from the set',
+        );
       }
     });
 
@@ -70,8 +69,11 @@ void main() {
       expect(boundary, 0);
       expect(signAnnounceTier(RoadSignKind.populatedEnd), 0);
       for (final k in announcedSignKinds) {
-        expect(signAnnounceTier(k), greaterThanOrEqualTo(boundary),
-            reason: '$k must not outrank the khu dân cư boundary');
+        expect(
+          signAnnounceTier(k),
+          greaterThanOrEqualTo(boundary),
+          reason: '$k must not outrank the khu dân cư boundary',
+        );
       }
     });
 
@@ -93,8 +95,11 @@ void main() {
       ];
       for (final o in obey) {
         for (final p in plates) {
-          expect(signAnnounceTier(o), lessThan(signAnnounceTier(p)),
-              reason: '$o must win the voice over $p');
+          expect(
+            signAnnounceTier(o),
+            lessThan(signAnnounceTier(p)),
+            reason: '$o must win the voice over $p',
+          );
         }
       }
     });
@@ -109,39 +114,32 @@ void main() {
     });
   });
 
-  group('signCalloutSig — far/near, never twice', () {
-    RoadSign at(double lat, double lng, RoadSignKind kind) => RoadSign(
-          name: '',
-          kind: kind,
-          lat: lat,
-          lng: lng,
-        );
+  group('signCalloutSig — one callout per plate', () {
+    RoadSign at(double lat, double lng, RoadSignKind kind) =>
+        RoadSign(name: '', kind: kind, lat: lat, lng: lng);
 
     test('the same sign differs between the far and near callout', () {
       final s = at(20.85792, 106.65123, RoadSignKind.populated);
-      expect(signCalloutSig(s, near: false),
-          isNot(signCalloutSig(s, near: true)));
+      // ONE key per plate: the far and the near callout are the same event.
+      expect(signCalloutSig(s), signCalloutSig(s));
     });
 
     test('two different signs never share a key', () {
       final a = at(20.85792, 106.65123, RoadSignKind.populated);
       final b = at(20.85793, 106.65123, RoadSignKind.populated);
-      expect(signCalloutSig(a, near: false),
-          isNot(signCalloutSig(b, near: false)));
+      expect(signCalloutSig(a), isNot(signCalloutSig(b)));
     });
 
     test('a start and an end boundary at one point stay distinct', () {
       // They are different calls; a shared key would swallow "Hết khu dân cư".
       final a = at(20.85792, 106.65123, RoadSignKind.populated);
       final b = at(20.85792, 106.65123, RoadSignKind.populatedEnd);
-      expect(signCalloutSig(a, near: false),
-          isNot(signCalloutSig(b, near: false)));
+      expect(signCalloutSig(a), isNot(signCalloutSig(b)));
     });
 
     test('the key is stable — the same sign re-reads identically', () {
       final s = at(20.85792, 106.65123, RoadSignKind.populated);
-      expect(signCalloutSig(s, near: false),
-          signCalloutSig(s, near: false));
+      expect(signCalloutSig(s), signCalloutSig(s));
     });
   });
 
@@ -151,8 +149,10 @@ void main() {
       expect(signShortLabel(RoadSignKind.noUTurn), 'Cấm quay đầu');
       expect(signShortLabel(RoadSignKind.onlyLeft), 'Chỉ được rẽ trái');
       expect(signShortLabel(RoadSignKind.oneWay), 'Đường một chiều');
-      expect(signShortLabel(RoadSignKind.railwayCrossing),
-          'Đường ngang giao với đường sắt');
+      expect(
+        signShortLabel(RoadSignKind.railwayCrossing),
+        'Đường ngang giao với đường sắt',
+      );
     });
 
     test('shortens the two signs riders name by the symbol alone', () {
@@ -170,8 +170,11 @@ void main() {
       for (final k in RoadSignKind.values) {
         final s = signShortLabel(k);
         expect(s, isNotEmpty, reason: '$k has no label for the bar');
-        expect(RegExp(r'^[A-Z]+\.\d').hasMatch(s), isFalse,
-            reason: '$k still shows its QCVN code: "$s"');
+        expect(
+          RegExp(r'^[A-Z]+\.\d').hasMatch(s),
+          isFalse,
+          reason: '$k still shows its QCVN code: "$s"',
+        );
       }
     });
   });

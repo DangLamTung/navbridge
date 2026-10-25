@@ -10,6 +10,19 @@ import 'package:flutter/material.dart';
 
 import 'package:navbridge/services/offline_road_signs.dart';
 
+/// Colour of the ring drawn around a sign marker, by data source.
+///
+/// A plate is not the same evidence from every feed: VietMap carries official
+/// E-DOG rows with a `heading`, Waze carries crowd-mapped ones without, OSM
+/// carries whatever a mapper typed. On the map they used to look identical — a
+/// VietMap "80" and a Waze "50" at one corner read as two contradictory speed
+/// signs (user, 2026-10-25: "không phân biệt biển 80 50 của vietmap với waze").
+Color signSourceColor(String source) => switch (source) {
+  'vietmap' => const Color(0xFF6A1B9A),
+  'waze' => const Color(0xFF1565C0),
+  _ => const Color(0xFF546E7A),
+};
+
 /// The Vietnamese traffic-sign red.
 const Color _signRed = Color(0xFFC8102E);
 
@@ -232,10 +245,12 @@ class SignIcon extends StatelessWidget {
         // Commons, so these are label panels in the sign's own blue — the TEXT
         // is the sign here, and drawing nothing would hide the boundary that
         // the voice is announcing.
-        RoadSignKind.populated =>
-          const CustomPaint(painter: _InfoPainter('KHU DÂN CƯ')),
-        RoadSignKind.populatedEnd =>
-          const CustomPaint(painter: _InfoPainter('HẾT KHU DÂN CƯ')),
+        RoadSignKind.populated => const CustomPaint(
+          painter: _InfoPainter('KHU DÂN CƯ'),
+        ),
+        RoadSignKind.populatedEnd => const CustomPaint(
+          painter: _InfoPainter('HẾT KHU DÂN CƯ'),
+        ),
         // Every kind with real artwork returned above; the two U-turn
         // combinations are among them now (P.123a / P.124a), so their painted
         // stand-ins are gone. Nothing left to draw ⇒ draw nothing rather than
@@ -661,10 +676,8 @@ class _ProhibitionPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _ProhibitionPainter old) =>
-      old.glyph != glyph;
+  bool shouldRepaint(covariant _ProhibitionPainter old) => old.glyph != glyph;
 }
-
 
 /// Biển R.41x "Hướng phải đi / rẽ" — blue circle, white arrow.
 enum _CmdDir { straight, left, right }

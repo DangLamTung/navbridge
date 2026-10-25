@@ -49,6 +49,27 @@ void main() {
     expect(kept.map((e) => e.$1), [0, 2]);
   });
 
+  test('a boundary pair draws as ONE marker, not start + end side by side', () {
+    RoadSign z(RoadSignKind k, double lat, double lng, {double? h}) => RoadSign(
+      name: k.label,
+      lat: lat,
+      lng: lng,
+      kind: k,
+      source: 'vietmap',
+      heading: h,
+    );
+    final signs = <RoadSign>[
+      z(RoadSignKind.populated, 10.0, 106.70), // no heading
+      z(RoadSignKind.populatedEnd, 10.0, 106.7003, h: 180), // 33 m away
+      z(RoadSignKind.populated, 10.005, 106.70), // its own transition, 550 m on
+      z(RoadSignKind.noPassing, 10.0, 106.7001),
+    ];
+    final out = collapseBoundaryPairs(signs);
+    expect(out.length, 3, reason: 'the pair collapses, the rest stay');
+    // The representative keeps the row that carries a heading.
+    expect(out.first.heading, 180);
+  });
+
   test('an "80" on a town-entry post is dropped; the exit one is kept', () {
     RoadSign speed(double lat, double lng, double heading) => RoadSign(
       name: 'Hạn chế tốc độ 80 km/h',

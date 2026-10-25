@@ -454,6 +454,51 @@ bool _standsOnBuiltUpPost(
   return false;
 }
 
+/// Collapse a boundary PAIR drawn at one corner into a single marker.
+///
+/// A khu dân cư transition is two plates a few metres apart (one per direction
+/// of travel), and the map drew both, side by side, on the same spot — "hiện cả
+/// biển bắt đầu và hết đứng sát nhau" (user, 2026-10-25). Only markers are
+/// affected: the announcement path already picks the plate facing the car.
+///
+/// The pair is kept when the two plates are farther than [maxPairM] apart (then
+/// they are two real transitions), and the representative prefers a plate with
+/// a `heading` — the row that can be filtered by direction — else the first.
+List<RoadSign> collapseBoundaryPairs(
+  List<RoadSign> signs, {
+  double maxPairM = 60.0,
+}) {
+  final out = <RoadSign>[];
+  final pairs = <int>{}; // indices already merged into a kept plate
+  for (var i = 0; i < signs.length; i++) {
+    if (pairs.contains(i)) continue;
+    final a = signs[i];
+    final isZone =
+        a.kind == RoadSignKind.populated || a.kind == RoadSignKind.populatedEnd;
+    if (!isZone) {
+      out.add(a);
+      continue;
+    }
+    var keep = a;
+    for (var j = i + 1; j < signs.length; j++) {
+      final b = signs[j];
+      final bIsZone =
+          b.kind == RoadSignKind.populated ||
+          b.kind == RoadSignKind.populatedEnd;
+      if (!bIsZone) continue; // only a boundary plate can pair
+      if ((b.kind == RoadSignKind.populated) ==
+          (a.kind == RoadSignKind.populated)) {
+        continue; // same kind → not a pair
+      }
+      if (_approxM(a.lat, a.lng, b.lat, b.lng) > maxPairM) continue;
+      pairs.add(j);
+      if (keep.heading == null && b.heading != null) keep = b;
+    }
+    out.add(keep);
+  }
+  return out;
+}
+
 /// Decimal places a coordinate must carry to be worth trusting on the ground.
 ///
 /// The feed stores whole KINDS on a coarse grid, measured over the bundled
