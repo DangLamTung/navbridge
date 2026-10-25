@@ -1013,7 +1013,7 @@ class _NavigationPageState extends State<NavigationPage>
   /// Short badge naming WHERE the displayed limit came from — shown under the
   /// dial in the floating widget and the nav chip. 'SIGN' when a posted sign is
   /// in force, else the layer behind the road value ('WAZE' segment, 'WAZE pt',
-  /// 'VIETMAP', 'OSM' maxspeed, 'CITY' built-up rule, 'CLASS' default).
+  /// 'VIETMAP', 'OSM' maxspeed, 'KDC' built-up rule, 'CLASS' default).
   String get _limitSourceLabel =>
       limitSourceLabel(_roadInfo?.src, sign: _effectiveLimit.source == 'sign');
 

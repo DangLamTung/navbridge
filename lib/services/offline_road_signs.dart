@@ -311,31 +311,95 @@ List<RoadSign> _parseSigns(String raw) {
   final filtered = dropSpeedPlatesOnBuiltUpPosts(kept);
   if (filtered.length != kept.length) {
     debugPrint(
-      'SIGNS: dropped ${kept.length - filtered.length} "80" plate(s) that stand '
-      'on a BẮT ĐẦU khu dân cư post facing the same way — entering a town is '
-      'never an 80 km/h sign',
+      'SIGNS: dropped ${kept.length - filtered.length} speed plate(s) that stand '
+      'on a khu dân cư post facing the same way — that plate IS the zone sign',
     );
   }
-  return filtered;
+  final unique = collapseRepeatedZonePlates(filtered);
+  if (unique.length != filtered.length) {
+    debugPrint(
+      'SIGNS: collapsed ${filtered.length - unique.length} duplicate khu dân cư '
+      'plate(s) (same kind, same facing, within ${kZonePlateRepeatM.round()} m)',
+    );
+  }
+  return unique;
 }
 
-/// Drop an `80` speed plate that IS a khu dân cư plate.
+/// How close two SAME-KIND khu dân cư plates may stand, facing the same way,
+/// before the second is a duplicate of the first, metres.
 ///
-/// The VietMap feed carries both rows for one physical post: an EDOG TYPE 1
-/// ("Hạn chế tốc độ 80") and a TYPE 2 ("Khu đông dân cư"), on the same
-/// coordinates and the same `heading`. Entering a built-up area a car is capped
-/// at 50/60, so an 80 facing INTO the town is not a speed sign — reading it made
-/// the app say "Tốc độ tối đa … km/h phía trước" at a town entry instead of
-/// "Bắt đầu khu dân cư" (user, 2026-10-24: "có những biển vietmap 80 thực chất
-/// là biển kdc").
+/// A boundary is one transition. The packs repeat it — three sources, two
+/// directions, and the same source re-mapping the same post — and every extra
+/// row is another chance to announce "Bắt đầu khu dân cư" again at the same
+/// corner (user, 2026-10-25: "không thể có 2 biển kdc gần nhau cùng phía quá
+/// nhiều"). Measured over the bundled pack: 129 of 14 731 boundary rows have
+/// another plate of the same kind facing the same way within 300 m.
+const double kZonePlateRepeatM = 300.0;
+
+/// Drop the second of two same-kind, same-facing khu dân cư plates within
+/// [kZonePlateRepeatM]. The kept row is the one that carries a `heading` (more
+/// information), else the first seen.
+List<RoadSign> collapseRepeatedZonePlates(List<RoadSign> signs) {
+  const cell = 0.002; // ~220 m — one cell covers the window
+  final kept = <RoadSign>[];
+  final grid = <String, List<RoadSign>>{};
+  bool isZone(RoadSign s) =>
+      s.kind == RoadSignKind.populated || s.kind == RoadSignKind.populatedEnd;
+  bool sameFacing(RoadSign a, RoadSign b) {
+    final h1 = a.heading, h2 = b.heading;
+    if (h1 == null || h2 == null) return h1 == null && h2 == null;
+    var d = (h1 - h2) % 360.0;
+    if (d < 0) d += 360.0;
+    if (d > 180.0) d = 360.0 - d;
+    return d <= 60.0;
+  }
+
+  for (final s in signs) {
+    if (!isZone(s)) {
+      kept.add(s);
+      continue;
+    }
+    final gy = (s.lat / cell).floor();
+    final gx = (s.lng / cell).floor();
+    var dup = false;
+    for (var dy = -1; dy <= 1 && !dup; dy++) {
+      for (var dx = -1; dx <= 1 && !dup; dx++) {
+        for (final o in grid['${gy + dy},${gx + dx}'] ?? const <RoadSign>[]) {
+          if (o.kind != s.kind || !sameFacing(o, s)) continue;
+          if (_approxM(o.lat, o.lng, s.lat, s.lng) <= kZonePlateRepeatM) {
+            dup = true;
+            break;
+          }
+        }
+      }
+    }
+    if (dup) continue;
+    (grid['$gy,$gx'] ??= <RoadSign>[]).add(s);
+    kept.add(s);
+  }
+  return kept;
+}
+
+/// Drop a speed plate that IS a khu dân cư plate.
 ///
-/// Deliberately narrow: only the value 80, only a plate that stands within
-/// [kKdcPostToleranceM] of a [`populated`] (start) plate, and only when BOTH
-/// carry a `heading` that agrees within [kKdcSameFacingDeg]. An 80 posted at the
-/// END of a town facing out is legitimate (it is the rural limit that takes
-/// effect there) and is kept. Measured over the bundled pack 2026-10-24: 59
-/// speed-80 rows share a post with a boundary plate, but just 5 of them face the
-/// same way as a town START.
+/// The feeds carry both rows for one physical post: VietMap an EDOG TYPE 1
+/// ("Hạn chế tốc độ 80") and a TYPE 2 ("Khu đông dân cư") on the same
+/// coordinates and `heading`, Waze a "50" beside its residential boundary. The
+/// number on such a post is the zone's own speed, not a separate sign, and
+/// reading it made the app say "Tốc độ tối đa … km/h phía trước" at a town
+/// entry instead of "Bắt đầu khu dân cư" (user, 2026-10-24: "waze biển 50km
+/// thường là biển kdc, cũng như vietmap 80 cũng là kdc").
+///
+/// Narrow on purpose:
+///   * value 50 / 60 / 80 only — 40 and 30 are STRICTER than the zone (a school
+///     zone at a town entry) and 70/90 carry a different fact, so they stay;
+///   * within [kKdcPostToleranceM] of a boundary plate, facing the same way
+///     (both headings present and agreeing, [kKdcSameFacingDeg]);
+///   * either boundary kind — a 60 on the "hết khu dân cư" post is the rural
+///     limit that takes effect there, but it repeats what the zone rule already
+///     says, and the plate has been observed announced as a speed DROP.
+/// Measured over the bundled pack 2026-10-24: 153 such rows (45 of them a "50"
+/// on a town START).
 List<RoadSign> dropSpeedPlatesOnBuiltUpPosts(List<RoadSign> signs) {
   const cell = 0.0003; // ~33 m
   final grid = <String, List<RoadSign>>{};
@@ -350,7 +414,7 @@ List<RoadSign> dropSpeedPlatesOnBuiltUpPosts(List<RoadSign> signs) {
   final out = <RoadSign>[];
   for (final s in signs) {
     if (s.kind == RoadSignKind.speed &&
-        s.value == 80 &&
+        const {50, 60, 80}.contains(s.value) &&
         s.heading != null &&
         _standsOnBuiltUpPost(s, grid, key)) {
       continue;

@@ -88,7 +88,7 @@ Future<void> syncOverlayState({
   List<int>? cameras,
   double? speedKmh,
 
-  /// Short badge for WHERE the limit came from ('WAZE' / 'SIGN' / 'CITY' …),
+  /// Short badge for WHERE the limit came from ('WAZE' / 'SIGN' / 'KDC' …),
   /// drawn under the dial. Null keeps whatever the overlay currently shows.
   String? limitSrc,
 

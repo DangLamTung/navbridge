@@ -238,7 +238,7 @@ class SpeedDialChip extends StatelessWidget {
   /// chip takes, so switching styles never changes the NUMBER shown.
   final int? limitOverride;
 
-  /// Short badge for WHERE the limit came from ('WAZE' / 'SIGN' / 'CITY' …),
+  /// Short badge for WHERE the limit came from ('WAZE' / 'SIGN' / 'KDC' …),
   /// shown under the dial. Replaces the street name that used to sit here.
   final String? limitSrc;
 

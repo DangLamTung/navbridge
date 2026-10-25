@@ -754,7 +754,7 @@ void main() {
             );
             expect(road.speedLimit, 50);
             expect(road.src, srcCity);
-            expect(limitSourceLabel(road.src), 'CITY');
+            expect(limitSourceLabel(road.src), 'KDC');
             expect(road.urban, isTrue);
 
         })();
@@ -1033,7 +1033,7 @@ void main() {
           expect(limitSourceLabel(srcWazePoint), 'WAZE pt');
           expect(limitSourceLabel(srcVietmap), 'VIETMAP');
           expect(limitSourceLabel(srcOsm), 'OSM');
-          expect(limitSourceLabel(srcCity), 'CITY');
+          expect(limitSourceLabel(srcCity), 'KDC');
           expect(limitSourceLabel(srcClass), 'CLASS');
           expect(limitSourceLabel(null), 'CLASS');
           expect(limitSourceLabel(srcCity, sign: true), 'SIGN');

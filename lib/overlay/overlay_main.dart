@@ -48,7 +48,7 @@ class _OverlayAppState extends State<OverlayApp> {
   double _kmh = 0;
   int? _limit;
 
-  /// Short badge for WHERE [_limit] came from ('WAZE' / 'SIGN' / 'CITY' …),
+  /// Short badge for WHERE [_limit] came from ('WAZE' / 'SIGN' / 'KDC' …),
   /// pushed by the main app and drawn under the dial so the number can be
   /// judged at a glance instead of guessed.
   String? _limitSrc;

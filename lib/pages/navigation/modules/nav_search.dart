@@ -706,8 +706,20 @@ extension _NavSearch on _NavigationPageState {
       _suggestions = [];
       _building = true;
       _searchCtrl.text = name;
-      _stops.add(TripStop(name: name, lat: lat, lng: lng));
-      _destination = LatLng(lat, lng);
+      // ⭐ A pick made while a destination is ALREADY planned is a VIA point, not
+      // a new destination: "khi t chọn thêm khu trạm xăng vào m lại cho trạm
+      // xăng vào phần cuối của trip … có ai đi đến đích rồi quay lại kiếm trạm
+      // xăng không" (user, 2026-10-25). Appending made the fuel station the LAST
+      // stop, i.e. a detour AFTER arriving. `_addDirectionsStop` has always
+      // inserted before the last stop; this is the same rule for a search pick.
+      final via = _stops.isNotEmpty;
+      final stop = TripStop(name: name, lat: lat, lng: lng);
+      if (via) {
+        _stops.insert(_stops.length - 1, stop);
+      } else {
+        _stops.add(stop);
+      }
+      _destination = via ? _stops.last.pos : LatLng(lat, lng);
       _searchCtrl.clear();
       // A destination the driver just chose replaces the one being offered to
       // continue.
