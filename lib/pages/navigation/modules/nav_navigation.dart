@@ -627,7 +627,10 @@ extension _NavNavigation on _NavigationPageState {
       _lastManeuverSig = null;
       _speedingSpoken = false;
       _lastOverspeedAt = null;
-      _resetSignSpeed(); // speed-limit sign + announce reset per session
+      // A CONTINUATION keeps what the drive already established (see
+      // _resetSignSpeed); a fresh start clears it.
+      _resetSignSpeed(keepZone: _resumingSameTrip);
+      _resumingSameTrip = false;
       unawaited(_seedTownFromRouteSigns());
       _gpsWeakSpoken = false;
       _lastGpsWeakAt = null;
@@ -660,7 +663,10 @@ extension _NavNavigation on _NavigationPageState {
     _lastManeuverSig = null;
     _speedingSpoken = false;
     _lastOverspeedAt = null;
-    _resetSignSpeed(); // speed-limit sign + announce reset per session
+    // A CONTINUATION keeps what the drive already established (see
+    // _resetSignSpeed); a fresh start clears it.
+    _resetSignSpeed(keepZone: _resumingSameTrip);
+    _resumingSameTrip = false;
     unawaited(_seedTownFromRouteSigns());
     _gpsWeakSpoken = false;
     _lastGpsWeakAt = null;
@@ -719,7 +725,10 @@ extension _NavNavigation on _NavigationPageState {
     _lastManeuverSig = null;
     _speedingSpoken = false;
     _lastOverspeedAt = null;
-    _resetSignSpeed(); // speed-limit sign + announce reset per session
+    // A CONTINUATION keeps what the drive already established (see
+    // _resetSignSpeed); a fresh start clears it.
+    _resetSignSpeed(keepZone: _resumingSameTrip);
+    _resumingSameTrip = false;
     unawaited(_seedTownFromRouteSigns());
     _gpsWeakSpoken = false;
     _lastGpsWeakAt = null;
@@ -736,7 +745,7 @@ extension _NavNavigation on _NavigationPageState {
     debugPrint(
       'SIM: simulation START (route ${engine.route.distance.round()}m'
       '${track == null ? '' : ', fed ${track.length} synthesised GPS fixes '
-          'through _onGpsFix'})',
+                'through _onGpsFix'})',
     );
     if (track != null && track.isNotEmpty) {
       // The synthesised feed: the SAME entry point a phone's receiver uses, so
@@ -748,8 +757,10 @@ extension _NavNavigation on _NavigationPageState {
       // the full drive time (a 3-minute route needs 3 minutes, which is how a
       // headless run first timed out with no trip and no error). The drive
       // itself is always the same drive — only how fast it is played differs.
-      debugPrint('SIM: feeding ${track.length} GPS fixes at $trackSpeed× '
-          '(drive time ${replayTripDuration(track).inSeconds}s)');
+      debugPrint(
+        'SIM: feeding ${track.length} GPS fixes at $trackSpeed× '
+        '(drive time ${replayTripDuration(track).inSeconds}s)',
+      );
       // ⭐ The DRIVE clock, so every cadence (and the trip log's own thinning)
       // runs on fix time instead of wall time — the same reason the replay does
       // it. Without it a run played at 8× records one fix per wall second, i.e.
@@ -999,6 +1010,7 @@ extension _NavNavigation on _NavigationPageState {
       setNavState(() => _resumeTrip = offer); // build failed quietly
       return;
     }
+    _resumingSameTrip = true; // keep the zone + adopted sign across the restart
     await _startNavigation();
   }
 

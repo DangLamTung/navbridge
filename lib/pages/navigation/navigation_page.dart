@@ -751,6 +751,11 @@ class _NavigationPageState extends State<NavigationPage>
   /// step down to 60 / up to 70+ can be read as a town entry / exit.
   int _lastLayerKmh = 0;
 
+  /// True while navigation is being re-started on the SAME journey ("Tiếp tục"),
+  /// so the built-up zone and the adopted speed sign survive the reset —
+  /// see `_resetSignSpeed({keepZone})`.
+  bool _resumingSameTrip = false;
+
   // --- the road AFTER the next maneuver, for the spoken callout -------------
   // The callout names the street you turn INTO, so it quotes THAT street's
   // limit (user, 2026-09-24: "when announcement, the next street speed is not
@@ -1349,12 +1354,21 @@ class _NavigationPageState extends State<NavigationPage>
 
   /// Reset the sign speed-limit + limit-announce state for a fresh navigation
   /// or simulation session.
-  void _resetSignSpeed() {
-    _signSpeedLimit = null;
-    _signSpeedLimitRoad = null;
-    _signAheadM = 0;
-    _inTownBySign = false;
-    _inTownByLayer = false;
+  ///
+  /// [keepZone] keeps what the DRIVE already established — the adopted speed
+  /// sign and the built-up zone — when navigation is re-started on the SAME
+  /// journey ("Tiếp tục" / a restart mid-trip). Clearing them there is why a
+  /// restart re-announced "bắt đầu khu dân cư" in the middle of a town and
+  /// dropped a limit the car was still under (user, 2026-10-25: "check đoạn t
+  /// phải restart trip là biết").
+  void _resetSignSpeed({bool keepZone = false}) {
+    if (!keepZone) {
+      _signSpeedLimit = null;
+      _signSpeedLimitRoad = null;
+      _signAheadM = 0;
+      _inTownBySign = false;
+      _inTownByLayer = false;
+    }
     _lastLayerKmh = 0;
     _aheadSigns = const [];
     _alertBarCollapsed = false;
