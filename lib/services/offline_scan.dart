@@ -46,12 +46,6 @@ List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
   /// [signedLateralOffsetMeters]) — that is the side whose signs govern this
   /// traffic.
   bool Function(T item)? rightSideFor,
-
-  /// When this returns a value, the item carries that facing (its own
-  /// `heading`) and must face the direction the driver is travelling at the
-  /// item's projection (see [signFacesTravel]) — otherwise it is the opposite
-  /// direction's plate and is dropped.
-  double? Function(T item)? facingFor,
 }) {
   final (current, geometry, items, maxAheadMeters, lateralMeters) = args;
   if (geometry.length < 2 || items.isEmpty) return const [];
@@ -78,18 +72,9 @@ List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
       // kept.
       if (requiresRight && off < -kLeftSideToleranceM) continue;
     }
-    final facing = facingFor?.call(items[i]);
-    if (facing != null) {
-      final bearing = routeBearingAt(window, p);
-      if (bearing == null) continue;
-      if (!signFacesTravel(signHeading: facing, travelBearing: bearing)) {
-        continue;
-      }
-    }
     final m = routeMetersAhead(current, p, window);
-    if (m != null && m >= 0 && m <= maxAheadMeters) {
-      out.add((i, m));
-    }
+    if (m == null || m < 0 || m > maxAheadMeters) continue;
+    out.add((i, m));
   }
   out.sort((a, b) => a.$2.compareTo(b.$2));
   return out;

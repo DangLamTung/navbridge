@@ -367,11 +367,9 @@ int effectiveLimit(
       vehicle == 'motorbike' &&
       postedSrc != srcOsm &&
       taggedKmh >= 90 &&
-      const {'trunk', 'primary', 'secondary', 'tertiary'}.contains(highway);
+      _throughOrUnknown(highway);
   final postedAboveUrban =
-      postedSrc != srcOsm &&
-      taggedKmh > 60 &&
-      const {'trunk', 'primary', 'secondary', 'tertiary'}.contains(highway);
+      postedSrc != srcOsm && taggedKmh > 60 && _throughOrUnknown(highway);
   // ⭐ A layer value is a CAR limit, so the one thing a mô tô may read from it is
   // the road FORM. Điều 8 TT31/2019, outside a built-up area: ô tô 80 on a
   // two-way road with no median, 90 on a divided one — so a 65-85 value is a
@@ -707,6 +705,39 @@ RoadInfo? roadInfoFromGraphMap(
 /// motorbike / truck it may only tighten the value our own rule produced.
 /// [name] is optional — the layer often carries a better street name than the
 /// graph/OSM way does.
+/// Classes that are never a through road: a 90 km/h record on one of these is
+/// data noise, not evidence of a divided carriageway.
+const Set<String> _nonThroughHighway = {
+  'residential',
+  'service',
+  'living_street',
+  'footway',
+  'cycleway',
+  'path',
+  'pedestrian',
+  'track',
+  'steps',
+  'construction',
+  'bus_stop',
+};
+// NOTE: `unclassified` is deliberately NOT in the list — it is a public
+// through-capable road in OSM terms, and the graph labels real arterials that
+// way (Phạm Văn Đồng came back `unclassified`).
+
+/// Is [highway] a through road — or not known at all?
+///
+/// ⭐ The "unknown" half is the point. Every layer-evidence rule below (a posted
+/// 70/80/90 proves the place is not built-up; a 90 proves a divided road) used
+/// to require one of trunk/primary/secondary/tertiary. But `highway` is EMPTY
+/// whenever no road lookup has answered — and on the 2026-10-25 drive that was
+/// most of the way: the layer answered from the first fix while the graph/OSM
+/// name did not, so a real Waze 90 was capped at the two-way 60 (or even the
+/// town 50) for kilometres. Measured: 1,5 % of the trip sat 10–20 km/h below the
+/// posted value exactly at Phạm Văn Đồng / Võ Nguyên Giáp / Xa lộ Hà Nội / QL1,
+/// every one of them with `highway` empty (tool/waze_mod_sim.py, 2026-10-28).
+bool _throughOrUnknown(String highway) =>
+    highway.trim().isEmpty || !_nonThroughHighway.contains(highway.trim());
+
 RoadInfo applyPostedLayer(
   RoadInfo road, {
   required int kmh,
@@ -755,27 +786,13 @@ RoadInfo applyPostedLayer(
   // cap a Waze 90 at the mô tô two-way 60 was wrong. Only through-road classes
   // and only 90+ (not a generic 60/70/80) are treated as this evidence.
   final fastDivided =
-      vehicle == 'motorbike' &&
-      kmh >= 90 &&
-      const {
-        'trunk',
-        'primary',
-        'secondary',
-        'tertiary',
-      }.contains(road.highway);
+      vehicle == 'motorbike' && kmh >= 90 && _throughOrUnknown(road.highway);
   // Any posted limit above the urban maximum (60) is proof the place is NOT
   // built-up: 70/80/90 are rural limits. The POI/road-density probe can call a
   // highway outside Dầu Giây “urban” because many Waze segments surround it —
   // that must not cap a real 70/80/90 to the town table.
   final postedAboveUrban =
-      layerSrc != srcOsm &&
-      kmh > 60 &&
-      const {
-        'trunk',
-        'primary',
-        'secondary',
-        'tertiary',
-      }.contains(road.highway);
+      layerSrc != srcOsm && kmh > 60 && _throughOrUnknown(road.highway);
   // Use the posted limit only to choose the CEILING; do not rewrite the
   // zone flag itself. A 70/80/90 is not a legal town limit, so it must not be
   // capped by a false-positive urban probe, but calling the whole place rural

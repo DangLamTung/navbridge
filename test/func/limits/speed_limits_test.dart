@@ -452,6 +452,31 @@ void main() {
         })();
 
 
+        // ---- case: a highway abbreviation is the same road ----
+        (() {
+            // Waze spells it QL20, the graph spells it Quốc lộ 20. The two must
+            // match, or every record on the highway is vetoed and the dial falls
+            // back to the class default (measured 2026-10-26: "city 50" on a
+            // 60 km/h road, and the Đạ M'Ri town entry missed entirely).
+            expect(streetNameMatches('Quốc lộ 20', 'QL20'), isTrue);
+            expect(streetNameMatches('QL20', 'Quốc lộ 20'), isTrue);
+            // Every spelling, including the SPACED one Waze actually uses
+            // ("QL 20" at km 165 of the 2026-10-26 drive, which the glued-only
+            // rule still vetoed).
+            expect(streetNameMatches('Quốc lộ 20', 'QL 20'), isTrue);
+            expect(streetNameMatches('Quốc lộ 1A', 'QL 1A'), isTrue);
+            expect(streetNameMatches('Tỉnh lộ 769', 'TL769'), isTrue);
+            expect(streetNameMatches('Tỉnh lộ 769', 'TL 769'), isTrue);
+            expect(streetNameMatches('Đường tỉnh 741', 'ĐT741'), isTrue);
+            expect(streetNameMatches('Hương lộ 10', 'HL10'), isTrue);
+            // …but only for the SAME number, and only on the same road family.
+            expect(streetNameMatches('Quốc lộ 20', 'QL51'), isFalse);
+            expect(streetNameMatches('Quốc lộ 20', 'Quốc lộ 40'), isFalse);
+            expect(streetNameMatches('Quốc lộ 20', 'TL20'), isFalse);
+            expect(streetNameMatches('Đèo Bảo Lộc', 'QL20'), isFalse);
+        })();
+
+
         // ---- case: an unnamed or empty side is never a match ----
         (() {
             expect(streetNameMatches(null, 'Lũy Bán Bích'), isFalse);
@@ -507,6 +532,28 @@ void main() {
             expect(lastWazeStreetName(), 'Lũy Bán Bích');
 
         })();
+        });
+
+        test('a highway spelled differently still answers', () async {
+        // On QL20 near Đạ M'Ri: the segment pack names the road "QL20", the graph
+        // names the same asphalt "Đèo Bảo Lộc". With only the settled name the
+        // lookup vetoed every record for kilometres, the chip fell back to
+        // "city 50" and the town entry was never announced (measured 2026-10-26,
+        // Bảo Lộc → HCMC drive).
+        await loadOfflineSpeedLimits();
+        const onQl20 = LatLng(11.414851, 107.668615);
+        const legacy = 'Đèo Bảo Lộc';
+        if (await speedLimitAt(onQl20, headingDeg: 239) == null) return;
+
+        expect(await speedLimitAt(onQl20, headingDeg: 239, expectStreet: legacy),
+            isNull,
+            reason: 'the old single-name veto refuses the record');
+        final v = await speedLimitAt(onQl20,
+            headingDeg: 239,
+            expectStreet: legacy,
+            alsoAccept: const ['Quốc lộ 20']);
+        expect(v, 50, reason: 'QL20 IS the road the matcher calls Đèo Bảo Lộc');
+        expect(lastWazeStreetName(), 'QL20');
         });
 
       });
@@ -722,7 +769,16 @@ void main() {
             // the vehicle zone ceiling applies so valid divided-road limits (60 on
             // Lũy Bán Bích, Trường Chinh) are not clamped down to 50.
             expect(layerOnly(90, 'motorbike').speedLimit, 70);
-            expect(layerOnly(90, 'motorbike', inTown: true).speedLimit, 60);
+            // ⭐ inTown is now OVERRIDDEN by the value itself. A posted 90 is
+            // legal only on a divided road outside a built-up area, so it is
+            // the strongest evidence that the zone probe is wrong — and the
+            // probe IS wrong on the arterials: measured 2026-10-28, Phạm Văn
+            // Đồng (Waze 80) came out 50 and Võ Nguyên Giáp / Xa lộ Hà Nội /
+            // QL1 (Waze 90) came out 60, all of them because `highway` was
+            // empty and the zone probe said town (tool/waze_mod_sim.py).
+            // The class guard that remains only rejects known-small classes
+            // (residential, service …), where a 90 is data noise.
+            expect(layerOnly(90, 'motorbike', inTown: true).speedLimit, 70);
 
         })();
 

@@ -385,12 +385,15 @@ Object? _runQuery(
           msg.maxAheadMeters,
           msg.lateralMeters,
         ),
-        // A camera watches ONE direction of travel: Waze carries it as `heading`
-        // on 23 569 of the 31 979 rows, and the app used to discard the field —
-        // so a camera pointed at the other carriageway was announced on this one
-        // (user, 2026-10-24: "waze cũng có hướng mà m quăng"). Rows without a
-        // heading (police / OSM) keep the old behaviour.
-        facingFor: (c) => c.heading,
+        // ⛔ NO heading filter. The field exists (23 569 of 31 979 cameras) and
+        // reads like a direction, but it is not one: measured against the
+        // driven bearing on the 2026-10-25 Bảo Lộc → HCMC drive, the median
+        // difference is 93° for VietMap cameras and 126° for the Waze ones we
+        // derived from FWD/REV — i.e. the convention is not "the traffic this
+        // camera watches" in either feed, and filtering on it dropped half of
+        // the alerts (likely the wrong half). Until a source documents the
+        // convention, the side test on signs is the only geometric filter that
+        // survives measurement.
       ),
       _Kind.signs => pointsAheadOnRoute<RoadSign>(
         (
@@ -415,13 +418,6 @@ Object? _runQuery(
         // boundary plates within 150 m of the path, 14 of them LEFT and
         // heading-less.
         rightSideFor: (_) => true,
-        // ⭐ …and the plate must FACE the way the car is going. VietMap carries
-        // `heading` on its rows (the traffic the plate governs), which is how a
-        // boundary's two plates are told apart: at 2026-10-24's drive 22 of the
-        // 59 plates faced the opposite direction and were announced anyway —
-        // five "vào/ra khu dân cư" alternations in 21 s. A plate with no
-        // heading in the data keeps the side test alone.
-        facingFor: (s) => s.heading,
       ),
     };
   }

@@ -115,61 +115,11 @@ double? routeMetersAhead(LatLng from, LatLng target, List<LatLng> geo) {
   return t - f;
 }
 
-/// Compass bearing (°, 0 = north, clockwise) of the polyline [geo] at the point
-/// nearest to [p] — the direction the DRIVER is travelling there, not the
-/// phone's heading and not the polyline's end-to-end direction.
-///
-/// This is the reference a sign's own `heading` is compared against: a plate
-/// faces the traffic it governs, so the same boundary has one plate facing each
-/// way. Returns null when [p] is not on the polyline (> 200 m) or the nearest
-/// segment has no length.
-double? routeBearingAt(List<LatLng> geo, LatLng p) {
-  var best = double.infinity;
-  var bearing = 0.0;
-  for (var i = 0; i < geo.length - 1; i++) {
-    final a = geo[i];
-    final b = geo[i + 1];
-    final proj = projectOnSegment(a, b, p);
-    final off = fastDistanceMeters(proj, p);
-    if (off >= best) continue;
-    final dx = (b.longitude - a.longitude) * metersPerDegLng(a.latitude);
-    final dy = (b.latitude - a.latitude) * kMetersPerDegLat;
-    if (dx == 0 && dy == 0) continue; // zero-length segment: no direction
-    best = off;
-    bearing = (math.atan2(dx, dy) * 180.0 / math.pi + 360.0) % 360.0;
-  }
-  if (best > 200) return null;
-  return bearing;
-}
-
-/// True when a plate whose own `heading` is [signHeading] governs the traffic
-/// travelling on bearing [travelBearing], within [toleranceDeg].
-///
-/// A plate faces the traffic it applies to (QCVN 41:2019), so on a divided road
-/// the two directions' plates face opposite ways. [toleranceDeg] 60° keeps a
-/// plate that is a little askew while rejecting the opposite carriageway's.
-bool signFacesTravel({
-  required double signHeading,
-  required double travelBearing,
-  double toleranceDeg = 60.0,
-}) {
-  var d = (signHeading - travelBearing) % 360.0;
-  if (d < 0) d += 360.0;
-  if (d > 180.0) d = 360.0 - d;
-  return d <= toleranceDeg;
-}
-
 /// Perpendicular distance (m) from [p] to the polyline [geo] — how far OFF the
 /// route a point sits, as opposed to how far along it.
 ///
-/// A sign is a sign OF the road it stands on: one 150 m to the side belongs to a
-/// crossing or parallel street, and announcing it as "ahead on the route" is the
-/// misfire the driver reported (2026-09-24: "for sign outside the segment we can
-/// reduce"). [nearestAlong] knows this distance already but only uses it as a
-/// 200 m cutoff; this exposes it so callers can apply their own.
-///
 /// Returns null when [p] is farther than 200 m from [geo] (not this route at
-/// all).
+/// all). The SIDE is [signedLateralOffsetMeters].
 double? lateralOffsetMeters(List<LatLng> geo, LatLng p) =>
     signedLateralOffsetMeters(geo, p)?.abs();
 

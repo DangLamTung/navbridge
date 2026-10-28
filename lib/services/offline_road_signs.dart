@@ -326,19 +326,25 @@ List<RoadSign> _parseSigns(String raw) {
 }
 
 /// How close two SAME-KIND khu dân cư plates may stand, facing the same way,
-/// before the second is a duplicate of the first, metres.
+/// before the second is a duplicate of the SAME POST, metres.
 ///
-/// A boundary is one transition. The packs repeat it — three sources, two
-/// directions, and the same source re-mapping the same post — and every extra
-/// row is another chance to announce "Bắt đầu khu dân cư" again at the same
-/// corner (user, 2026-10-25: "không thể có 2 biển kdc gần nhau cùng phía quá
-/// nhiều"). Measured over the bundled pack: 129 of 14 731 boundary rows have
-/// another plate of the same kind facing the same way within 300 m.
-const double kZonePlateRepeatM = 300.0;
+/// This is a physical-duplicate window, not a "zones are far apart" claim: two
+/// plates of one kind, one facing, 60 m apart are the same sign recorded twice
+/// (three sources re-map the same post). Anything wider is a guess — a real
+/// town can have two "bắt đầu" plates a few hundred metres apart on the same
+/// carriageway, and swallowing the second would silently drop a transition.
+///
+/// The zone itself is decided by EVIDENCE WITH A POSITION, in this order:
+///   1. the plate facing the car (side + heading), one per transition;
+///   2. a STEP in the Waze segment speed under the car — the segment layer is
+///      positionally exact, which is what the driver asked for when this
+///      threshold was questioned (user, 2026-10-25: "ưu tiên waze segment speed
+///      change thôi vì nó có position chuẩn").
+const double kZonePlateRepeatM = 60.0;
 
 /// Drop the second of two same-kind, same-facing khu dân cư plates within
-/// [kZonePlateRepeatM]. The kept row is the one that carries a `heading` (more
-/// information), else the first seen.
+/// [kZonePlateRepeatM] — the same post recorded twice. The kept row is the one
+/// that carries a `heading` (more information), else the first seen.
 List<RoadSign> collapseRepeatedZonePlates(List<RoadSign> signs) {
   const cell = 0.002; // ~220 m — one cell covers the window
   final kept = <RoadSign>[];

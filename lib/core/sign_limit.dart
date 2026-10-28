@@ -28,6 +28,36 @@ import 'road_match.dart';
 /// [kSignAdoptM] and sets the distance to 0 once it is behind the car.
 const double kSignReachedM = 50.0;
 
+/// How many consecutive fixes a changed posted value must hold before it counts
+/// as a step (a khu dân cư transition) — 2 s at 1 Hz.
+///
+/// Confirming by DISTANCE instead (300 m) was tried on 2026-10-25 and cost
+/// recall badly: inside a town the value oscillates 50 ⇄ 60 well inside 300 m,
+/// so the anchor kept resetting (towns covered fell 9/9 → 3/9).
+const int kLayerStepConfirmFixes = 2;
+
+/// Metres the NEW band (≤60 or ≥70) must hold before the step is believed.
+///
+/// This is the only evidence that separates a real village on a highway from a
+/// junction where Waze's segments alternate 60/80 for four fixes: on the
+/// 2026-10-26 drive the "flicker" spots were 60–120 m long (km 76,5 / 157,7 /
+/// 167,4 / 168,5 — each announced "hết" then "bắt đầu" 100 m later), while every
+/// real zone was 500 m or more. Counting fixes cannot tell them apart — both
+/// last several fixes — but the metres can.
+const double kZoneStepConfirmM = 150.0;
+
+/// How close an OPPOSITE khu dân cư transition may be to the one just
+/// announced before it is treated as the other direction's plate / a flicker,
+/// metres. Inside this window the announcement needs the posted LAYER to have
+/// moved the same way (the segment layer is positionally exact); otherwise it is
+/// blocked — see `_NavSigns._zoneFlipBlocked`.
+///
+/// 200 m, not 800: the WME layer really does carry short zones (a 700 m village
+/// between two 80 km/h stretches on QL20). Measured 2026-10-26 — an 800 m guard
+/// swallowed the entry at km 135,4 and the ones at 147,3 / 166,9 while the
+/// villages were still there in the data.
+const double kZoneFlipGuardM = 200.0;
+
 /// How far ahead of the car a speed sign is ADOPTED (becomes the preview
 /// limit / the next-limit wording). Beyond this the sign is not looked at, so
 /// the held value is treated as in force ([kSignReachedM]).

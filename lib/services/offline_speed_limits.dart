@@ -228,6 +228,7 @@ Future<SpeedLimitResult?> lookupSpeedLimit(
   int? keepKmh,
   double keepBandM = 6,
   String? expectStreet,
+  Iterable<String>? alsoAccept,
 }) async {
   await loadOfflineSpeedLimits();
   final segs = _segs;
@@ -239,8 +240,17 @@ Future<SpeedLimitResult?> lookupSpeedLimit(
   final cosLat = math.cos(lat * math.pi / 180.0);
 
   if (segs != null) {
-    final hit = _querySegIndex(segs, lat, lon, cosLat, maxDistM, headingDeg,
-        keepKmh: keepKmh, keepBandM: keepBandM, expectStreet: expectStreet);
+    final hit = _querySegIndex(
+      segs,
+      lat,
+      lon,
+      cosLat,
+      maxDistM,
+      headingDeg,
+      keepKmh: keepKmh,
+      keepBandM: keepBandM,
+      expectStreets: _nameSet(expectStreet, alsoAccept),
+    );
     if (hit != null) {
       return SpeedLimitResult(
         limit: hit.limit,
@@ -279,6 +289,7 @@ Future<int?> speedLimitAt(
   int? keepKmh,
   double keepBandM = 6,
   String? expectStreet,
+  Iterable<String>? alsoAccept,
 }) async {
   final res = await lookupSpeedLimit(
     p,
@@ -287,6 +298,7 @@ Future<int?> speedLimitAt(
     keepKmh: keepKmh,
     keepBandM: keepBandM,
     expectStreet: expectStreet,
+    alsoAccept: alsoAccept,
   );
   _lastLayer = res?.source;
   // -1, not "leave the previous segment": a point-layer answer must not keep
@@ -454,6 +466,7 @@ class _SegDecoder {
     return n;
   }
 }
+
 /// Segment that produced the most recent [_querySegIndex] hit, so callers can
 /// read its street name ([lastWazeStreetName]) from the SAME record that gave
 /// the limit — the whole point of the v3 street table. -1 when nothing hit.
@@ -771,6 +784,34 @@ int nextStreetSampleRank({
   return (cur.isEmpty || !sameRoad(layer, cur)) ? 2 : 0;
 }
 
+/// The set of names that may legitimately answer for the road under the car:
+/// the settled veto name plus every other name the app holds for it (OSM name,
+/// displayed name, the route's own step names).
+///
+/// One name is not enough. The WME layer spells QL20 "QL20" while the graph
+/// calls the same asphalt "Đèo Bảo Lộc"; handing the lookup only the settled
+/// name vetoed every record on the highway, so the dial fell back to
+/// "city 50" and whole built-up areas vanished (measured 2026-10-26).
+List<String> _nameSet(String? primary, Iterable<String>? also) {
+  final out = <String>[];
+  void add(String? n) {
+    final t = (n ?? '').trim();
+    if (t.isEmpty) return;
+    for (final e in out) {
+      if (streetNameMatches(e, t)) return;
+    }
+    out.add(t);
+  }
+
+  add(primary);
+  if (also != null) {
+    for (final n in also) {
+      add(n);
+    }
+  }
+  return out;
+}
+
 bool streetNameMatches(String? road, String? segment) {
   if (road == null || segment == null) return false;
   final a = _streetTokens(road);
@@ -789,7 +830,10 @@ bool streetNameMatches(String? road, String? segment) {
   // (test/speed_limit_result_test.dart pins that).
   if (a.join() == b.join() && !_isUninformativeName(a)) return true;
   if (a.any(_isAlleyToken) != b.any(_isAlleyToken)) return false;
-  final shared = [for (final t in a) if (b.contains(t)) t];
+  final shared = [
+    for (final t in a)
+      if (b.contains(t)) t,
+  ];
   if (shared.isEmpty) return false;
   if (shared.length != a.length && shared.length != b.length) return false;
   if (shared.length >= 2) return true;
@@ -839,8 +883,53 @@ List<String> _streetTokens(String s) {
     }
   }
   if (buf.isNotEmpty) out.add(buf.toString());
-  return out;
+  // One canonical spelling for a route number, because the two datasets write
+  // the same highway every way there is: "QL20", "QL 20", "Quốc lộ 20",
+  // "TL769", "Tỉnh lộ 769", "ĐT741", "Đường tỉnh 741". Left alone, those share
+  // no token, the road never matches ITSELF, and the layer's name veto blanks
+  // every record on it (2026-10-26: "QL 20" in Waze vs "Quốc lộ 20" on screen —
+  // the dial fell back to "city 50" on a 60 km/h highway).
+  final out2 = <String>[];
+  for (var i = 0; i < out.length; i++) {
+    final t = out[i];
+    final glued = RegExp(r'^(ql|tl|đt|dt|hl|đh|dh)(\d+[a-z]?)$').firstMatch(t);
+    if (glued != null) {
+      out2.addAll(_routeWords(glued.group(1)!));
+      out2.add(glued.group(2)!);
+      continue;
+    }
+    final next = i + 1 < out.length ? out[i + 1] : '';
+    if (_isRouteDesignator(t) && RegExp(r'^\d+[a-z]?$').hasMatch(next)) {
+      out2.addAll(_routeWords(t));
+      out2.add(next);
+      i++;
+      continue;
+    }
+    out2.add(t);
+  }
+  return out2;
 }
+
+const Set<String> _routeDesignators = {
+  'ql',
+  'tl',
+  'đt',
+  'dt',
+  'hl',
+  'đh',
+  'dh',
+};
+
+bool _isRouteDesignator(String t) => _routeDesignators.contains(t);
+
+/// The words a Vietnamese route designator stands for.
+List<String> _routeWords(String designator) => switch (designator) {
+  'ql' => const ['quốc', 'lộ'],
+  'tl' => const ['tỉnh', 'lộ'],
+  'hl' => const ['hương', 'lộ'],
+  'đh' || 'dh' => const ['đường', 'huyện'],
+  _ => const ['đường', 'tỉnh'], // đt / dt
+};
 
 const double _nameBandM = 60;
 
@@ -852,7 +941,13 @@ const double _maxAlignedDeg = 45.0;
 /// car counts as having driven off that segment's end.  Used by [segmentScore].
 const double _maxOvershootM = 10.0;
 
-
+/// The "the car is unmistakably RIDING this segment" test: within
+/// [_riddenDistM] of it, not past its end by more than [_riddenOvershootM], and
+/// running within [_riddenAngleDeg] of the heading. Used by the geometry rescue
+/// in [_pickWithContinuity].
+const double _riddenDistM = 15.0;
+const double _riddenOvershootM = 5.0;
+const double _riddenAngleDeg = 25.0;
 
 /// Candidate score for the segment lookup: distance, penalised when the segment
 /// runs ACROSS the car's path.
@@ -886,6 +981,7 @@ double segmentScore(
   if (overshootM > _maxOvershootM) score += maxDistM + 1;
   return score;
 }
+
 /// Index of the candidate to trust among (segment, distance m, bearing,
 /// overshoot m) tuples, or -1 when nothing is within [maxDistM]. On-segment and
 /// aligned candidates first, then distance — see [segmentScore] for why.
@@ -996,7 +1092,7 @@ int _densityGen = 0;
   double? headingDeg, {
   int? keepKmh,
   double keepBandM = 6,
-  String? expectStreet,
+  List<String> expectStreets = const <String>[],
 }) {
   final cx = (lon / _segCellDeg).floor();
   final cy = (lat / _segCellDeg).floor();
@@ -1026,22 +1122,28 @@ int _densityGen = 0;
     }
   }
   final pick = _pickWithContinuity(
-      idx, cands, headingDeg, maxDistM, keepKmh, keepBandM,
-      expectStreet: expectStreet);
+    idx,
+    cands,
+    headingDeg,
+    maxDistM,
+    keepKmh,
+    keepBandM,
+    expectStreets: expectStreets,
+  );
   // No winner ⇒ nothing usable here: no limit, and no segment to name the road
   // from either (the caller adopts the street verbatim, even on a null limit).
   if (pick.win < 0) return null;
   final s = cands[pick.win].$1;
   final brg = cands[pick.win].$3;
-  // If expectStreet was given, only accept candidates matching that street name
-  // unless chosen by geometry override (car is demonstrably riding this road).
-  if (!pick.byGeometry &&
-      expectStreet != null &&
-      expectStreet.trim().isNotEmpty) {
+  // Only accept a candidate that names our road — unless the pick was a
+  // geometry override (the car is demonstrably riding a road whose name we do
+  // not hold). `expectStreets` carries every name we DO hold for the road, so a
+  // spelling difference is no longer a veto (see [_nameSet]).
+  if (!pick.byGeometry && expectStreets.isNotEmpty) {
     final street = idx.streetName(s);
     if (street != null &&
         street.trim().isNotEmpty &&
-        !streetNameMatches(expectStreet, street)) {
+        !expectStreets.any((n) => streetNameMatches(n, street))) {
       return null;
     }
   }
@@ -1060,8 +1162,8 @@ int _densityGen = 0;
   // same moment, since its across-the-car penalty also needs a heading, so
   // answering "ridden" there would adopt a crossing street's value AND name with
   // nothing checking either. "Cannot tell" must read as the conservative side.
-  final aligned = headingDeg != null &&
-      segmentLineAngle(headingDeg, brg) <= _maxAlignedDeg;
+  final aligned =
+      headingDeg != null && segmentLineAngle(headingDeg, brg) <= _maxAlignedDeg;
   return (
     limit: _segmentValue(idx, s, brg, headingDeg),
     segmentId: s,
@@ -1098,7 +1200,8 @@ int _segmentValue(_SegIndex idx, int s, double brg, double? headingDeg) {
     final (rt, _) = idx.segClassOf(s);
     if (rt != 3) {
       final name = idx.streetName(s) ?? '';
-      final isExp = name.startsWith('CT') ||
+      final isExp =
+          name.startsWith('CT') ||
           name.contains('Cao tốc') ||
           name.contains('Expressway');
       if (!isExp) {
@@ -1132,26 +1235,25 @@ int _segmentValue(_SegIndex idx, int s, double brg, double? headingDeg) {
   double maxDistM,
   int? keepKmh,
   double keepBandM, {
-  String? expectStreet,
+  List<String> expectStreets = const <String>[],
 }) {
   if (cands.isEmpty) return (win: -1, byGeometry: false);
+  bool named(int i) => expectStreets.any(
+    (n) => streetNameMatches(n, idx.streetName(cands[i].$1)),
+  );
 
   var ids = <int>[for (var i = 0; i < cands.length; i++) i];
   var radius = maxDistM;
-  if (expectStreet != null && expectStreet.trim().isNotEmpty) {
+  if (expectStreets.isNotEmpty) {
     final inside = <int>[
       for (final i in ids)
-        if (cands[i].$2 <= maxDistM &&
-            streetNameMatches(expectStreet, idx.streetName(cands[i].$1)))
-          i,
+        if (cands[i].$2 <= maxDistM && named(i)) i,
     ];
     final band = inside.isNotEmpty
         ? inside
         : <int>[
             for (final i in ids)
-              if (cands[i].$2 <= _nameBandM &&
-                  streetNameMatches(expectStreet, idx.streetName(cands[i].$1)))
-                i,
+              if (cands[i].$2 <= _nameBandM && named(i)) i,
           ];
     if (band.isNotEmpty) {
       ids = band;
@@ -1176,9 +1278,7 @@ int _segmentValue(_SegIndex idx, int s, double brg, double? headingDeg) {
   //    driven: overshoot > 10m (car has driven past its end) AND angle > 60°
   //    (runs across the car's path).
   // 4. They must be different streets with a substantial score gap.
-  if (expectStreet != null &&
-      expectStreet.trim().isNotEmpty &&
-      headingDeg != null) {
+  if (expectStreets.isNotEmpty && headingDeg != null) {
     final fullWin = pickSegmentCandidate(cands, headingDeg, maxDistM);
     if (fullWin >= 0 && fullWin != win) {
       final geoCand = cands[fullWin];
@@ -1187,20 +1287,31 @@ int _segmentValue(_SegIndex idx, int s, double brg, double? headingDeg) {
       final nameAngle = segmentLineAngle(headingDeg, nameCand.$3);
 
       final geoIsRidden =
-          geoCand.$2 <= 15.0 && geoCand.$4 <= 5.0 && geoAngle <= 25.0;
-      final nameIsOffRoad =
-          nameCand.$4 > _maxOvershootM && nameAngle > 60.0;
+          geoCand.$2 <= _riddenDistM &&
+          geoCand.$4 <= _riddenOvershootM &&
+          geoAngle <= _riddenAngleDeg;
+      final nameIsOffRoad = nameCand.$4 > _maxOvershootM && nameAngle > 60.0;
 
       if (geoIsRidden &&
           nameIsOffRoad &&
           !streetNameMatches(
-              idx.streetName(nameCand.$1), idx.streetName(geoCand.$1))) {
+            idx.streetName(nameCand.$1),
+            idx.streetName(geoCand.$1),
+          )) {
         final geoScore = segmentScore(
-            geoCand.$2, geoCand.$3, headingDeg, maxDistM,
-            overshootM: geoCand.$4);
+          geoCand.$2,
+          geoCand.$3,
+          headingDeg,
+          maxDistM,
+          overshootM: geoCand.$4,
+        );
         final nameScore = segmentScore(
-            nameCand.$2, nameCand.$3, headingDeg, radius,
-            overshootM: nameCand.$4);
+          nameCand.$2,
+          nameCand.$3,
+          headingDeg,
+          radius,
+          overshootM: nameCand.$4,
+        );
         if (nameScore - geoScore > 20.0) {
           return (win: fullWin, byGeometry: true);
         }

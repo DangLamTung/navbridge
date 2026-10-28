@@ -751,6 +751,23 @@ class _NavigationPageState extends State<NavigationPage>
   /// step down to 60 / up to 70+ can be read as a town entry / exit.
   int _lastLayerKmh = 0;
 
+  /// The last khu dân cư transition ANNOUNCED: which way, where, and the posted
+  /// layer value at that moment — see `_zoneFlipBlocked`.
+  RoadSignKind? _lastZoneKind;
+  LatLng? _lastZoneAt;
+  int _lastZoneLayerKmh = 0;
+
+  /// Band of the posted layer under the car: -1 = ≤60 (in a built-up area),
+  /// +1 = ≥70 (outside), 0 = nothing read yet. A change of band is a town
+  /// boundary once [kZoneStepConfirmM] metres back it up.
+  int _zoneBand = 0;
+
+  /// The posted value currently being timed under the car, and where that streak
+  /// started — a value must hold [kZoneStepConfirmM] metres to decide anything
+  /// (see `_noteLayerStep`).
+  int _pendingLayerKmh = 0;
+  LatLng? _pendingValueAt;
+
   /// True while navigation is being re-started on the SAME journey ("Tiếp tục"),
   /// so the built-up zone and the adopted speed sign survive the reset —
   /// see `_resetSignSpeed({keepZone})`.
@@ -1368,8 +1385,14 @@ class _NavigationPageState extends State<NavigationPage>
       _signAheadM = 0;
       _inTownBySign = false;
       _inTownByLayer = false;
+      _lastZoneKind = null;
+      _lastZoneAt = null;
+      _lastZoneLayerKmh = 0;
     }
     _lastLayerKmh = 0;
+    _zoneBand = 0;
+    _pendingLayerKmh = 0;
+    _pendingValueAt = null;
     _aheadSigns = const [];
     _alertBarCollapsed = false;
     _limitAnnouncer.reset();

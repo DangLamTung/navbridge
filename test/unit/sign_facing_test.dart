@@ -1,54 +1,11 @@
-/// A plate governs the traffic it FACES, and it stands on the right verge of
-/// that traffic. Both halves matter at a khu dân cư boundary, where the pack
-/// carries one plate per direction a few metres apart.
+/// Boundary plates on the map: one marker per corner, and a speed plate that
+/// is really the zone's sign is not a second limit.
 library;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:latlong2/latlong.dart';
-import 'package:navbridge/services/offline_geo.dart';
 import 'package:navbridge/services/offline_road_signs.dart';
-import 'package:navbridge/services/offline_scan.dart';
-
-class _Point implements OfflinePoint {
-  const _Point(this.pos, this.heading);
-
-  @override
-  final LatLng pos;
-  final double? heading;
-}
 
 void main() {
-  const north = [LatLng(10.0, 106.7), LatLng(10.01, 106.7)];
-  const start = LatLng(10.0, 106.7);
-
-  test('a plate counts only when it faces the way the car travels', () {
-    expect(signFacesTravel(signHeading: 0, travelBearing: 0), isTrue);
-    expect(signFacesTravel(signHeading: 350, travelBearing: 10), isTrue);
-    expect(signFacesTravel(signHeading: 180, travelBearing: 0), isFalse);
-    expect(signFacesTravel(signHeading: 120, travelBearing: 0), isFalse);
-  });
-
-  test('routeBearingAt follows the polyline, not the compass', () {
-    const south = [LatLng(10.01, 106.7), LatLng(10.0, 106.7)];
-    expect(routeBearingAt(north, const LatLng(10.005, 106.7)), closeTo(0, 1));
-    expect(routeBearingAt(south, const LatLng(10.005, 106.7)), closeTo(180, 1));
-  });
-
-  test('a boundary pair: only the plate facing our way survives the scan', () {
-    final items = <_Point>[
-      const _Point(LatLng(10.005, 106.7003), 0), // ours, right verge
-      const _Point(LatLng(10.005, 106.6997), 180), // opposite direction
-      const _Point(LatLng(10.006, 106.7003), null), // ours, no heading
-      const _Point(LatLng(10.006, 106.6997), null), // left verge, no heading
-    ];
-    final kept = pointsAheadOnRoute<_Point>(
-      (start, north, items, 1500, 40),
-      rightSideFor: (_) => true,
-      facingFor: (p) => p.heading,
-    );
-    expect(kept.map((e) => e.$1), [0, 2]);
-  });
-
   test('a boundary pair draws as ONE marker, not start + end side by side', () {
     RoadSign z(RoadSignKind k, double lat, double lng, {double? h}) => RoadSign(
       name: k.label,

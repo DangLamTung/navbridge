@@ -778,6 +778,18 @@ extension _NavGps on _NavigationPageState {
     );
   }
 
+  /// Every name the app holds for the road under the car, for the layer's name
+  /// veto. One name is not enough: the WME product spells QL20 "QL20" while the
+  /// graph calls the same asphalt "Đèo Bảo Lộc", and handing the lookup only the
+  /// settled name blanked EVERY record on that highway — the dial fell back to
+  /// "city 50" and whole built-up areas disappeared from the announcements
+  /// (measured 2026-10-26 on the Bảo Lộc → HCMC drive).
+  Iterable<String> get _layerNameAccept => [
+    _vetoStreet,
+    _roadOsm?.name ?? '',
+    ..._routeEvidence(),
+  ];
+
   bool _layerNameAgrees(String? segmentName, {bool ridden = false}) {
     // Every name we already know for the road under the car; see
     // [layerLimitMatchesNames] for the rule, and why an empty set must not veto
@@ -1107,6 +1119,7 @@ extension _NavGps on _NavigationPageState {
         headingDeg: _heading == 0 ? null : _heading,
         keepKmh: keep,
         expectStreet: _vetoStreet,
+        alsoAccept: _layerNameAccept,
       );
       if (hit == null) return road;
       // Limit, layer kind and street name all come from THIS result.
@@ -1129,8 +1142,8 @@ extension _NavGps on _NavigationPageState {
       // The layer answered for THIS road from HERE: that is the anchor the hold
       // is measured from (see [LayerHold]).
       _layerHold.note(layerName ?? road.name, pos);
-      // A posted-limit STEP is the fallback evidence of a town boundary when the
-      // route has no plate for it (see [_noteLayerStep]).
+      // The zone state comes from the posted value under the car (see
+      // [_noteLayerStep]); plates only speak where that layer is silent.
       _noteLayerStep(hit.limit, pos);
       return applyPostedLayer(
         road,
@@ -1170,21 +1183,79 @@ extension _NavGps on _NavigationPageState {
   /// FALLBACK: a boundary plate, once reached, keeps the authority
   /// ([_inTownBySign]) and this never overrides it.
   void _noteLayerStep(int kmh, LatLng at) {
+    if (kmh <= 0) return;
+    // One value has to HOLD for [kZoneStepConfirmM] metres before it can decide
+    // anything: a junction where the segments alternate 60/80 is not news, and a
+    // single record is not either (measured: flickers 60–120 m, real stretches
+    // 500 m and up).
+    if (kmh != _pendingLayerKmh) {
+      _pendingLayerKmh = kmh;
+      _pendingValueAt = at;
+      return;
+    }
+    final from = _pendingValueAt ?? at;
+    if (distanceMeters(from, at) < kZoneStepConfirmM) return;
+
+    // ⭐ A confirmed layer value overrules an ADOPTED PLATE that disagrees with
+    // it. The plate described the stretch where it was posted; once the road's
+    // own posted value under the bike is something else for 150 m, the plate is
+    // stale. This is what "chỗ 60 thì m bảo 50" was: a 50 plate reached near
+    // km 78 of the 2026-10-25 drive stayed in force on QL20 while the Waze
+    // segment said 60 — 790 fixes (6,4 %) of the trip (measured 2026-10-28 with
+    // tool/waze_mod_sim.py). The plate is still ANNOUNCED, it just stops
+    // setting the number.
+    if (_signSpeedLimit != null && _signSpeedLimit != kmh) {
+      debugPrint(
+        'SIGNS: plate $_signSpeedLimit released — lớp Waze giữ '
+        '$kmh km/h quá ${kZoneStepConfirmM.round()} m',
+      );
+      _signSpeedLimit = null;
+      _signSpeedLimitRoad = null;
+      _signAheadM = 0;
+      if (mounted) setNavState(() {});
+    }
+
+    final band = kmh >= 70 ? 1 : (kmh <= 60 ? -1 : 0);
+    if (band == 0) return; // 61–69 is no evidence either way
+    if (band == _zoneBand) return;
+    if (_zoneBand == 0) {
+      _zoneBand = band; // first reading of the drive
+      return;
+    }
+    _zoneBand = band;
     final prev = _lastLayerKmh;
     _lastLayerKmh = kmh;
-    if (_inTownBySign || prev <= 0 || kmh <= 0) return;
-    final entering = prev >= 70 && kmh <= 60;
-    final leaving = prev <= 60 && kmh >= 70;
-    if (!entering && !leaving) return;
-    if (_inTownByLayer && _inTown == entering) return;
+    final entering = band < 0;
+    if (_inTownBySign) {
+      // A reached plate owns the zone it declared — not the rest of the drive.
+      // While it agrees with the layer there is nothing to say; as soon as the
+      // layer reports the OPPOSITE state the plate's zone is over and the layer
+      // resumes. Measured 2026-10-26: one reached plate at km 115 silenced every
+      // KDC sentence for the remaining 60 km, because the flag was never cleared.
+      if (entering == _inTown) return;
+      _inTownBySign = false;
+      debugPrint('TOWN: plate zone over — Waze step $prev → $kmh km/h decides');
+    }
     _inTown = entering;
     _inTownByLayer = true;
     _inTownPos = at;
-    debugPrint(
-      'TOWN: ${entering ? 'vào' : 'ra'} khu dân cư suy ra từ Waze '
-      '$prev → $kmh km/h (không có biển ranh giới trên đường)',
-    );
     _updateRoadForTownChange(entering, at: at);
+    // NO distance guard: the STEP itself is the boundary, and it can only be a
+    // change of state (`_inTown`), so the same boundary cannot be announced
+    // twice from this path. A metre threshold here invented policy the data does
+    // not support — it swallowed real 700 m villages (user, 2026-10-27: "chặn
+    // làm gì").
+    _lastZoneKind = entering
+        ? RoadSignKind.populated
+        : RoadSignKind.populatedEnd;
+    _lastZoneAt = at;
+    _lastZoneLayerKmh = kmh;
+    final phrase = entering ? 'Bắt đầu khu dân cư' : 'Hết khu dân cư';
+    debugPrint(
+      'TOWN: ${entering ? 'vào' : 'ra'} khu dân cư theo Waze $prev → $kmh km/h',
+    );
+    _logAnnouncement(phrase, kind: 'sign');
+    _voice.speak(phrase, priority: VoiceGuide.priorityHigh);
   }
 
   /// Update the current road's statutory speed limit when crossing a built-up
@@ -1275,6 +1346,7 @@ extension _NavGps on _NavigationPageState {
       headingDeg: _heading == 0 ? null : _heading,
       keepKmh: keep,
       expectStreet: curName,
+      alsoAccept: _layerNameAccept,
     );
     // What went in and what came back, so a '-' on the dial can be explained
     // from a log instead of guessed at. Throttled: the first few fixes and then
@@ -1300,6 +1372,7 @@ extension _NavGps on _NavigationPageState {
         headingDeg: _heading == 0 ? null : _heading,
         keepKmh: keep,
         expectStreet: curName,
+        alsoAccept: _layerNameAccept,
       );
       usedSnapped = hit != null;
     }
@@ -1371,7 +1444,10 @@ extension _NavGps on _NavigationPageState {
     // look stale 150 m into a stretch the layer covers perfectly.
     if (lim != null && limitUsable) {
       _layerHold.note(name, pos);
-      _noteLayerStep(lim, pos); // town entry/exit from a posted STEP
+      _noteLayerStep(
+        lim,
+        pos,
+      ); // zone state from the posted value under the car
     }
     if (lim == null || !limitUsable) {
       if (lim != null) {

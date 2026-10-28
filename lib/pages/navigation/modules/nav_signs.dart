@@ -362,12 +362,33 @@ extension _NavSigns on _NavigationPageState {
       // in this scan.
       if (k == RoadSignKind.populated || k == RoadSignKind.populatedEnd) {
         if (!seenZoneKind.add(k)) continue;
-        if (k == RoadSignKind.populated && _inTownBySign && _inTown) {
+        // A plate whose zone is already the state we are in says nothing new —
+        // whoever established it (plate or posted layer). Measured 2026-10-26:
+        // "Bắt đầu khu dân cư phía trước" still fired 1,2 km INSIDE the town the
+        // layer had just announced at km 114,8.
+        if (k == RoadSignKind.populated && _inTown) continue;
+        if (k == RoadSignKind.populatedEnd && !_inTown) continue;
+        // The posted layer is positionally exact and currently owns the zone
+        // state: a plate that says the OPPOSITE is the other carriageway's plate
+        // or a misplaced point, and must not contradict the layer (user:
+        // "ưu tiên waze"). Measured 2026-10-26: plates inside the Đạ M'Ri town
+        // and at km 116 / 157 announced "hết khu dân cư" where WME had 50 km/h
+        // for kilometres.
+        if (_inTownByLayer && (k == RoadSignKind.populated) != _inTown) {
           continue;
         }
-        if (k == RoadSignKind.populatedEnd && _inTownBySign && !_inTown) {
-          continue;
-        }
+        // ⭐ A town is not entered and left again in 300 m. Two plates of
+        // OPPOSITE kinds inside [kZoneFlipGuardM] mean the pack carries the
+        // other direction's plate (or a duplicate) — the announcement is
+        // blocked unless the posted LAYER moved the same way since the last
+        // transition, because the segment layer is the only source with a
+        // reliable position (user, 2026-10-25: "ưu tiên waze segment speed
+        // change thôi vì nó có position chuẩn"). Measured on a 176 km Bảo Lộc →
+        // Sài Gòn drive: "bắt đầu … / hết …" fired 5 s apart at one junction.
+        if (_zoneFlipBlocked(k, snapped)) continue;
+        // No distance guard: `_inTown`/`_inTownBySign` already say whether this
+        // plate is news, and a plate that merely repeats the state the posted
+        // layer established is skipped (see the gate above).
       }
       // Announce at most TWICE per sign: once far (the first time it enters the
       // 400 m range) and once near (~100 m) as the final reminder. The old
@@ -402,6 +423,20 @@ extension _NavSigns on _NavigationPageState {
     if (next == null) return;
     final near = m <= 100;
     final phrase = signCalloutPhrase(next.kind, m, near: near);
+    if (next.kind == RoadSignKind.populated ||
+        next.kind == RoadSignKind.populatedEnd) {
+      _lastZoneKind = next.kind;
+      _lastZoneAt = snapped;
+      _lastZoneLayerKmh = _lastLayerKmh;
+    }
+    // WHICH SIDE the plate that produced this sentence stands on, measured
+    // against the same route polyline the scan used. The scan already refuses
+    // left-hand plates (see `pointsAheadOnRoute.rightSideFor`); this line is
+    // what makes that auditable from a drive log instead of assumed
+    // (`tool/sign_side_audit.py` measures the data, not the app's decision).
+    debugPrint(
+      'SIGNS: callout ${next.kind.key} dx=${(signedLateralOffsetMeters(geometry, next.pos) ?? 0).toStringAsFixed(1)} m ahead=${m.round()} m',
+    );
     _logAnnouncement(phrase, kind: 'sign');
     // The built-up boundary and the "obey now" set are worth interrupting the
     // AI assistant / a camera line for; a turn or lane plate is not. They were
@@ -413,6 +448,23 @@ extension _NavSigns on _NavigationPageState {
           : VoiceGuide.priorityNormal,
     );
     if (mounted) setNavState(() {});
+  }
+
+  /// Would announcing [kind] flip the zone we just announced, without the
+  /// posted LAYER agreeing?
+  ///
+  /// The layer's step is the positional evidence: 80/90 → 60 or less is a town
+  /// entry, the reverse is the exit (`_noteLayerStep` reads the same step). A
+  /// plate of the opposite kind inside [kZoneFlipGuardM] that the layer does not
+  /// back up is the other direction's plate (or a duplicate of the same post).
+  bool _zoneFlipBlocked(RoadSignKind kind, LatLng at) {
+    final last = _lastZoneKind;
+    final at0 = _lastZoneAt;
+    if (last == null || at0 == null || last == kind) return false;
+    if (distanceMeters(at0, at) > kZoneFlipGuardM) return false;
+    final delta = _lastLayerKmh - _lastZoneLayerKmh;
+    final entering = kind == RoadSignKind.populated;
+    return entering ? delta < 20 : delta > -20;
   }
 
   /// Record the signs ahead for the "sắp tới" alert bar, nearest first.

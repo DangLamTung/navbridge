@@ -151,3 +151,7 @@ docs/simnav_*.txt
 docs/simulation_lbb.html
 docs/voice_*.html
 docs/apbac_truongchinh_before_after.html
+
+# Recorded drives dropped into the repo root (personal GPS dumps, tens of MB)
+/*_Gộp_ngày.json
+/*_Chuyến_đi.json
