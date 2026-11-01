@@ -128,7 +128,14 @@ List<RouteProvider> resolveRouteChain(RouteProfile profile) {
   // (agreed 2026-09-30): the alternative is NO offline routing for the default
   // vehicle, since `vehicleType` defaults to 'motorbike'. A real motorcycle
   // profile needs the graph rebuilt with one.
-  if ((profile == RouteProfile.car || profile == RouteProfile.motorbike) &&
+  //
+  // A lorry rides the same archive: `OfflineRouter.route()` maps every
+  // non-motorbike profile to the car graph, and the lorry's lower ceiling comes
+  // from [RouteProfile.legalMaxKmh], not from the network. Leaving truck out
+  // here meant a truck with no network got NO route at all.
+  if ((profile == RouteProfile.car ||
+          profile == RouteProfile.motorbike ||
+          profile == RouteProfile.truck) &&
       routingEngine != 'osrm') {
     chain.add(RouteProvider.graphhopper);
   }

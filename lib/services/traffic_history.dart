@@ -20,6 +20,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:io';
 
 import 'package:flutter/foundation.dart'
@@ -36,6 +37,17 @@ const double kHistoryCellDeg = 0.002;
 
 /// Samples a cell+hour needs before it may colour a route.
 const int kMinSamples = 3;
+
+/// Metres between two nearby points (planar approximation — fine at the scale
+/// of one route vertex).
+double _m(LatLng a, LatLng b) {
+  final dy = (b.latitude - a.latitude) * 111320.0;
+  final dx =
+      (b.longitude - a.longitude) *
+      111320.0 *
+      math.cos((a.latitude + b.latitude) / 2 * math.pi / 180);
+  return math.sqrt(dx * dx + dy * dy);
+}
 
 /// Speed ratio at or below which the pattern says "kẹt" (red).
 const double kHistoryJamRatio = 0.5;
@@ -258,20 +270,37 @@ class TrafficHistory {
       spans.add(TrafficSpan(start: start, end: geometry.length, level: cur));
     }
 
-    // Duration: every slow run costs its share of the route at the recorded
-    // speed; jam runs cost more. 1.0 = free flow.
-    var weighted = 0.0;
-    var counted = 0;
-    for (final s in spans) {
-      for (var i = s.start; i < s.end && i < levels.length; i++) {
-        final r = ratioAt(geometry[i], at, minSamples: minSamples);
-        if (r == null || r <= 0.05) continue;
-        weighted += 1 / r;
-        counted++;
+    // ⭐ THE DELAY IS ADDED BY SHARE, NOT AVERAGED OVER THE JAM.
+    //
+    // Travelling a stretch at ratio r costs free_share / r instead of free_share
+    // (r = achieved ÷ posted). So the whole route's factor is the DISTANCE-
+    // WEIGHTED sum of 1/r over EVERY vertex — free-flowing ones contributing
+    // their own 1.0 — and never the mean of the congested vertices alone. That
+    // mean was applied to the full route duration, so a 40-minute route with
+    // 5 % of its length crawling at 0.4× came out at 100 minutes and "+60 phút".
+    var factor = 1.0;
+    final free = freeFlowSeconds ?? 0;
+    if (free > 0 && geometry.length >= 2) {
+      var total = 0.0;
+      final shares = List<double>.filled(geometry.length, 0.0);
+      for (var i = 0; i < geometry.length - 1; i++) {
+        final d = _m(geometry[i], geometry[i + 1]);
+        // Split each segment between its two ends so a vertex's weight is the
+        // road it stands for (half of the segment either side of it).
+        shares[i] += d / 2;
+        shares[i + 1] += d / 2;
+        total += d;
+      }
+      if (total > 0) {
+        var weighted = 0.0;
+        for (var i = 0; i < geometry.length; i++) {
+          final r = ratioAt(geometry[i], at, minSamples: minSamples);
+          final inv = (r == null || r <= 0.05) ? 1.0 : (1 / r).clamp(1.0, 6.0);
+          weighted += (shares[i] / total) * inv;
+        }
+        factor = weighted;
       }
     }
-    final factor = counted == 0 ? 1.0 : weighted / counted;
-    final free = freeFlowSeconds ?? 0;
     final liveS = free > 0 ? (free * factor).round() : 0;
     return RouteTraffic(
       live: Duration(seconds: liveS),

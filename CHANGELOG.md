@@ -64,7 +64,30 @@ ramps and lane changes.**
   roundabout and its exit no longer re-arms the 400/300/100 m callouts
   (`kManeuverSameJunctionM = 60 m`) — "rẽ phải vào Đỗ Mười" was said twice
   55 m apart.
-- Verification: `flutter test` **580/580**, `flutter analyze` clean, and a
+- **Traffic is drawn on the map you actually drive with.** The jam colours
+  were wired into the raster preview map only; during navigation the app renders
+  the MapLibre vector map, which drew a single solid blue line. The congested
+  runs are now painted over it (and in the picture-in-picture map), sliced from
+  the raw geometry and clamped to the part of the route still ahead.
+- **The offline ETA adds the delay by share, not by the jam's average.** The
+  delay was the mean slowdown of the congested vertices applied to the WHOLE
+  route duration, so a 40-minute route with one crawling corner came out at
+  167 minutes and "+60 phút". Each vertex now contributes `1/r` weighted by the
+  road it stands for, so 5 % of the length crawling costs 5 % of the time.
+- **Xe tải routes offline.** The profile was wired into the routers but not into
+  `resolveRouteChain`, so a truck with no network fell through to "bộ dữ liệu
+  chỉ hỗ trợ ô tô và xe máy" even though the on-device graph serves it.
+- **An expired Map Tiles session is re-minted on the spot.** A 403 invalidated
+  the token but nothing minted a new one until the layer was re-selected, so the
+  Google basemap stayed dead for the rest of the drive; the tile fetch now swaps
+  in the live token and retries once.
+- **No provider keys ship in a public build.** Releases up to v1.2.3 were built
+  with a `.env` recreated from repo Secrets, so every published APK carried the
+  Vietmap / Google / DeepSeek / Tavily / Windy / CARTO keys inside `libapp.so`.
+  The release workflow now builds `--no-keys`, scans the finished APK against
+  every repository secret and fails the job if one appears; the affected
+  releases are drafts. **Those keys were public and must be rotated.**
+- Verification: `flutter test` **581/581**, `flutter analyze` clean, and a
   replay of the 2026-10-30 car drive (20 074 fixes, CT HCM–Long Thành–Dầu Giây)
   through `tool/waze_mod_compare.py` — toll-barrier and ramp entries gone, two
   sentences < 300 m apart: 0.

@@ -245,6 +245,42 @@ void main() {
       );
     });
 
+    test(
+      'a crawl on 5% of the route costs 5% of the time, not the whole route',
+      () {
+        // The bug this pins: the delay was the MEAN slowdown of the jammed
+        // vertices, applied to the full route duration — a 40 min route with one
+        // slow corner came out at 100 min and "+60 phút".
+        final route = line(40); // 39 segments
+        final at = DateTime(2026, 10, 31, 18, 0);
+        // Only the first two vertices are driven slowly (one cell worth ~5% of
+        // the length); everything else stays unknown, i.e. free flow.
+        final slow = route.sublist(0, 3);
+        return TrafficHistory.recordTrip(
+          driveAlong(slow, at, mps: 12 / 3.6),
+        ).then((_) async {
+          final rt = await TrafficHistory.forRoute(
+            route,
+            at: at,
+            freeFlowSeconds: 2400, // 40 minutes
+          );
+          expect(rt, isNotNull);
+          expect(rt!.spans, isNotEmpty);
+          // 0.4× over ~1/13 of the length ⇒ ~8% longer, nowhere near double.
+          expect(
+            rt.live.inSeconds,
+            lessThan(2400 * 1.5),
+            reason: 'a corner of the route must not double the ETA',
+          );
+          expect(
+            rt.live.inSeconds,
+            greaterThan(2400),
+            reason: 'it must still be slower than free flow',
+          );
+        });
+      },
+    );
+
     test('congestionScore separates a jammed route from a free one', () {
       final jam = line(6);
       final at = DateTime(2026, 10, 31, 18, 0);

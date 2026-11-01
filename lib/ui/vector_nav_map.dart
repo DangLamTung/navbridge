@@ -34,6 +34,8 @@ import 'package:navbridge/services/terrain.dart';
 import 'package:navbridge/services/vietmap_config.dart'
     show VietmapConfig, appendCartoApiKey;
 import 'package:navbridge/services/google_tiles.dart' show GoogleTileConfig;
+import 'package:navbridge/services/route_traffic.dart'
+    show RouteTraffic, TrafficLevel;
 import 'package:navbridge/core/car_filter.dart';
 import 'package:navbridge/core/route_snap.dart';
 import 'package:navbridge/core/trip_plan.dart';
@@ -136,6 +138,7 @@ class VectorNavMap extends StatefulWidget {
   const VectorNavMap({
     super.key,
     this.routeGeometry = const [],
+    this.routeTraffic,
     this.routeSteps = const [],
     this.routeStartIndex = 0,
     this.current,
@@ -176,6 +179,12 @@ class VectorNavMap extends StatefulWidget {
 
   /// Route polyline to draw (latlong2 points).
   final List<ll.LatLng> routeGeometry;
+
+  /// Live / predicted traffic for [routeGeometry]: jam runs are drawn ON TOP of
+  /// the route line, so the driver sees the congestion on the map they actually
+  /// navigate with — not only on the preview raster map. The spans index into
+  /// [routeGeometry] itself (see `RouteTraffic`), so no projection is needed.
+  final RouteTraffic? routeTraffic;
 
   final double defaultZoom;
 
@@ -1430,6 +1439,7 @@ class _VectorNavMapState extends State<VectorNavMap>
       }
       _casing = casing;
       _routeLine = routeLine;
+      await _addTrafficLines(ctrl, gen);
     } catch (e) {
       // Style/annotation manager transiently unavailable (e.g. emulator GPU
       // reset) — the route line is re-added on the next style-loaded event.
@@ -1442,6 +1452,47 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// driven is "consumed" and not drawn (Google-style). Starts at the car's
   /// snapped position once part of the route is behind it, so the drawn line
   /// begins right at the puck.
+  /// Draw the congested runs of the route over the blue line.
+  ///
+  /// Colours match the preview map (ui/traffic_overlay.dart): amber slow, red
+  /// jam. Sliced from the RAW geometry because the span indices point into it —
+  /// the decimated display list has different indices — and clamped to
+  /// [routeStartIndex] so a jam already behind the car is not painted ahead of
+  /// it.
+  Future<void> _addTrafficLines(MapLibreMapController ctrl, int gen) async {
+    final t = widget.routeTraffic;
+    final geo = widget.routeGeometry;
+    if (t == null || geo.length < 2) return;
+    final from = widget.routeStartIndex.clamp(0, geo.length - 1);
+    for (final span in t.spans) {
+      if (span.level == TrafficLevel.normal) continue;
+      final a = span.start.clamp(from, geo.length - 1);
+      final b = span.end.clamp(a + 1, geo.length);
+      if (b - a < 2) continue;
+      final pts = geo
+          .sublist(a, b)
+          .map((p) => LatLng(p.latitude, p.longitude))
+          .toList();
+      try {
+        final line = await ctrl.addLine(
+          LineOptions(
+            geometry: pts,
+            lineColor: span.level == TrafficLevel.jam ? '#D32F2F' : '#F9A825',
+            lineWidth: 10,
+          ),
+        );
+        if (!mounted || gen != _routeGen) {
+          ctrl.removeLine(line);
+          return;
+        }
+        _trafficLines.add(line);
+      } catch (e) {
+        debugPrint('VECTORMAP: traffic line skipped (map reloading): $e');
+        return;
+      }
+    }
+  }
+
   List<ll.LatLng> _drawnRoute() {
     final g = widget.routeGeometry;
     if (g.isEmpty) return g;

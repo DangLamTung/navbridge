@@ -141,6 +141,17 @@ String _tileHost(String template) {
 /// Fetches one tile respecting the OSM tile policy, with automatic failover
 /// across the primary + fallback tile servers. Returns null when every
 /// server failed — callers fall back to a transparent tile.
+/// Swap the session token baked in [template] for the CURRENT one.
+///
+/// The Map Tiles URL lives inside the map style, which is only rebuilt when the
+/// page rebuilds — so a token re-minted after a 403 would otherwise never reach
+/// the wire. Returns null when the template is not a Google tile URL.
+String? _liveGoogleTemplate(String template) {
+  if (!template.contains('tile.googleapis.com')) return null;
+  final live = GoogleTileConfig.tileUrl();
+  return live;
+}
+
 Future<http.Response?> _fetchTile(
   int z,
   int x,
@@ -164,6 +175,11 @@ Future<http.Response?> _fetchTile(
     );
   }
   if (_inFlightTiles.contains(key)) return null;
+
+  // One session re-mint per fetch: a Map Tiles 403 means the token died, and a
+  // second failure in the same call must fall through to the fallback servers
+  // rather than loop.
+  var googleRetried = false;
 
   // (Re)build the server rotation whenever the primary template changes
   // (i.e. the user switched basemap layer) — otherwise a new layer like ESRI
@@ -238,15 +254,23 @@ Future<http.Response?> _fetchTile(
     try {
       final res = await http
           .get(
-            Uri.parse(_tileUrl(template, z, x, y)),
+            Uri.parse(
+              _tileUrl(_liveGoogleTemplate(template) ?? template, z, x, y),
+            ),
             headers: {'User-Agent': _ua},
           )
           .timeout(const Duration(seconds: 8));
       if (res.statusCode == 403 || res.statusCode == 429) {
         // A 403 from the Map Tiles API is an expired/revoked SESSION, not a
-        // blocked host: drop the token so the next map build mints a new one.
-        if (template.contains('tile.googleapis.com')) {
+        // blocked host. Mint a new one HERE and retry: the template baked into
+        // the style still carries the dead token, so waiting for the next map
+        // build left the Google basemap dead for the whole drive.
+        if (template.contains('tile.googleapis.com') && !googleRetried) {
+          googleRetried = true;
           GoogleTileConfig.invalidateSession();
+          await GoogleTileConfig.ensureSession(force: true);
+          tried++;
+          continue;
         }
         // This provider blocked us — remember it and try the next one.
         _blockedTileServers.add(template);

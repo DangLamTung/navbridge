@@ -50,6 +50,7 @@ extension _NavBuild on _NavigationPageState {
                     // returns to the full-screen zoom instead of keeping it.
                     key: const ValueKey('navmap-pip'),
                     routeGeometry: route?.geometry ?? const [],
+                    routeTraffic: route?.traffic,
                     routeSteps: route?.steps ?? const [],
                     routeStartIndex: _routeStartIndex,
                     current: current,
@@ -214,6 +215,7 @@ extension _NavBuild on _NavigationPageState {
                   // PiP zoom.
                   key: const ValueKey('navmap-full'),
                   routeGeometry: route?.geometry ?? const [],
+                  routeTraffic: route?.traffic,
                   routeSteps: route?.steps ?? const [],
                   routeStartIndex: _routeStartIndex,
                   current: current,
