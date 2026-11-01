@@ -6,10 +6,9 @@ import 'package:navbridge/core/route_profile.dart';
 
 void main() {
   group('RouteProfile', () {
-
     test('3 cases', () {
-    // ---- case: OSRM profile mapping (motorbike rides on the car network) ----
-    (() {
+      // ---- case: OSRM profile mapping (motorbike rides on the car network) ----
+      (() {
         expect(RouteProfile.car.osrm, 'driving');
         // The motorbike profile is NAMED `motorcycle`. Verified against the
         // public server on 2026-09-20: both `driving` and `motorcycle` return
@@ -18,32 +17,30 @@ void main() {
         // car network; the distinct name only matters against a self-hosted
         // motorcycle profile.
         expect(RouteProfile.motorbike.osrm, 'motorcycle');
+        // No truck profile on the public OSRM: a lorry rides the car network and
+        // its lower ceiling comes from [legalMaxKmh], not from the router.
+        expect(RouteProfile.truck.osrm, 'driving');
         expect(RouteProfile.bicycle.osrm, 'cycling');
         expect(RouteProfile.walking.osrm, 'walking');
+      })();
 
-    })();
-
-
-    // ---- case: Vietnamese labels ----
-    (() {
+      // ---- case: Vietnamese labels ----
+      (() {
         expect(RouteProfile.car.label, 'Ô tô');
         expect(RouteProfile.motorbike.label, 'Xe máy');
+        expect(RouteProfile.truck.label, 'Xe tải');
         expect(RouteProfile.bicycle.label, 'Xe đạp');
         expect(RouteProfile.walking.label, 'Đi bộ');
+      })();
 
-    })();
-
-
-    // ---- case: every profile is selectable and complete ----
-    (() {
-        expect(kRouteProfiles.length, 4);
+      // ---- case: every profile is selectable and complete ----
+      (() {
+        expect(kRouteProfiles.length, 5);
         for (final p in kRouteProfiles) {
           expect(p.label, isNotEmpty);
           expect(p.osrm, isNotEmpty);
         }
-
-    })();
+      })();
     });
-
   });
 }

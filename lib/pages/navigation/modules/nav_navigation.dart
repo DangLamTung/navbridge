@@ -284,6 +284,7 @@ extension _NavNavigation on _NavigationPageState {
       // instead of the car. Bridge the small gap with interpolated points so
       // the polyline starts where the car actually is.
       final bridged = _bridgeRouteFrom(route, from);
+      unawaited(_enrichTraffic(bridged));
       setNavState(() {
         _route = bridged;
         _alternativeRoutes = [];
@@ -302,6 +303,7 @@ extension _NavNavigation on _NavigationPageState {
           maxSpeedMps: _routeProfile.legalMaxMps,
         );
         _lastManeuverSig = null;
+        _lastManeuverAt = null;
         _spokenFar = false;
         _spokenNear = false;
         _spokenFinal = false;
@@ -625,6 +627,8 @@ extension _NavNavigation on _NavigationPageState {
       _spokenFinal = false;
       _arrivedSpoken = false;
       _lastManeuverSig = null;
+      _lastManeuverAt = null;
+      _lastManeuverAt = null;
       _speedingSpoken = false;
       _lastOverspeedAt = null;
       // A CONTINUATION keeps what the drive already established (see
@@ -661,6 +665,7 @@ extension _NavNavigation on _NavigationPageState {
     _spokenFinal = false;
     _arrivedSpoken = false;
     _lastManeuverSig = null;
+    _lastManeuverAt = null;
     _speedingSpoken = false;
     _lastOverspeedAt = null;
     // A CONTINUATION keeps what the drive already established (see
@@ -723,6 +728,7 @@ extension _NavNavigation on _NavigationPageState {
     _spokenFinal = false;
     _arrivedSpoken = false;
     _lastManeuverSig = null;
+    _lastManeuverAt = null;
     _speedingSpoken = false;
     _lastOverspeedAt = null;
     // A CONTINUATION keeps what the drive already established (see
@@ -873,6 +879,7 @@ extension _NavNavigation on _NavigationPageState {
       );
       if (!mounted || _destination == null) return null;
       final bridged = _bridgeRouteFrom(route, cur);
+      unawaited(_enrichTraffic(bridged));
       final engine = TurnByTurnEngine(
         bridged,
         stopNames: _engineStopNames(bridged),
@@ -887,6 +894,7 @@ extension _NavNavigation on _NavigationPageState {
         _routeStartIndex = 0;
         _engine = engine;
         _lastManeuverSig = null;
+        _lastManeuverAt = null;
         _spokenFar = false;
         _spokenNear = false;
         _spokenFinal = false;
@@ -1076,5 +1084,82 @@ extension _NavNavigation on _NavigationPageState {
         ).showSnackBar(SnackBar(content: Text('BLE: $e')));
       }
     }
+  }
+
+  /// Ask Google for the jam runs on the route just planned, when the router did
+  /// not supply them.
+  ///
+  /// The Google router's own response carries `speedReadingIntervals`; OSRM,
+  /// Vietmap and the offline graph have no traffic at all. This is the ONE extra
+  /// request that colours the line and produces the "+18 phút" chip — issued
+  /// once per plan (never per fix), and silently skipped with no key, no
+  /// network, or when the route already has a reading.
+  /// ⭐ Two sources, one outcome: LIVE traffic when a provider answers, and the
+  /// OFFLINE pattern ([TrafficHistory]) when it cannot. Before this, a missing
+  /// key or a dead network meant the map said nothing about congestion at all,
+  /// even though the device had driven the same road a hundred times.
+  Future<void> _enrichTraffic(OsrmRoute planned) async {
+    if (planned.traffic != null) return;
+    if (!mounted) return;
+    // Live first — it knows about the crash 10 minutes ago.
+    if (GoogleTileConfig.hasKey) {
+      await _enrichTrafficLive(planned);
+      if (planned.traffic != null) return;
+    }
+    await _enrichTrafficHistory(planned);
+  }
+
+  Future<void> _enrichTrafficLive(OsrmRoute planned) async {
+    final geo = planned.geometry;
+    if (geo.length < 2) return;
+    final t = await fetchGoogleRouteTraffic(
+      from: geo.first,
+      to: geo.last,
+      geometry: geo,
+      distanceMeters: planned.distance,
+      profile: _routeProfile,
+    );
+    if (!mounted || t == null) return;
+    // A reroute may have replaced the route while the request was in flight.
+    if (!identical(_route, planned)) return;
+    _applyTraffic(planned, t);
+  }
+
+  /// OFFLINE / no-key traffic: the pattern this device learned from its own
+  /// recorded drives ([TrafficHistory]), for the hour the car will be there.
+  ///
+  /// Used when the live provider cannot answer — no key compiled in, no
+  /// network, an API refusal, or a rate limit. It is a forecast, so
+  /// `RouteTraffic.estimated` is set and the chip says "dự đoán".
+  Future<void> _enrichTrafficHistory(OsrmRoute planned) async {
+    if (planned.traffic != null) return;
+    final geo = planned.geometry;
+    if (geo.length < 2) return;
+    final t = await TrafficHistory.forRoute(
+      geo,
+      at: DateTime.now().add(const Duration(minutes: 1)),
+      freeFlowSeconds: planned.duration,
+    );
+    if (!mounted || t == null || t.spans.isEmpty) return;
+    if (!identical(_route, planned)) return;
+    _applyTraffic(planned, t);
+  }
+
+  /// Install a traffic reading on the live route and log why.
+  void _applyTraffic(OsrmRoute planned, RouteTraffic t) {
+    // The engine's own duration is free-flow (OSRM / Vietmap / offline have no
+    // traffic model), so the traffic-aware time becomes the ETA. A Google
+    // planned route already carries it and is never enriched here.
+    final live = t.live.inSeconds > 0 ? t.live.inSeconds.toDouble() : null;
+    setNavState(() => _route = planned.withTraffic(t, duration: live));
+    final jams = t.spans.where((s) => s.level == TrafficLevel.jam).length;
+    final slow = t.spans.where((s) => s.level == TrafficLevel.slow).length;
+    debugPrint(
+      'TRAFFIC${t.estimated ? '(dự đoán)' : ''}: '
+      '${t.delayed ? t.delayLabel : 'không kẹt'} '
+      '(${t.spans.length} đoạn, $jams kẹt, $slow chậm; '
+      '${t.timeLabel}; live ${t.live.inSeconds}s / free '
+      '${t.freeFlow.inSeconds}s)',
+    );
   }
 }

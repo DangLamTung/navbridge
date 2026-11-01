@@ -46,6 +46,48 @@ const int kLayerStepConfirmFixes = 2;
 /// last several fixes — but the metres can.
 const double kZoneStepConfirmM = 150.0;
 
+/// True when this road is LIMITED ACCESS — an expressway, its ramps, a toll
+/// plaza, a slip road — where a low posted limit is the barrier, the ramp or
+/// roadworks and never a built-up verdict.
+///
+/// Measured 2026-10-30 on a car drive down CT HCM–Long Thành–Dầu Giây: the Dầu
+/// Giây toll plaza posts 60 on a WME class-3 segment and the app answered with
+/// "Bắt đầu khu dân cư" at the barrier, then "Hết khu dân cư" 200 m later at
+/// 120 km/h. The same drive's ramp ("Hầm chui > Cao tốc", class 4, 50 km/h) and
+/// slip road ("> Dầu Giây", 60 km/h) did the same. [roadClass] is the WME
+/// `roadType`: 3 = freeway, 4 = ramp.
+bool isLimitedAccessRoad(String? name, {int roadClass = 0}) {
+  if (roadClass == 3 || roadClass == 4) return true;
+  final n = (name ?? '').trimLeft().toLowerCase();
+  if (n.isEmpty) return false;
+  return n.startsWith('>') ||
+      n.startsWith('ct') ||
+      n.contains('cao tốc') ||
+      n.contains('thu phí') ||
+      n.contains('expressway');
+}
+
+/// The "làn hỗn hợp" (mixed lane beside an expressway) shares its corridor with
+/// the 80 km/h main carriageway, so switching between them must not move the
+/// zone at all — measured 8 flips in 8 minutes on Mai Chí Thọ.
+bool isMixedLane(String? name) =>
+    (name ?? '').toLowerCase().contains('làn hỗn hợp');
+
+/// How close two khu dân cư SENTENCES may be before the second one is dropped,
+/// metres.
+///
+/// The state still follows the road (the statutory limit changes); only the
+/// announcement is held. 300 m is below the shortest real built-up stretch
+/// measured on these drives (500 m, and the 176 km run's closest genuine pair
+/// was 366 m) and above every artifact seen so far:
+///
+///   * 2026-10-30, QL1/QL20 at 110 km/h: "Hết" and "Bắt đầu" logged 1 ms apart
+///     (the same fix, two lookups disagreeing) and 180 m apart on the CT01
+///     approach;
+///   * 2026-10-30, Mai Chí Thọ: 8 flips in 8 minutes while changing between the
+///     mixed lane (60) and the expressway carriageway (80).
+const double kZoneMinGapM = 300.0;
+
 /// How close an OPPOSITE khu dân cư transition may be to the one just
 /// announced before it is treated as the other direction's plate / a flicker,
 /// metres. Inside this window the announcement needs the posted LAYER to have
@@ -57,6 +99,44 @@ const double kZoneStepConfirmM = 150.0;
 /// swallowed the entry at km 135,4 and the ones at 147,3 / 166,9 while the
 /// villages were still there in the data.
 const double kZoneFlipGuardM = 200.0;
+
+/// How close the OPPOSITE prohibition may be to the one just announced before it
+/// counts as the other carriageway's plate rather than a real change, metres.
+///
+/// CẤM VƯỢT is a kilometres-long ban; measured 2026-10-25, the pack put "cấm
+/// vượt" at km 40,6 / 41,5 and "hết cấm vượt" at 42,2 on the same stretch, and
+/// all three were announced inside 2 s.
+const double kProhibitionFlipM = 1000.0;
+
+/// How close a no-overtaking callout may be to a khu dân cư sentence, metres.
+///
+/// ⭐ Two sentences at one junction are heard as one. Measured 2026-10-29 (176 km
+/// Bảo Lộc → Sài Gòn): three of the 14 prohibition callouts landed 45 / 52 /
+/// 69 m from "Bắt đầu / Hết khu dân cư" — 3–5 s of driving at 50 km/h, i.e.
+/// while the boundary sentence was still being spoken. The boundary wins (it
+/// moves the statutory limit), so the prohibition is the one held; pairs 400 m
+/// or more apart are ~30 s of driving and are kept.
+const double kZoneProhibitionGapM = 200.0;
+
+/// Should this no-overtaking plate stay SILENT?
+///
+/// Pure, so the policy the driver hears can be pinned by a test. Each rule was
+/// bought with a measured defect (2026-10-25 / 2026-10-29 drives):
+///
+///  * [startsBan] `== bannedNow` — the pack repeats P.125 every couple of
+///    kilometres along ONE ban, and posts ban + end at the same point, so
+///    "cấm vượt" while it is already in force (or "hết cấm vượt" when no ban
+///    was announced) tells the driver nothing.
+///  * [oppositeNear] — the opposite plate a few hundred metres later is the
+///    other carriageway's (see [kProhibitionFlipM]).
+///  * [zoneNear] — a built-up boundary sentence was just spoken at this
+///    junction, and the two must not overlap (see [kZoneProhibitionGapM]).
+bool prohibitionSuppressed({
+  required bool startsBan,
+  required bool bannedNow,
+  required bool oppositeNear,
+  required bool zoneNear,
+}) => zoneNear || oppositeNear || startsBan == bannedNow;
 
 /// How far ahead of the car a speed sign is ADOPTED (becomes the preview
 /// limit / the next-limit wording). Beyond this the sign is not looked at, so

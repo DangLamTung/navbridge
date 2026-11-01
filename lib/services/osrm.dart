@@ -12,6 +12,8 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import 'route_traffic.dart' show RouteTraffic;
+
 const String osrmPublic = 'https://router.project-osrm.org';
 
 /// Override for [osrmPublic] — set once at startup when a LOCAL relay is in
@@ -94,6 +96,12 @@ class OsrmRoute {
   /// Toll stations along the route (Vietmap only; empty otherwise).
   final List<TollInfo> tolls;
 
+  /// Live-traffic reading for this route (Google Routes API
+  /// `TRAFFIC_ON_POLYLINE`): jam runs + the free-flow comparison behind the
+  /// "+18 phút" ETA chip. Null when no traffic data was requested or returned —
+  /// the map then draws the route in one colour, exactly as before.
+  final RouteTraffic? traffic;
+
   OsrmRoute({
     required this.distance,
     required this.duration,
@@ -102,7 +110,26 @@ class OsrmRoute {
     this.stopCumulative = const [],
     this.tollCost,
     this.tolls = const [],
+    this.traffic,
   });
+
+  /// A copy carrying [traffic] — the enrichment arrives after the route does
+  /// (its own request, or the same response parsed later).
+  ///
+  /// [duration] replaces the routing engine's own estimate with the
+  /// TRAFFIC-AWARE one. Only the enrichment path passes it: a Google-planned
+  /// route already carries live duration in [duration], so replacing it there
+  /// would count the same delay twice.
+  OsrmRoute withTraffic(RouteTraffic? t, {double? duration}) => OsrmRoute(
+    distance: distance,
+    duration: duration ?? this.duration,
+    geometry: geometry,
+    steps: steps,
+    stopCumulative: stopCumulative,
+    tollCost: tollCost,
+    tolls: tolls,
+    traffic: t,
+  );
 }
 
 /// Decode a Google/OSRM encoded polyline (precision 5).

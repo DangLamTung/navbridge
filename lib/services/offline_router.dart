@@ -1355,22 +1355,28 @@ Future<List<OsrmRoute>> _routeVia(
 }) async {
   switch (provider) {
     case RouteProvider.google:
-      // Motorbike must use Routes API v2 `TWO_WHEELER` (Legacy has no such
-      // mode); it honours routeModifiers.avoidHighways/avoidFerries.
-      final google = profile == RouteProfile.motorbike
-          ? fetchGoogleTwoWheelerRoutes(
-              points,
-              maxAlternatives: maxAlternatives,
-              avoidHighway: avoidHighway,
-              avoidFerry: avoidFerry,
-            )
-          : fetchGoogleRoutes(
-              points,
-              maxAlternatives: maxAlternatives,
-              profile: profile,
-              avoidHighway: avoidHighway,
-              avoidFerry: avoidFerry,
-            );
+      // EVERY road vehicle uses Routes API v2 — `DRIVE` (ô tô), `TWO_WHEELER`
+      // (xe máy), `TRUCK` (xe tải). Legacy Directions has no two-wheeler and no
+      // lorry mode, and it cannot return traffic intervals at all. Only the
+      // human-powered pair (bicycle / walking) still goes to Legacy.
+      final google = switch (profile) {
+        RouteProfile.car ||
+        RouteProfile.motorbike ||
+        RouteProfile.truck => fetchGoogleRoutesV2(
+          points,
+          profile: profile,
+          maxAlternatives: maxAlternatives,
+          avoidHighway: avoidHighway,
+          avoidFerry: avoidFerry,
+        ),
+        RouteProfile.bicycle || RouteProfile.walking => fetchGoogleRoutes(
+          points,
+          maxAlternatives: maxAlternatives,
+          profile: profile,
+          avoidHighway: avoidHighway,
+          avoidFerry: avoidFerry,
+        ),
+      };
       return onlineTimeout == null
           ? await google
           : await google.timeout(onlineTimeout);

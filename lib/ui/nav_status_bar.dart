@@ -32,11 +32,24 @@ class NavStatusBar extends StatefulWidget {
     this.onModeChanged,
     this.destination,
     this.dark = false,
+    this.trafficDelayMinutes = 0,
+    this.trafficTimeLabel = '',
   });
 
   final double remainingMeters;
   final int etaMinutes;
   final double progress;
+
+  /// Extra minutes the live-traffic model adds over free-flow
+  /// (`RouteTraffic.delaySeconds`). 0 hides the chip entirely — a route with no
+  /// traffic reading and a route that is exactly on time look the same, which
+  /// is correct: there is nothing to warn about.
+  final int trafficDelayMinutes;
+
+  /// When that reading applies — "lúc 12:21" (live) or "dự đoán 18:00"
+  /// (offline pattern). Shown in the chip's tooltip so a stale or forecast
+  /// number is never mistaken for this minute.
+  final String trafficTimeLabel;
 
   /// Current weather (temp / feels-like / humidity / wind) — richer than the
   /// single °C. Null hides the weather row.
@@ -172,6 +185,21 @@ class _NavStatusBarState extends State<NavStatusBar> {
                     label: minutes < 1 ? '<1\'' : '$minutes phút',
                     color: fg,
                   ),
+                  // Live traffic: only when the model actually costs time.
+                  if (widget.trafficDelayMinutes >= 1) ...[
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: widget.trafficTimeLabel.isEmpty
+                          ? 'Kẹt xe: +${widget.trafficDelayMinutes} phút'
+                          : 'Kẹt xe: +${widget.trafficDelayMinutes} phút '
+                                '(${widget.trafficTimeLabel})',
+                      child: _Stat(
+                        icon: Icons.traffic_outlined,
+                        label: '+${widget.trafficDelayMinutes}\'',
+                        color: const Color(0xFFD32F2F),
+                      ),
+                    ),
+                  ],
                   const SizedBox(width: 12),
                   Icon(Icons.location_on, size: 16, color: kAppBlue),
                 ],

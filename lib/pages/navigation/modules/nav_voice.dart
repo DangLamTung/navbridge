@@ -25,6 +25,31 @@ ManeuverCalloutZone maneuverCalloutZone({
   return ManeuverCalloutZone.none;
 }
 
+/// How close two maneuver points must be to count as ONE junction, metres.
+///
+/// The step list has more steps than the driver has turns: OSRM reports the
+/// roundabout AND its exit as two steps a few metres apart, and the snapped car
+/// can flip between them while it sits on the boundary. Treating each as a new
+/// turn restarted the 400 / 300 / 100 m contract, so "rẽ phải vào Đỗ Mười" was
+/// spoken twice 55 m apart (measured 2026-10-29, four junctions on the 176 km
+/// Bảo Lộc → Sài Gòn drive: repeats at 8, 55 and 73 m). Inside this radius the
+/// callouts already spent stay spent — one junction, one set of sentences.
+const double kManeuverSameJunctionM = 60.0;
+
+/// Is [maneuverAt] still the junction the callouts were armed for?
+///
+/// Pure so the "one junction, one set of sentences" rule can be tested without
+/// a drive. A missing endpoint (no maneuver yet, or nothing armed) is NOT the
+/// same junction — a fresh trip must arm.
+bool sameJunctionAsArmed(
+  LatLng? armedAt,
+  LatLng? maneuverAt, {
+  double radiusM = kManeuverSameJunctionM,
+}) =>
+    armedAt != null &&
+    maneuverAt != null &&
+    distanceMeters(armedAt, maneuverAt) <= radiusM;
+
 extension _NavVoice on _NavigationPageState {
   /// Open the AI assistant chat panel. [question] is auto-sent on open (e.g.
   /// from the voice command "hỏi AI …"); null opens an empty chat.
@@ -471,9 +496,15 @@ extension _NavVoice on _NavigationPageState {
     // announced. (The old "distance jumped up by 50 m" test misfired on
     // GPS/SIM jitter, re-announcing the same turn.)
     final sig = _maneuverSignature(nav);
-    final isNew = sig != _lastManeuverSig;
-    if (isNew) {
+    final mv = nav.maneuver;
+    final sameJunction = sameJunctionAsArmed(_lastManeuverAt, mv);
+    // A different instruction at the SAME junction (the roundabout and the exit
+    // 20 m later) is not a new turn: the sentences already spoken there stand,
+    // or the driver hears "rẽ phải vào X" and then "đi theo vòng xuyến vào X"
+    // within a few seconds — see [kManeuverSameJunctionM].
+    if (sig != _lastManeuverSig && !sameJunction) {
       _lastManeuverSig = sig;
+      _lastManeuverAt = mv;
       _spokenFar = false;
       _spokenNear = false;
       _spokenFinal = false;
@@ -530,9 +561,7 @@ extension _NavVoice on _NavigationPageState {
     final sig = _maneuverSignature(nav);
     unawaited(() async {
       await _ensureNextStreetLimit(nav);
-      if (!mounted ||
-          token != _maneuverSpeakToken ||
-          sig != _lastManeuverSig) {
+      if (!mounted || token != _maneuverSpeakToken || sig != _lastManeuverSig) {
         return;
       }
       final txt = _announce(nav, m, now: now);
@@ -649,8 +678,10 @@ extension _NavVoice on _NavigationPageState {
         // logged announcement shows up in the trip file as if it were spoken
         // (it did — tool/announce_speed_audit.py counted these as limit
         // callouts on the 2026-09-24 replay).
-        debugPrint('NEXT-LIMIT: skipped, layer "$layerName" != target '
-            '"$target"');
+        debugPrint(
+          'NEXT-LIMIT: skipped, layer "$layerName" != target '
+          '"$target"',
+        );
         return;
       }
       // The posted value, capped for the vehicle.
@@ -787,8 +818,7 @@ extension _NavVoice on _NavigationPageState {
   /// Remember the limit that was just spoken so the same value is not
   /// announced twice in two different sentences. The change announcement
   /// consults this itself (see [LimitChangeAnnouncer.announce]).
-  void _noteLimitSpoken(int kmh) =>
-      _limitAnnouncer.noteSpoken(kmh, navNow());
+  void _noteLimitSpoken(int kmh) => _limitAnnouncer.noteSpoken(kmh, navNow());
 
   /// Warn by voice when the driver EXCEEDS the road's speed limit. Announces
   /// once when the speeding episode starts, then at most every 60 s while
@@ -947,7 +977,11 @@ extension _NavVoice on _NavigationPageState {
       roadContext: ri == null
           ? null
           : '${ri.name.isEmpty ? '(unnamed)' : ri.name}, ${ri.highway}, '
-                'dir=${switch (ri.oneway) { true => 'one-way', false => 'two-way', _ => '?' }}, '
+                'dir=${switch (ri.oneway) {
+                  true => 'one-way',
+                  false => 'two-way',
+                  _ => '?',
+                }}, '
                 'lanes=${ri.lanes ?? '?'}, '
                 '${ri.urban ? 'urban' : 'outside town'}, '
                 // The DIAGNOSIS fields: the road's own value next to the value

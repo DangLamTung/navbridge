@@ -73,7 +73,9 @@ extension _NavTrackSim on _NavigationPageState {
     final req = simTakeTrackSimRequest();
     if (req == null) return;
     if (req.length < 2) {
-      debugPrint('SIM: a simulation needs at least 2 points, got ${req.length}');
+      debugPrint(
+        'SIM: a simulation needs at least 2 points, got ${req.length}',
+      );
       return;
     }
     if (_trackSimRunning || _startedReplay) {
@@ -128,14 +130,17 @@ extension _NavTrackSim on _NavigationPageState {
   String get _gpsDestRef =>
       kIsWeb ? (Uri.base.queryParameters['dest'] ?? '').trim() : '';
 
-  bool get _gpsNavWanted => kIsWeb && (Uri.base.queryParameters['nav'] ?? '') == '1';
+  bool get _gpsNavWanted =>
+      kIsWeb && (Uri.base.queryParameters['nav'] ?? '') == '1';
 
   Future<void> _runGpsFileSim(String ref) async {
     final fixes = await TripReplay.load(ref);
     if (!mounted) return;
     if (fixes.length < 2) {
-      debugPrint('SIM: "$ref" produced ${fixes.length} fixes — a GPS trace needs '
-          'at least 2');
+      debugPrint(
+        'SIM: "$ref" produced ${fixes.length} fixes — a GPS trace needs '
+        'at least 2',
+      );
       return;
     }
     final tspeed = _simParam('tspeed', simFeedSpeed);
@@ -150,8 +155,10 @@ extension _NavTrackSim on _NavigationPageState {
     // ── the destination, if the caller says the driver had one.
     LatLng? dest;
     if (_gpsDestRef.isNotEmpty) {
-      final parts =
-          _gpsDestRef.split(',').map((s) => double.tryParse(s.trim())).toList();
+      final parts = _gpsDestRef
+          .split(',')
+          .map((s) => double.tryParse(s.trim()))
+          .toList();
       if (parts.length == 2 && parts.every((p) => p != null)) {
         dest = LatLng(parts[0]!, parts[1]!);
       } else {
@@ -173,7 +180,9 @@ extension _NavTrackSim on _NavigationPageState {
           onlineTimeout: const Duration(seconds: 120),
         );
       } catch (e) {
-        debugPrint('SIM(GPS): could not plan a route from the trace to $dest: $e');
+        debugPrint(
+          'SIM(GPS): could not plan a route from the trace to $dest: $e',
+        );
       }
       if (!mounted) return;
       if (route != null && route.geometry.length >= 2) {
@@ -186,9 +195,11 @@ extension _NavTrackSim on _NavigationPageState {
       }
     }
     if (route == null) {
-      debugPrint('SIM(GPS): scope — NO route and NO engine are installed; roads, '
-          'limits, signs, built-up and announcements are derived from the map '
-          'data, so there are no manoeuvre/next-street callouts');
+      debugPrint(
+        'SIM(GPS): scope — NO route and NO engine are installed; roads, '
+        'limits, signs, built-up and announcements are derived from the map '
+        'data, so there are no manoeuvre/next-street callouts',
+      );
     }
 
     // The trip is recorded exactly as a live drive records one.
@@ -215,7 +226,8 @@ extension _NavTrackSim on _NavigationPageState {
           ..clear()
           ..add(
             TripStop(
-              name: 'gps → ${dest.latitude.toStringAsFixed(4)},'
+              name:
+                  'gps → ${dest.latitude.toStringAsFixed(4)},'
                   '${dest.longitude.toStringAsFixed(4)}',
               lat: dest.latitude,
               lng: dest.longitude,
@@ -280,16 +292,19 @@ extension _NavTrackSim on _NavigationPageState {
     // is native-only, and the public OSRM server is not reachable from the
     // browser (measured: "ROUTER: GraphHopper returned no route — next", then
     // silence). tool/sim_track.py plans the route with OSRM and serves it.
-    final routeRef =
-        kIsWeb ? (Uri.base.queryParameters['route'] ?? '').trim() : '';
+    final routeRef = kIsWeb
+        ? (Uri.base.queryParameters['route'] ?? '').trim()
+        : '';
     OsrmRoute? supplied;
     if (routeRef.isNotEmpty) {
       final body = (await http.get(Uri.base.resolve(routeRef))).body;
       final routes = parseOsrmResponse(body);
       if (!mounted) return;
       if (routes.isEmpty) {
-        debugPrint('SIM: "$routeRef" is not an OSRM response with routes[0] — '
-            'nothing to drive');
+        debugPrint(
+          'SIM: "$routeRef" is not an OSRM response with routes[0] — '
+          'nothing to drive',
+        );
         return;
       }
       supplied = routes.first;
@@ -304,12 +319,12 @@ extension _NavTrackSim on _NavigationPageState {
       // correctly in a Dart VM test. Print the TAIL so a damaged decode is
       // visible here instead of surfacing as a drive that dies without an error.
       final g = supplied.geometry;
-      final tail = g.length <= 6
-          ? g
-          : g.sublist(g.length - 6);
-      debugPrint('SIM: geometry first ${g.first} last ${g.last} tail '
-          '${tail.map((p) => '${p.latitude.toStringAsFixed(5)},'
-              '${p.longitude.toStringAsFixed(5)}').join(' | ')}');
+      final tail = g.length <= 6 ? g : g.sublist(g.length - 6);
+      debugPrint(
+        'SIM: geometry first ${g.first} last ${g.last} tail '
+        '${tail.map((p) => '${p.latitude.toStringAsFixed(5)},'
+            '${p.longitude.toStringAsFixed(5)}').join(' | ')}',
+      );
       // Refuse a route that decoded into nonsense. Without this the drive dies
       // silently (measured: a destination of 27.917,32.643, then nothing at all
       // — no track, no trip, no error), which looks exactly like a broken app.
@@ -319,8 +334,10 @@ extension _NavTrackSim on _NavigationPageState {
           p.longitude > 101 &&
           p.longitude < 111;
       if (!inVn(g.first) || !inVn(g.last)) {
-        debugPrint('SIM: refusing the supplied route — its endpoints are not in '
-            'Việt Nam: ${g.first}, ${g.last} (the polyline decoded wrongly)');
+        debugPrint(
+          'SIM: refusing the supplied route — its endpoints are not in '
+          'Việt Nam: ${g.first}, ${g.last} (the polyline decoded wrongly)',
+        );
         return;
       }
     }
@@ -333,9 +350,12 @@ extension _NavTrackSim on _NavigationPageState {
       from = supplied.geometry.first;
       to = supplied.geometry.last;
     } else if (spec.isNotEmpty) {
-      final parts =
-          spec.split(',').map((s) => double.tryParse(s.trim())).toList();
-      final ok = parts.length == 4 &&
+      final parts = spec
+          .split(',')
+          .map((s) => double.tryParse(s.trim()))
+          .toList();
+      final ok =
+          parts.length == 4 &&
           parts.every((p) => p != null) &&
           parts[0]!.abs() <= 90 &&
           parts[1]!.abs() <= 180 &&
@@ -351,14 +371,18 @@ extension _NavTrackSim on _NavigationPageState {
       final fixes = await TripReplay.load(_trackSimRef);
       if (!mounted) return;
       if (fixes.isEmpty) {
-        debugPrint('SIM: "$_trackSimRef" produced no points to take endpoints '
-            'from');
+        debugPrint(
+          'SIM: "$_trackSimRef" produced no points to take endpoints '
+          'from',
+        );
         return;
       }
       from = fixes.first.point;
       to = fixes.last.point;
-      debugPrint('SIM: endpoints taken from "$_trackSimRef" '
-          '(${fixes.length} points) — the points themselves are NOT driven');
+      debugPrint(
+        'SIM: endpoints taken from "$_trackSimRef" '
+        '(${fixes.length} points) — the points themselves are NOT driven',
+      );
     } else {
       return; // mode not armed
     }
@@ -431,15 +455,19 @@ extension _NavTrackSim on _NavigationPageState {
           onlineTimeout: const Duration(seconds: 120),
         );
       } catch (e) {
-        debugPrint('SIM: could not plan a route from $startPoint to '
-            '$endPoint: $e');
+        debugPrint(
+          'SIM: could not plan a route from $startPoint to '
+          '$endPoint: $e',
+        );
         return;
       }
     }
     if (!mounted) return;
     if (route.geometry.length < 2) {
-      debugPrint('SIM: the planned route has ${route.geometry.length} points — '
-          'nothing to drive');
+      debugPrint(
+        'SIM: the planned route has ${route.geometry.length} points — '
+        'nothing to drive',
+      );
       return;
     }
     debugPrint(
@@ -469,6 +497,8 @@ extension _NavTrackSim on _NavigationPageState {
     // difference is the feed: `track:` pushes synthesised fixes through
     // `_onGpsFix` (outlier gate, heading filter, road lookup) instead of
     // stepping the geometry cleanly through `_handleNav`.
+    // Live traffic for the simulated route, exactly as a real plan gets it.
+    unawaited(_enrichTraffic(route));
     setNavState(() {
       _route = route;
       _alternativeRoutes = [];
@@ -485,7 +515,8 @@ extension _NavTrackSim on _NavigationPageState {
         ..clear()
         ..add(
           TripStop(
-            name: 'sim ${endPoint.latitude.toStringAsFixed(4)},'
+            name:
+                'sim ${endPoint.latitude.toStringAsFixed(4)},'
                 '${endPoint.longitude.toStringAsFixed(4)}',
             lat: endPoint.latitude,
             lng: endPoint.longitude,
@@ -518,8 +549,10 @@ extension _NavTrackSim on _NavigationPageState {
     // would issue a call every fraction of a second against a service that took
     // 76 s per call. A trip from this run is a real trip, but it is not a
     // matcher-verified one.
-    debugPrint('SIM: scope — remote OSRM /match skipping (online road-snapper '
-        'not exercised)');
+    debugPrint(
+      'SIM: scope — remote OSRM /match skipping (online road-snapper '
+      'not exercised)',
+    );
     await _startSimulation(
       track: track,
       trackSpeed: driveSpeed,
@@ -532,8 +565,10 @@ extension _NavTrackSim on _NavigationPageState {
     _trackSimRunning = false;
     _trackSimSub = null;
     final t = _trip;
-    debugPrint('SIM: drive finished — $simFixesFed fixes fed, '
-        '${simLog.length} announcements');
+    debugPrint(
+      'SIM: drive finished — $simFixesFed fixes fed, '
+      '${simLog.length} announcements',
+    );
     if (t == null) {
       debugPrint('SIM: no trip was recorded');
       simEndRun(SimRunState.done);
@@ -549,8 +584,10 @@ extension _NavTrackSim on _NavigationPageState {
       // POI lookup is best-effort; a failure must never lose the trip.
     }
     final body = const JsonEncoder.withIndent('  ').convert(t.toTakeoutJson());
-    debugPrint('SIM: TRIP ${t.defaultFileName} — ${body.length} bytes, '
-        '${t.fixCount} fixes');
+    debugPrint(
+      'SIM: TRIP ${t.defaultFileName} — ${body.length} bytes, '
+      '${t.fixCount} fixes',
+    );
     // ⭐ Hand the OUTPUT to the console. The web build has no documents
     // directory, so the trip is a DOWNLOAD (and a copyable string) rather than a
     // file on disk — the two things that make a simulated drive something the

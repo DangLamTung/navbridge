@@ -3,12 +3,13 @@ library;
 
 import 'package:flutter/material.dart';
 
-enum RouteProfile { car, motorbike, bicycle, walking }
+enum RouteProfile { car, motorbike, truck, bicycle, walking }
 
-/// The four selectable profiles (in cycle order).
+/// The selectable profiles (in cycle order).
 const List<RouteProfile> kRouteProfiles = [
   RouteProfile.car,
   RouteProfile.motorbike,
+  RouteProfile.truck,
   RouteProfile.bicycle,
   RouteProfile.walking,
 ];
@@ -17,6 +18,7 @@ extension RouteProfileX on RouteProfile {
   String get label => switch (this) {
     RouteProfile.car => 'Ô tô',
     RouteProfile.motorbike => 'Xe máy',
+    RouteProfile.truck => 'Xe tải',
     RouteProfile.bicycle => 'Xe đạp',
     RouteProfile.walking => 'Đi bộ',
   };
@@ -24,6 +26,7 @@ extension RouteProfileX on RouteProfile {
   IconData get icon => switch (this) {
     RouteProfile.car => Icons.directions_car,
     RouteProfile.motorbike => Icons.two_wheeler,
+    RouteProfile.truck => Icons.local_shipping,
     RouteProfile.bicycle => Icons.directions_bike,
     RouteProfile.walking => Icons.directions_walk,
   };
@@ -33,6 +36,10 @@ extension RouteProfileX on RouteProfile {
   String get osrm => switch (this) {
     RouteProfile.car => 'driving',
     RouteProfile.motorbike => 'motorcycle',
+    // The public OSRM has no truck profile; the truck's legal ceiling is
+    // applied by the app's own speed table, and Google (Routes API TRUCK) is
+    // the provider that actually knows about lorry restrictions.
+    RouteProfile.truck => 'driving',
     RouteProfile.bicycle => 'cycling',
     RouteProfile.walking => 'walking',
   };
@@ -49,6 +56,9 @@ extension RouteProfileX on RouteProfile {
   double get legalMaxKmh => switch (this) {
     RouteProfile.car => 120,
     RouteProfile.motorbike => 80,
+    // Luật TTATGT 2024: xe tải (ngoài đô thị, đường 2 làn) 80 km/h; thấp hơn
+    // ô tô nên ETA của xe tải không bao giờ nhanh hơn luật cho phép.
+    RouteProfile.truck => 80,
     RouteProfile.bicycle => 40,
     RouteProfile.walking => 10,
   };

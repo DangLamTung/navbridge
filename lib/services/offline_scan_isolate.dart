@@ -406,9 +406,17 @@ Object? _runQuery(
         // A zone-referenced sign (khu đông dân cư boundary, trạm thu phí …) is
         // stored at an area vertex, not on the carriageway: keep the 40 m
         // corridor for roadside posts and let these reach in from further out.
-        lateralFor: (s) => zoneSignKinds.contains(s.kind)
-            ? kZoneLateralMeters
-            : msg.lateralMeters,
+        // A no-overtaking plate is NOT one of them — it is a post, and the wide
+        // corridor let plates 130 m off the line (another street's) drive the
+        // callout (see kProhibitionLateralMeters).
+        lateralFor: (s) => switch (s.kind) {
+          RoadSignKind.noPassing ||
+          RoadSignKind.noPassingEnd => kProhibitionLateralMeters,
+          _ =>
+            zoneSignKinds.contains(s.kind)
+                ? kZoneLateralMeters
+                : msg.lateralMeters,
+        },
         // ⭐ Only the post on OUR side of the road governs our traffic: a plate
         // standing LEFT of the direction of travel belongs to the opposite
         // carriageway, and reading it is how the app announced (and adopted as
@@ -418,6 +426,13 @@ Object? _runQuery(
         // boundary plates within 150 m of the path, 14 of them LEFT and
         // heading-less.
         rightSideFor: (_) => true,
+        // A no-overtaking plate stands on a verge, not on the centreline, so
+        // the 6 m slack does not apply to it (see kProhibitionSideM).
+        leftToleranceFor: (s) => switch (s.kind) {
+          RoadSignKind.noPassing ||
+          RoadSignKind.noPassingEnd => kProhibitionSideM,
+          _ => kLeftSideToleranceM,
+        },
       ),
     };
   }

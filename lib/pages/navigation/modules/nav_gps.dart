@@ -1144,7 +1144,15 @@ extension _NavGps on _NavigationPageState {
       _layerHold.note(layerName ?? road.name, pos);
       // The zone state comes from the posted value under the car (see
       // [_noteLayerStep]); plates only speak where that layer is silent.
-      _noteLayerStep(hit.limit, pos);
+      _noteLayerStep(
+        hit.limit,
+        pos,
+        // The ROAD ON SCREEN wins: at the Long Thành interchange the layer
+        // answered for the parallel QL1 (60, class 6) while the car was on the
+        // expressway, and taking the layer's name read that 60 as a town entry.
+        roadName: road.name.isEmpty ? layerName : road.name,
+        roadClass: lastWazeSegmentInfo().$1,
+      );
       return applyPostedLayer(
         road,
         kmh: hit.limit,
@@ -1182,7 +1190,12 @@ extension _NavGps on _NavigationPageState {
   /// less is the town entry and a step back UP to 70+ is the exit. It is only a
   /// FALLBACK: a boundary plate, once reached, keeps the authority
   /// ([_inTownBySign]) and this never overrides it.
-  void _noteLayerStep(int kmh, LatLng at) {
+  void _noteLayerStep(
+    int kmh,
+    LatLng at, {
+    String? roadName,
+    int roadClass = -1,
+  }) {
     if (kmh <= 0) return;
     // One value has to HOLD for [kZoneStepConfirmM] metres before it can decide
     // anything: a junction where the segments alternate 60/80 is not news, and a
@@ -1215,8 +1228,35 @@ extension _NavGps on _NavigationPageState {
       if (mounted) setNavState(() {});
     }
 
-    final band = kmh >= 70 ? 1 : (kmh <= 60 ? -1 : 0);
-    if (band == 0) return; // 61–69 is no evidence either way
+    // ⭐ WHAT THE VALUE MEANS DEPENDS ON THE ROAD.
+    //
+    // On an expressway a 60 limit is the toll barrier, a ramp or roadworks —
+    // never a khu dân cư — and a limited-access road is outside one by law. The
+    // old rule read "≤60 ⇒ inside a town" for EVERY road, so a car crossing the
+    // Dầu Giây toll plaza (freeway, class 3, posted 60) heard "Bắt đầu khu dân
+    // cư" and, 200 m later at 120 km/h, "Hết khu dân cư" (measured 2026-10-30,
+    // CT HCM–Long Thành–Dầu Giây km 61,6). Same for the ramp "Hầm chui > Cao
+    // tốc" (class 4, 50 km/h) at km 9,8 of the same drive.
+    //
+    // The "làn hỗn hợp" (mixed lane beside an expressway) is neither: it is the
+    // same corridor as the 80 km/h main carriageway, so switching lanes must not
+    // flip the zone at all — measured 8 flips in 8 minutes on Mai Chí Thọ.
+    // The NAME is what identifies an expressway reliably: the packed segment
+    // table carries no class for every row (most rows have no street name at
+    // all), while the road on screen is already known here — "CT HCM-Long
+    // Thành-Dầu Giây", "Trạm thu phí Dầu Giây", "Mai Chí Thọ (Làn hỗn hợp)".
+    final (clsFromLayer, segName) = lastWazeSegmentInfo();
+    final cls = roadClass >= 0 ? roadClass : clsFromLayer;
+    final onRoad = roadName ?? segName;
+    final int band;
+    if (isLimitedAccessRoad(onRoad, roadClass: cls)) {
+      band = 1; // limited access ⇒ outside a built-up area, whatever the value
+    } else if (isMixedLane(onRoad)) {
+      band = 0; // a lane of the expressway corridor — no evidence either way
+    } else {
+      band = kmh >= 70 ? 1 : (kmh <= 60 ? -1 : 0);
+    }
+    if (band == 0) return; // 61–69, or a mixed lane, is no evidence either way
     if (band == _zoneBand) return;
     if (_zoneBand == 0) {
       _zoneBand = band; // first reading of the drive
@@ -1245,17 +1285,13 @@ extension _NavGps on _NavigationPageState {
     // twice from this path. A metre threshold here invented policy the data does
     // not support — it swallowed real 700 m villages (user, 2026-10-27: "chặn
     // làm gì").
-    _lastZoneKind = entering
-        ? RoadSignKind.populated
-        : RoadSignKind.populatedEnd;
-    _lastZoneAt = at;
-    _lastZoneLayerKmh = kmh;
-    final phrase = entering ? 'Bắt đầu khu dân cư' : 'Hết khu dân cư';
     debugPrint(
-      'TOWN: ${entering ? 'vào' : 'ra'} khu dân cư theo Waze $prev → $kmh km/h',
+      'TOWN: step $prev → $kmh km/h — ${entering ? 'vào' : 'ra'} '
+      '[cls=${cls == 0 ? '?' : cls} "$roadName"]',
     );
-    _logAnnouncement(phrase, kind: 'sign');
-    _voice.speak(phrase, priority: VoiceGuide.priorityHigh);
+    // The sentence is spoken once per STATE change by [_announceZone], so a
+    // plate that already moved the zone does not produce a second one.
+    _announceZone(entering, at);
   }
 
   /// Update the current road's statutory speed limit when crossing a built-up
@@ -1447,6 +1483,8 @@ extension _NavGps on _NavigationPageState {
       _noteLayerStep(
         lim,
         pos,
+        roadName: name.isEmpty ? wazeName : name,
+        roadClass: lastWazeSegmentInfo().$1,
       ); // zone state from the posted value under the car
     }
     if (lim == null || !limitUsable) {
@@ -1751,6 +1789,12 @@ extension _NavGps on _NavigationPageState {
     try {
       final f = await saveTrip(t);
       debugPrint('TRIP: saved ${f.path}');
+      // Fold this drive into the offline traffic pattern BEFORE the snackbar:
+      // next time the route is planned without a network, these samples are
+      // what tell the driver where the jam will be at this hour.
+      unawaited(
+        TrafficHistory.recordTrip(t).then((_) {}, onError: (Object _) {}),
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

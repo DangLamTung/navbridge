@@ -4,6 +4,74 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
+## 1.3.0 — 2026-11-01 (build 4022)
+
+**Live traffic on the route, a Google basemap you can switch to, ô tô and xe tải
+routed by Google, and a built-up boundary that stops firing at toll barriers,
+ramps and lane changes.**
+
+- **Traffic on the route line.** One Routes API call now carries
+  `TRAFFIC_ON_POLYLINE`, so the route is coloured by Google's own jam runs
+  (yellow = slow, red = jam) and the ETA is the traffic-aware time, with a red
+  `+18′` chip when the model loses a minute or more. Google almost never emits
+  `TRAFFIC_JAM` in Việt Nam (measured 2026-10-31, midday and a predicted 18:00
+  rush hour: one `SLOW` run, no jam), so a `SLOW` run whose share of the lost
+  time shows it moving under 60 % of free-flow is drawn RED — with a 60 s /
+  30 s floor so a stub cannot turn a street red. Two runs are not merged, so the
+  seam between slow and jam stays visible.
+- **Offline traffic.** Every saved drive is folded into a small pattern store
+  (≈200 m cell × hour × weekday/weekend, one sample per 10 s of driving, a cell
+  needs 3 samples) and used when the live provider cannot answer — no key, no
+  network, an API refusal. The chip says "dự đoán HH:mm" so a forecast is never
+  mistaken for this minute. When the default route is predicted congested, the
+  planner picks an alternative that is at least 20 % better *before* the drive
+  starts.
+- **Google Maps basemap layer** (Map Tiles API, opt-in, needs
+  `GOOGLE_MAPS_API_KEY`; 100 000 tile requests/month free, then $0.60/1 000).
+  Session token minted at runtime, tiles are NEVER written to disk (the terms
+  allow a render cache only), a 403 re-mints the session, and the attribution
+  follows the layer (`© Google` vs `© OpenStreetMap`).
+- **Ô tô and xe tải now route through Google too.** `DRIVE` (ô tô),
+  `TWO_WHEELER` (xe máy) and `TRUCK` (xe tải, with `vehicleInfo`), so all three
+  get traffic colours and traffic-aware ETAs; only bicycle/walking still use the
+  Legacy Directions API. New **Xe tải** profile (80 km/h statutory ceiling,
+  rides the car graph offline). The cost meter now bills two-wheeler and truck
+  as Compute Routes **Enterprise** instead of Pro — it was under-reporting by a
+  third.
+- **A built-up boundary is no longer inferred from a limit alone.** "≤60 ⇒
+  inside a town" was applied to every road, so a car crossing the Dầu Giây toll
+  plaza (freeway, WME class 3, posted 60) heard "Bắt đầu khu dân cư" at the
+  barrier and "Hết khu dân cư" 200 m later at 120 km/h; the ramp
+  "Hầm chui > Cao tốc" and the slip road "> Dầu Giây" did the same. Limited
+  access (WME class 3/4, `CT…`, cao tốc, trạm thu phí, "> …") is now outside a
+  built-up area whatever the value says, and the mixed lane ("làn hỗn hợp")
+  beside an expressway is no evidence either way — it flipped the zone 8 times
+  in 8 minutes on Mai Chí Thọ. The zone step also identifies the road by the
+  road ON SCREEN, not by whichever segment the layer answered with.
+- **Two boundaries can no longer share one corner.** `kZoneMinGapM = 300 m`
+  holds the second SENTENCE (the state and the limit still follow the road).
+  Measured at 110 km/h on QL1/QL20: "Hết" and "Bắt đầu" were logged **1 ms
+  apart** (two lookups disagreeing on the same fix) and 180 m apart approaching
+  CT01. 300 m is below the shortest real built-up stretch measured (500 m; the
+  176 km run's closest genuine pair is 366 m).
+- **cấm vượt is a state, not a stream of plates.** The plate is repeated every
+  couple of kilometres along one ban and posted 1 m from its own "hết", so only
+  a CHANGE speaks; the opposite plate inside 1 km is the other carriageway's
+  and is dropped (measured: 14 callouts → 3, all on our side of the road).
+  P.125/P.127 rows are posts, not centreline rows, so they get a 40 m corridor
+  and a 1 m left-hand slack instead of the 6 m meant for snapped speed rows.
+- **One junction, one set of turn sentences.** A step that jitters between a
+  roundabout and its exit no longer re-arms the 400/300/100 m callouts
+  (`kManeuverSameJunctionM = 60 m`) — "rẽ phải vào Đỗ Mười" was said twice
+  55 m apart.
+- Verification: `flutter test` **580/580**, `flutter analyze` clean, and a
+  replay of the 2026-10-30 car drive (20 074 fixes, CT HCM–Long Thành–Dầu Giây)
+  through `tool/waze_mod_compare.py` — toll-barrier and ramp entries gone, two
+  sentences < 300 m apart: 0.
+- Known: three callouts remain at the Long Thành interchange, where the Waze
+  layer's nearest segment is the parallel QL1 (60, class 6) while the car is on
+  the expressway. That is a road-identity (snap) problem, not the zone rule.
+
 ## 1.2.2 — 2026-10-24 (build 4020)
 
 **The sign that governs the driver's direction is the one on the RIGHT, the

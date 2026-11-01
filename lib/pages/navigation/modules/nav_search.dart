@@ -777,12 +777,16 @@ extension _NavSearch on _NavigationPageState {
       // motorbike (a bike rides the car graph), so for those two a failure is
       // never "unsupported mode" — and it is NOT necessarily "no data for
       // this region" either. Ask the actual state instead of guessing.
+      // The on-device graph is the CAR graph; a bike and a lorry ride it too
+      // (their own speed ceilings are applied by the app). Only the
+      // human-powered profiles have no graph at all.
       final offlineCapable =
           _routeProfile == RouteProfile.car ||
-          _routeProfile == RouteProfile.motorbike;
+          _routeProfile == RouteProfile.motorbike ||
+          _routeProfile == RouteProfile.truck;
       final (String msg, String hint) = !offlineCapable
           ? (
-              'Bộ dữ liệu ngoại tuyến chỉ hỗ trợ ô tô và xe máy — cần trực tuyến cho ${_routeProfile.label.toLowerCase()}.',
+              'Bộ dữ liệu ngoại tuyến chỉ hỗ trợ ô tô, xe máy và xe tải — cần trực tuyến cho ${_routeProfile.label.toLowerCase()}.',
               'Bật trực tuyến để tiếp tục.',
             )
           : switch (await offlineGraphState()) {
@@ -829,6 +833,26 @@ extension _NavSearch on _NavigationPageState {
       'alts=${alternatives.length}',
     );
     if (!mounted || seq != _planSeq) return;
+    // ⭐ HIGH-TRAFFIC-AVOIDING ROUTE, OFFLINE. The pattern model knows which of
+    // these alternatives is usually jammed at this hour; if the default route
+    // is markedly worse than another, the less congested one is selected
+    // BEFORE the drive starts (a driver cannot see a jam on a route they have
+    // not chosen). Only a clear win counts — see kBetterTrafficRoute.
+    final better = await bestTrafficAlternative(route, alternatives);
+    if (!mounted || seq != _planSeq) return;
+    if (better != null) {
+      debugPrint(
+        'TRAFFIC: tuyến ${better + 1} ít kẹt hơn tuyến mặc định — chọn trước',
+      );
+      final previous = route;
+      route = alternatives[better];
+      alternatives = [
+        previous,
+        for (var i = 0; i < alternatives.length; i++)
+          if (i != better) alternatives[i],
+      ];
+    }
+    unawaited(_enrichTraffic(route));
     setNavState(() {
       _route = route;
       _alternativeRoutes = alternatives;
@@ -866,6 +890,7 @@ extension _NavSearch on _NavigationPageState {
       'PLAN: alternative $i selected '
       'dist=${route.distance}m',
     );
+    unawaited(_enrichTraffic(route));
     setNavState(() {
       _selectedRoute = i;
       _route = route;
@@ -902,6 +927,7 @@ extension _NavSearch on _NavigationPageState {
     final v = switch (p) {
       RouteProfile.motorbike => 'motorbike',
       RouteProfile.car => 'car',
+      RouteProfile.truck => 'truck',
       RouteProfile.bicycle || RouteProfile.walking => vehicleType,
     };
     if (v != vehicleType) {
@@ -1380,4 +1406,37 @@ class _QuickPlacePickerState extends State<_QuickPlacePicker> {
       ],
     );
   }
+}
+
+/// Index of an alternative that is CLEARLY less congested than [route] at this
+/// hour, or null.
+///
+/// Offline: the pattern model from this device's own drives. A swap only
+/// happens when the alternative's predicted congestion is under
+/// [kBetterTrafficRoute] of the default's — a 5 % difference is noise, and
+/// switching the driver's route on noise is worse than leaving it alone.
+/// Live traffic is NOT used here: it costs a request per alternative and the
+/// enrichment already reports the chosen route's delay.
+Future<int?> bestTrafficAlternative(
+  OsrmRoute route,
+  List<OsrmRoute> alternatives,
+) async {
+  if (alternatives.isEmpty) return null;
+  final at = DateTime.now().add(const Duration(minutes: 1));
+  final base = await TrafficHistory.congestionScore(route.geometry, at: at);
+  if (base < kMinCongestionToSwap) return null; // nothing to avoid
+  var bestIdx = -1;
+  var best = base;
+  for (var i = 0; i < alternatives.length; i++) {
+    final s = await TrafficHistory.congestionScore(
+      alternatives[i].geometry,
+      at: at,
+    );
+    if (s < best) {
+      best = s;
+      bestIdx = i;
+    }
+  }
+  if (bestIdx < 0) return null;
+  return best <= base * kBetterTrafficRoute ? bestIdx : null;
 }

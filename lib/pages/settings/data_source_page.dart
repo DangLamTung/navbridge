@@ -40,8 +40,11 @@ class _DataSourcePageState extends State<DataSourcePage> {
 
   /// The profile the nav screen will use, derived from the persisted vehicle
   /// type exactly as `nav_screens.dart` does ('motorbike' → Xe máy, else Ô tô).
-  RouteProfile get _profile =>
-      vehicleType == 'motorbike' ? RouteProfile.motorbike : RouteProfile.car;
+  RouteProfile get _profile => switch (vehicleType) {
+    'motorbike' => RouteProfile.motorbike,
+    'truck' => RouteProfile.truck,
+    _ => RouteProfile.car,
+  };
 
   /// The provider chain the current settings produce (same call the router
   /// makes — see `route_providers.dart`).

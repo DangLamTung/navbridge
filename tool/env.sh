@@ -41,10 +41,16 @@ fi
 if [[ -z "${GOOGLE_GEOCODE_KEY:-}" && -n "${GOOGLEMAPS_API_KEY:-}" ]]; then
   GOOGLE_GEOCODE_KEY="$GOOGLEMAPS_API_KEY"
 fi
+# The Google Maps TILES layer (Map Tiles API — 100k tile requests/month free,
+# then $0.60/1,000). Same key; the project must have "Map Tiles API" enabled.
+if [[ -z "${GOOGLE_MAPS_API_KEY:-}" && -n "${GOOGLEMAPS_API_KEY:-}" ]]; then
+  GOOGLE_MAPS_API_KEY="$GOOGLEMAPS_API_KEY"
+fi
 
 for key in VIETMAP_API_KEY VIETMAP_TILE_KEY GOOGLE_GEOCODE_KEY \
-  GOOGLE_PLACES_KEY WINDY_API_KEY ACCUWEATHER_API_KEY GRAPH_URL \
-  DATA_URL DEEPSEEK_API_KEY GEMINI_API_KEY TAVILY_API_KEY CARTO_API_KEY; do
+  GOOGLE_PLACES_KEY GOOGLE_MAPS_API_KEY WINDY_API_KEY ACCUWEATHER_API_KEY \
+  GRAPH_URL DATA_URL DEEPSEEK_API_KEY GEMINI_API_KEY TAVILY_API_KEY \
+  CARTO_API_KEY; do
   val="${!key:-}"
   if [[ -n "$val" ]]; then
     DART_DEFINES+=("--dart-define=$key=$val")

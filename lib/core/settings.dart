@@ -448,6 +448,7 @@ const Set<String> kBasemapLayers = <String>{
   'esri-street',
   'vietmap',
   'vietmapsat',
+  'google',
   'vector',
 };
 
@@ -537,7 +538,8 @@ Future<AppSettings> _loadSettingsOnce() async {
     // heard). NOTE: because this rewrites on every load, re-picking one of the
     // two old packs by hand will be migrated again — the same caveat the
     // thai_ngoc_bich rule already had.
-    final pack = (rawPack == 'voice_thai_ngoc_bich' || rawPack == 'voice_vn_fast')
+    final pack =
+        (rawPack == 'voice_thai_ngoc_bich' || rawPack == 'voice_vn_fast')
         ? 'voice_vn_hanoi_quyphai'
         : rawPack;
     final boostMax = ((j['voiceBoostMax'] ?? 0.7) as num).toDouble().clamp(

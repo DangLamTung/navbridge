@@ -237,6 +237,9 @@ def main() -> int:
     ap.add_argument('--out', default=None,
                     help='where to write the trip (default docs/trips/sim/<stamp>.json)')
     ap.add_argument('--port', type=int, default=8110)
+    ap.add_argument('--headful', action='store_true',
+                    help='show the browser window instead of headless — watch '
+                         'the real app drive, same harness and same log')
     ap.add_argument('--km', type=float, default=0.0,
                     help='known route length, km — otherwise estimated from the '
                          'straight line, because the app plans the real one')
@@ -318,9 +321,11 @@ def main() -> int:
     # NOTHING, which looks exactly like the app being silent (9 of 22 runs died
     # that way once — see navbridge-emulator-sim).
     profile = tempfile.mkdtemp(prefix='nbsim-')
-    cmd = [CHROME, '--headless=new', '--enable-unsafe-swiftshader',
+    cmd = [CHROME] + ([] if a.headful else ['--headless=new']) + [
+           '--enable-unsafe-swiftshader',
            f'--user-data-dir={profile}', '--no-first-run',
            '--no-default-browser-check', '--enable-logging=stderr', '-v=0',
+           '--window-size=520,900', '--window-position=60,60',
            url]
     started = time.time()
     # ⭐ Chrome's OWN stderr is the reliable channel: the page's /__log sink has

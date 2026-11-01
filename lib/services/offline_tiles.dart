@@ -22,6 +22,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'offline_loader.dart' show readOfflineBytes;
 import 'vietmap_config.dart' show appendCartoApiKey;
+import 'google_tiles.dart' show GoogleTileConfig;
 
 /// User-Agent sent with every tile request. The OSM tile policy REQUIRES a
 /// distinct, stable User-Agent that names the app (library defaults are
@@ -242,6 +243,11 @@ Future<http.Response?> _fetchTile(
           )
           .timeout(const Duration(seconds: 8));
       if (res.statusCode == 403 || res.statusCode == 429) {
+        // A 403 from the Map Tiles API is an expired/revoked SESSION, not a
+        // blocked host: drop the token so the next map build mints a new one.
+        if (template.contains('tile.googleapis.com')) {
+          GoogleTileConfig.invalidateSession();
+        }
         // This provider blocked us — remember it and try the next one.
         _blockedTileServers.add(template);
         debugPrint(
@@ -757,8 +763,7 @@ DateTime? _lastTileTrimAt;
 Future<void> _maybeTrimTileCache() async {
   final now = DateTime.now();
   final last = _lastTileTrimAt;
-  if (last != null &&
-      now.difference(last) < const Duration(minutes: 5)) {
+  if (last != null && now.difference(last) < const Duration(minutes: 5)) {
     return;
   }
   _lastTileTrimAt = now;
@@ -771,8 +776,12 @@ Future<void> _maybeTrimTileCache() async {
       if (e is! File || !e.path.endsWith('.png')) continue;
       // User-downloaded regions and the bundled overview pack are not
       // auto-cache; the region manager / clear-cache owns them.
-      if (e.path.contains('${Platform.pathSeparator}carto${Platform.pathSeparator}') ||
-          e.path.contains('${Platform.pathSeparator}overview${Platform.pathSeparator}')) {
+      if (e.path.contains(
+            '${Platform.pathSeparator}carto${Platform.pathSeparator}',
+          ) ||
+          e.path.contains(
+            '${Platform.pathSeparator}overview${Platform.pathSeparator}',
+          )) {
         continue;
       }
       try {
@@ -1133,8 +1142,13 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
 
     // 2. The SELECTED source's own disk cache (1-2 ms): same provider, so the
     // same look as a live tile — serving it costs nothing and saves the request.
+    //
+    // ⭐ EXCEPT Google: the Map Tiles API allows a session-scoped render cache
+    // only, so these tiles are never read from, or written to, the disk store.
+    // The in-memory LRU above is the whole cache for that layer.
+    final persist = source != 'google';
     final file = await tileFile(z, x, y, source: source);
-    if (await file.exists()) {
+    if (persist && await file.exists()) {
       try {
         final b = await file.readAsBytes();
         _putToMem(keyStr, b);
@@ -1152,10 +1166,12 @@ class OfflineTileImage extends ImageProvider<OfflineTileImage> {
           res.bodyBytes.isNotEmpty &&
           _isImageBytes(res.bodyBytes)) {
         try {
-          final f = await tileFile(z, x, y, source: source);
-          await f.create(recursive: true);
-          await f.writeAsBytes(res.bodyBytes);
-          unawaited(_maybeTrimTileCache());
+          if (persist) {
+            final f = await tileFile(z, x, y, source: source);
+            await f.create(recursive: true);
+            await f.writeAsBytes(res.bodyBytes);
+            unawaited(_maybeTrimTileCache());
+          }
         } catch (_) {}
         _putToMem(keyStr, res.bodyBytes);
         try {

@@ -546,6 +546,11 @@ extension _NavMap on _NavigationPageState {
                     color: kAppBlue,
                     strokeWidth: 6,
                   ),
+                  // Live traffic on TOP of the route line: only the runs Google
+                  // reports as SLOW / TRAFFIC_JAM, sliced from the RAW geometry
+                  // (the decimated display list has different indices).
+                  for (final t in trafficRouteSpans(route))
+                    Polyline(points: t.points, color: t.color, strokeWidth: 6),
                 ],
               ),
             MarkerLayer(
@@ -783,12 +788,13 @@ extension _NavMap on _NavigationPageState {
   Widget _layerMenuButton() {
     // 'offline' is the default: the vector archive plus downloaded raster tiles,
     // nothing fetched. The online layers below are opt-in.
-    const options = {
+    final options = {
       'offline': 'Ngoại tuyến (đã tải)',
       'osm': 'OpenStreetMap',
       'esri-street': 'ESRI Street',
       'esri': 'ESRI Satellite',
       'topo': 'OpenTopoMap',
+      if (GoogleTileConfig.hasKey) 'google': 'Google Maps',
     };
     return PopupMenuButton<String>(
       tooltip: _offline

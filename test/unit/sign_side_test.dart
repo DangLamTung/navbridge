@@ -102,4 +102,37 @@ void main() {
     ), rightSideFor: (_) => true);
     expect(kept.length, 1);
   });
+
+  test('a no-overtaking plate 3 m left is the other direction\'s', () {
+    // P.125 rows are POSTS with surveyed coordinates, so the 6 m slack of a
+    // centreline-snapped row does not apply (measured 2026-10-29: six of
+    // fourteen "cấm vượt" callouts came from plates 1,9–4,9 m LEFT).
+    final items = <_Point>[
+      const _Point(LatLng(10.005, 106.69997)), // ~3,3 m left — dropped
+      const _Point(LatLng(10.005, 106.699999)), // ~0,1 m left — centreline row
+    ];
+    final kept = pointsAheadOnRoute<_Point>(
+      (start, north, items, 1500, 40),
+      rightSideFor: (_) => true,
+      leftToleranceFor: (_) => kProhibitionSideM,
+    );
+    expect(kept.map((e) => e.$1), [1]);
+  });
+
+  test('a no-overtaking plate 130 m off the line is another street', () {
+    // The zone corridor (150 m) let plates 128,6 m / 138,8 m off the driven line
+    // drive a callout; a P.125 is a plate on the verge (kProhibitionLateralMeters).
+    final items = <_Point>[
+      const _Point(LatLng(10.005, 106.70119)), // ~130 m right
+      const _Point(LatLng(10.005, 106.70015)), // ~16 m right
+    ];
+    final narrow = pointsAheadOnRoute<_Point>((
+      start,
+      north,
+      items,
+      1500,
+      40,
+    ), lateralFor: (_) => kProhibitionLateralMeters);
+    expect(narrow.map((e) => e.$1), [1]);
+  });
 }

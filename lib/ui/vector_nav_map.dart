@@ -33,6 +33,7 @@ import 'package:navbridge/ui/sign_icons.dart';
 import 'package:navbridge/services/terrain.dart';
 import 'package:navbridge/services/vietmap_config.dart'
     show VietmapConfig, appendCartoApiKey;
+import 'package:navbridge/services/google_tiles.dart' show GoogleTileConfig;
 import 'package:navbridge/core/car_filter.dart';
 import 'package:navbridge/core/route_snap.dart';
 import 'package:navbridge/core/trip_plan.dart';
@@ -351,6 +352,13 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// Parsed nav style with file:// paths resolved — terrain is injected on
   /// top of this per [_buildStyleString].
   Map<String, dynamic>? _baseStyle;
+
+  /// The basemap tile templates the current style was built with. The Google
+  /// layer's template only exists once its Map Tiles session token has been
+  /// minted (see [GoogleTileConfig]), which happens after this widget is built
+  /// — without this the style would keep the OSM fallback for the whole
+  /// session and the layer would look like it did nothing.
+  String? _basemapSig;
 
   /// What the bundled vector archive ACTUALLY contains (bbox + zoom range),
   /// read from the pmtiles header. The style's source gets its min/max zoom from
@@ -921,6 +929,10 @@ class _VectorNavMapState extends State<VectorNavMap>
     // fills → dark, roads → medium gray, labels → light text on a dark halo)
     // instead of dimming the light map with a black overlay. The route and
     // car arrow are separate annotations, so they stay bright on top.
+    //
+    // Record WHICH basemap templates this style carries, so [didUpdateWidget]
+    // can see a later change (the Google session token arriving after boot).
+    _basemapSig = _basemapTiles().join('|');
     if (widget.nightMode) {
       return _darkStyle(style);
     }
@@ -1136,6 +1148,13 @@ class _VectorNavMapState extends State<VectorNavMap>
     }
     if (src == 'vietmapsat' && VietmapConfig.hasKeys) {
       return [VietmapConfig.satelliteTiles];
+    }
+    if (src == 'google') {
+      // Map Tiles API: the template carries the session token, so it only
+      // exists once GoogleTileConfig has one. Until then (and offline) the
+      // normal online basemap draws instead of a blank screen.
+      final g = GoogleTileConfig.tileUrl();
+      if (g != null) return [g];
     }
     switch (src) {
       case 'osm':
@@ -2418,7 +2437,14 @@ class _VectorNavMapState extends State<VectorNavMap>
 
     // Also trigger style update if we just got our first GPS fix (or lost it),
     // because the null position forces the raster fallback.
-    if (outside != _outsideCoverage || wasNull != isNull) {
+    //
+    // …and when the basemap TEMPLATE changes: the Google layer's template
+    // appears only when its session token arrives (GoogleTileConfig), so the
+    // style built a moment earlier still points at the OSM fallback.
+    final basemapSig = _basemapTiles().join('|');
+    final basemapChanged = _basemapSig != null && basemapSig != _basemapSig;
+    if (basemapChanged) _basemapSig = basemapSig;
+    if (outside != _outsideCoverage || wasNull != isNull || basemapChanged) {
       _outsideCoverage = outside;
       _styleString = _buildStyleString();
       final ctrl = _controller;

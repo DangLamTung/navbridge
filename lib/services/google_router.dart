@@ -30,6 +30,7 @@ import 'package:navbridge/core/route_profile.dart';
 import 'package:navbridge/services/api_usage.dart' show ApiUsage;
 
 import 'osrm.dart';
+import 'route_traffic.dart';
 import 'vietmap_config.dart';
 
 /// Legacy Directions `mode=` for [profile].
@@ -40,7 +41,9 @@ import 'vietmap_config.dart';
 String googleTravelMode(RouteProfile profile) => switch (profile) {
   RouteProfile.bicycle => 'bicycling',
   RouteProfile.walking => 'walking',
-  RouteProfile.car || RouteProfile.motorbike => 'driving',
+  // The Legacy Directions API has no lorry profile; trucks take `driving`
+  // here, and the Routes API v2 call is what actually models them.
+  RouteProfile.car || RouteProfile.motorbike || RouteProfile.truck => 'driving',
 };
 
 /// Legacy Directions request URL (pure → unit-tested).
@@ -219,12 +222,45 @@ Future<List<OsrmRoute>> fetchGoogleRoutes(
 /// `avoidHighways` / `avoidFerries` as applying to `DRIVE` and `TWO_WHEELER`,
 /// which is exactly the two profiles that reach this endpoint (a motorbike is
 /// already barred from VN expressways by `TWO_WHEELER` itself).
+/// Routes API v2 `travelMode` for a profile.
+///
+/// Google models four road vehicles — `DRIVE` (ô tô), `TWO_WHEELER` (xe máy),
+/// `TRUCK` (xe tải) and the human-powered pair — while the Legacy Directions
+/// API only knows car/bicycle/walking. So every ROAD vehicle goes through v2,
+/// which is also what carries the traffic intervals and the two-wheeler /
+/// lorry restrictions (VN bans both from expressways).
+String googleRoutesV2TravelMode(RouteProfile profile) => switch (profile) {
+  RouteProfile.car => 'DRIVE',
+  RouteProfile.motorbike => 'TWO_WHEELER',
+  RouteProfile.truck => 'TRUCK',
+  RouteProfile.bicycle => 'BICYCLE',
+  RouteProfile.walking => 'WALK',
+};
+
+/// True when this profile is billed as Compute Routes **Enterprise**.
+///
+/// Google prices `TWO_WHEELER` and `TRUCK` one tier above `DRIVE`: Enterprise
+/// ($15 / 1,000, 1,000 free per month) instead of Pro ($10 / 1,000, 5,000
+/// free). The app's cost meter has to count the right SKU or it under-reports
+/// spend by a third.
+bool googleIsEnterpriseTier(RouteProfile profile) =>
+    profile == RouteProfile.motorbike || profile == RouteProfile.truck;
+
+/// Routes API v2 request body (pure → unit-tested).
 Map<String, dynamic> googleComputeRoutesBody({
   required List<LatLng> points,
+  RouteProfile profile = RouteProfile.motorbike,
   int maxAlternatives = 3,
   bool avoidHighway = false,
   bool avoidFerry = false,
 }) {
+  final truck = profile == RouteProfile.truck;
+  // A lorry needs vehicle attributes before Google will route it; DIESEL is
+  // the safe default for VN freight and only affects the eco/restriction
+  // model, not the geometry.
+  final vehicleInfo = truck
+      ? <String, dynamic>{'emissionType': 'DIESEL'}
+      : const <String, dynamic>{};
   return {
     'origin': _googleWaypoint(points.first),
     'destination': _googleWaypoint(points.last),
@@ -233,31 +269,44 @@ Map<String, dynamic> googleComputeRoutesBody({
         for (final p in points.sublist(1, points.length - 1))
           _googleWaypoint(p),
       ],
-    'travelMode': 'TWO_WHEELER',
+    'travelMode': googleRoutesV2TravelMode(profile),
     // TRAFFIC_AWARE makes `duration` reflect live traffic (staticDuration
-    // stays free-flow). The legacy Directions API has no two-wheeler mode, so
-    // motorbike ETAs had no traffic at all before this. COST: moves the call
-    // from the Compute Routes Essentials SKU to Pro ($5 -> $10 per 1,000,
-    // free cap 10,000 -> 5,000 per month).
+    // stays free-flow). The legacy Directions API has no two-wheeler or lorry
+    // mode, so those ETAs had no traffic at all before this.
     'routingPreference': 'TRAFFIC_AWARE',
     'computeAlternativeRoutes': maxAlternatives > 1,
-    if (avoidHighway || avoidFerry)
-      'routeModifiers': {
+    // ⭐ Jam runs along the route (NORMAL / SLOW / TRAFFIC_JAM), so the line can
+    // be coloured and the ETA can say how much of it is lost to traffic.
+    // Billing: TRAFFIC_ON_POLYLINE is a Pro-tier extra, but TWO_WHEELER and
+    // TRUCK are already billed at Enterprise, so it adds NOTHING there; for
+    // DRIVE it is what makes the call a Pro request.
+    'extraComputations': ['TRAFFIC_ON_POLYLINE'],
+    'polylineQuality': 'HIGH_QUALITY',
+    // Real-time model: Google requires a departure time to apply traffic, and
+    // it must be in the future ("now" is rejected with INVALID_ARGUMENT — the
+    // request is computed a couple of minutes ahead by the time it is answered).
+    'departureTime': _googleDepartureTime(DateTime.now()),
+    if (avoidHighway || avoidFerry || vehicleInfo.isNotEmpty)
+      'routeModifiers': <String, dynamic>{
         if (avoidHighway) 'avoidHighways': true,
         if (avoidFerry) 'avoidFerries': true,
+        if (vehicleInfo.isNotEmpty) 'vehicleInfo': vehicleInfo,
       },
     'languageCode': 'vi',
     'units': 'METRIC',
   };
 }
 
-/// Fetch a motorbike route via the Routes API `computeRoutes` with
-/// `travelMode: TWO_WHEELER` (the Legacy Directions API has no motorbike
-/// mode, so this is the only way to get a real Google two-wheeler route —
-/// two-wheelers are banned from VN expressways, which this mode accounts
-/// for). Returns the same [OsrmRoute] shape the nav engine uses.
-Future<List<OsrmRoute>> fetchGoogleTwoWheelerRoutes(
+/// Fetch a route via the Routes API `computeRoutes`, for ANY road vehicle:
+/// `DRIVE` (ô tô), `TWO_WHEELER` (xe máy) or `TRUCK` (xe tải).
+///
+/// The Legacy Directions API has no two-wheeler and no lorry mode, and it
+/// cannot return traffic intervals at all — so these three profiles come here.
+/// Returns the same [OsrmRoute] shape the nav engine uses, now including
+/// [OsrmRoute.traffic].
+Future<List<OsrmRoute>> fetchGoogleRoutesV2(
   List<LatLng> points, {
+  RouteProfile profile = RouteProfile.motorbike,
   int maxAlternatives = 3,
   bool avoidHighway = false,
   bool avoidFerry = false,
@@ -269,6 +318,7 @@ Future<List<OsrmRoute>> fetchGoogleTwoWheelerRoutes(
   final body = jsonEncode(
     googleComputeRoutesBody(
       points: points,
+      profile: profile,
       maxAlternatives: maxAlternatives,
       avoidHighway: avoidHighway,
       avoidFerry: avoidFerry,
@@ -287,6 +337,7 @@ Future<List<OsrmRoute>> fetchGoogleTwoWheelerRoutes(
           'X-Goog-FieldMask':
               'routes.duration,routes.staticDuration,'
               'routes.distanceMeters,routes.polyline.encodedPolyline,'
+              'routes.travelAdvisory.speedReadingIntervals,'
               'routes.legs.distanceMeters,routes.legs.duration,'
               'routes.legs.steps.distanceMeters,'
               'routes.legs.steps.staticDuration,'
@@ -298,7 +349,7 @@ Future<List<OsrmRoute>> fetchGoogleTwoWheelerRoutes(
         body: body,
       )
       .timeout(const Duration(seconds: 30));
-  ApiUsage.note('routes_pro');
+  ApiUsage.note(googleIsEnterpriseTier(profile) ? 'routes_ent' : 'routes_pro');
   if (res.statusCode != 200) {
     throw Exception('Google Routes HTTP ${res.statusCode}');
   }
@@ -362,11 +413,110 @@ Future<List<OsrmRoute>> fetchGoogleTwoWheelerRoutes(
         geometry: geometry,
         steps: steps,
         stopCumulative: points.length > 2 ? stopCum : const [],
+        traffic: RouteTraffic.fromGoogle(
+          r,
+          geometry,
+          seconds: _secondsFromDuration,
+          measuredAt: DateTime.now(),
+          forTime: _googleDepartureTimeValue(DateTime.now()),
+        ),
       ),
     );
   }
   if (out.isEmpty) throw Exception('Không tìm thấy tuyến đường');
   return out;
+}
+
+/// Engine-agnostic live traffic for a route THIS app already planned.
+///
+/// The Google router carries its own intervals (see
+/// `fetchGoogleTwoWheelerRoutes`), but the normal case is an OSRM / Vietmap /
+/// offline route — those providers have no traffic at all. This asks Google the
+/// same origin → destination question with `TRAFFIC_ON_POLYLINE` and re-anchors
+/// the jam runs onto OUR geometry ([RouteTraffic.remap]), so the line can be
+/// coloured whichever engine planned it.
+///
+/// COST: one Routes API request (Pro, or Enterprise for `TWO_WHEELER`). Call it
+/// once per plan — never per fix. Returns null (no traffic, no error surfaced)
+/// when there is no key, no network, or the API refuses; the route then draws in
+/// one colour, which is exactly the pre-traffic behaviour.
+Future<RouteTraffic?> fetchGoogleRouteTraffic({
+  required LatLng from,
+  required LatLng to,
+  required List<LatLng> geometry,
+  required double distanceMeters,
+  RouteProfile profile = RouteProfile.motorbike,
+}) async {
+  final key = VietmapConfig.googlePlacesKey;
+  if (key.isEmpty || geometry.length < 2) return null;
+  final body = jsonEncode(<String, Object>{
+    'origin': _googleWaypoint(from),
+    'destination': _googleWaypoint(to),
+    'travelMode': profile == RouteProfile.motorbike ? 'TWO_WHEELER' : 'DRIVE',
+    'routingPreference': 'TRAFFIC_AWARE_OPTIMAL',
+    'extraComputations': ['TRAFFIC_ON_POLYLINE'],
+    'polylineQuality': 'HIGH_QUALITY',
+    'departureTime': _googleDepartureTime(DateTime.now()),
+    'languageCode': 'vi',
+    'units': 'METRIC',
+  });
+  try {
+    final res = await http
+        .post(
+          Uri.parse(
+            'https://routes.googleapis.com/directions/v2:computeRoutes',
+          ),
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': key,
+            'X-Goog-FieldMask':
+                'routes.duration,routes.staticDuration,'
+                'routes.distanceMeters,routes.polyline.encodedPolyline,'
+                'routes.travelAdvisory.speedReadingIntervals',
+            'User-Agent': 'navbridge/1.0',
+          },
+          body: body,
+        )
+        .timeout(const Duration(seconds: 20));
+    ApiUsage.note('routes_pro');
+    if (res.statusCode != 200) {
+      debugPrint('TRAFFIC: Google HTTP ${res.statusCode} — no live traffic');
+      return null;
+    }
+    final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final routes = (data['routes'] as List? ?? const [])
+        .cast<Map<String, dynamic>>();
+    if (routes.isEmpty) return null;
+    final r = routes.first;
+    final poly = ((r['polyline'] as Map?)?['encodedPolyline'] as String?) ?? '';
+    final gGeo = poly.isEmpty ? const <LatLng>[] : decodePolyline(poly);
+    final base = RouteTraffic.fromGoogle(
+      r,
+      gGeo,
+      seconds: _secondsFromDuration,
+      measuredAt: DateTime.now(),
+      forTime: _googleDepartureTimeValue(DateTime.now()),
+    );
+    if (base == null) return null;
+    if (gGeo.isEmpty) return base;
+    final spans = RouteTraffic.remap(
+      base.spans,
+      gGeo,
+      geometry,
+      fromMeters: ((r['distanceMeters'] as num?) ?? 0).toDouble(),
+      toMeters: distanceMeters,
+    );
+    return RouteTraffic(
+      live: base.live,
+      freeFlow: base.freeFlow,
+      spans: spans,
+      measuredAt: base.measuredAt,
+      forTime: base.forTime,
+    );
+  } catch (e) {
+    debugPrint('TRAFFIC: could not read traffic — $e');
+    return null;
+  }
 }
 
 Map<String, dynamic> _googleWaypoint(LatLng p) => {
@@ -379,6 +529,22 @@ Map<String, dynamic> _googleWaypoint(LatLng p) => {
 int _secondsFromDuration(String s) {
   final m = RegExp(r'^(\d+)s$').firstMatch(s.trim());
   return m == null ? 0 : int.parse(m.group(1)!);
+}
+
+/// `departureTime` for a traffic-aware request, RFC 3339 in UTC.
+///
+/// Google rejects "now" and any past timestamp ("Timestamp must be set to a
+/// future time"), so the request is stamped a couple of minutes ahead — the
+/// call itself takes a moment, and traffic at t+2min is the traffic the driver
+/// is about to meet.
+DateTime _googleDepartureTimeValue(DateTime now) =>
+    now.toUtc().add(const Duration(minutes: 2)).toLocal();
+
+String _googleDepartureTime(DateTime now) {
+  final t = now.toUtc().add(const Duration(minutes: 2));
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${t.year}-${two(t.month)}-${two(t.day)}'
+      'T${two(t.hour)}:${two(t.minute)}:${two(t.second)}Z';
 }
 
 /// Translate a Routes API maneuver into the OSRM-style (type, modifier) pair

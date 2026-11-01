@@ -210,23 +210,42 @@ extension _NavSigns on _NavigationPageState {
         continue;
       }
       if (k != reachedZone) continue; // one boundary per fix — see above
-      if (k == RoadSignKind.populated) {
-        // Sign R.420: Bắt đầu khu đông dân cư
-        reachedTownBoundary = true;
-        if (!_inTownBySign || !_inTown) {
-          _inTown = true;
-          _inTownBySign = true;
-          _updateRoadForTownChange(true, at: snapped);
-          stateChanged = true;
+      if (k == RoadSignKind.populated || k == RoadSignKind.populatedEnd) {
+        // An expressway / ramp / toll plaza has no khu dân cư boundary, and the
+        // packs put plates near the barriers: skip them there (see
+        // [_noteLayerStep] for the measured toll-plaza case). Both the road on
+        // screen and the segment under the car count — measured 2026-10-30, a
+        // plate beside CT HCM-Long Thành-Dầu Giây still announced "Bắt đầu khu
+        // dân cư" because only the segment was consulted.
+        if (isLimitedAccessRoad(_roadInfo?.name) ||
+            isMixedLane(_roadInfo?.name) ||
+            lastWazeIsLimitedAccess()) {
+          continue;
         }
-      } else if (k == RoadSignKind.populatedEnd) {
-        // Sign R.421: Hết khu đông dân cư
+        debugPrint(
+          'SIGNS: zone plate ${k.key} on "${_roadInfo?.name}" '
+          '(layer limited=${lastWazeIsLimitedAccess()})',
+        );
+        final enteringPlate = k == RoadSignKind.populated;
+        // The posted layer owns the zone while it answers: a plate that says
+        // the opposite is the other carriageway's or a misplaced point.
+        if (_inTownByLayer && enteringPlate != _inTown) continue;
+        // …and a plate of the opposite kind right after a transition needs the
+        // layer to have moved the same way.
+        if (_zoneFlipBlocked(k, snapped)) continue;
         reachedTownBoundary = true;
-        if (!_inTownBySign || _inTown) {
-          _inTown = false;
+        if (_inTown != enteringPlate) {
+          _inTown = enteringPlate;
           _inTownBySign = true;
-          _updateRoadForTownChange(false, at: snapped);
+          _updateRoadForTownChange(enteringPlate, at: snapped);
           stateChanged = true;
+          // ⭐ The sentence belongs to the CHANGE, not to a separate path — see
+          // [_announceZone].
+          _announceZone(enteringPlate, snapped);
+        } else if (!_inTownBySign) {
+          // Plate agrees with the layer: it takes over the authority so a later
+          // layer step cannot drag the zone back on its own.
+          _inTownBySign = true;
         }
       }
     }
@@ -348,7 +367,6 @@ extension _NavSigns on _NavigationPageState {
     RoadSign? next;
     var m = 0.0;
     var bestTier = 1 << 30;
-    final seenZoneKind = <RoadSignKind>{};
     for (final a in ahead) {
       // Only announce signs inside the adoption window.
       if (a.routeMeters > kSignAdoptM) break;
@@ -360,35 +378,12 @@ extension _NavSigns on _NavigationPageState {
       // outside by sign, another same-direction boundary is noise — announce
       // only the first transition, and only the nearest boundary of each kind
       // in this scan.
+      // Zone plates are NOT spoken from here: a built-up transition is a change
+      // of STATE and is announced where the state changes (see [_announceZone]),
+      // so one boundary cannot be reported twice and an "ahead" sentence cannot
+      // contradict what the posted layer says under the bike.
       if (k == RoadSignKind.populated || k == RoadSignKind.populatedEnd) {
-        if (!seenZoneKind.add(k)) continue;
-        // A plate whose zone is already the state we are in says nothing new —
-        // whoever established it (plate or posted layer). Measured 2026-10-26:
-        // "Bắt đầu khu dân cư phía trước" still fired 1,2 km INSIDE the town the
-        // layer had just announced at km 114,8.
-        if (k == RoadSignKind.populated && _inTown) continue;
-        if (k == RoadSignKind.populatedEnd && !_inTown) continue;
-        // The posted layer is positionally exact and currently owns the zone
-        // state: a plate that says the OPPOSITE is the other carriageway's plate
-        // or a misplaced point, and must not contradict the layer (user:
-        // "ưu tiên waze"). Measured 2026-10-26: plates inside the Đạ M'Ri town
-        // and at km 116 / 157 announced "hết khu dân cư" where WME had 50 km/h
-        // for kilometres.
-        if (_inTownByLayer && (k == RoadSignKind.populated) != _inTown) {
-          continue;
-        }
-        // ⭐ A town is not entered and left again in 300 m. Two plates of
-        // OPPOSITE kinds inside [kZoneFlipGuardM] mean the pack carries the
-        // other direction's plate (or a duplicate) — the announcement is
-        // blocked unless the posted LAYER moved the same way since the last
-        // transition, because the segment layer is the only source with a
-        // reliable position (user, 2026-10-25: "ưu tiên waze segment speed
-        // change thôi vì nó có position chuẩn"). Measured on a 176 km Bảo Lộc →
-        // Sài Gòn drive: "bắt đầu … / hết …" fired 5 s apart at one junction.
-        if (_zoneFlipBlocked(k, snapped)) continue;
-        // No distance guard: `_inTown`/`_inTownBySign` already say whether this
-        // plate is news, and a plate that merely repeats the state the posted
-        // layer established is skipped (see the gate above).
+        continue;
       }
       // Announce at most TWICE per sign: once far (the first time it enters the
       // 400 m range) and once near (~100 m) as the final reminder. The old
@@ -421,6 +416,7 @@ extension _NavSigns on _NavigationPageState {
       }
     }
     if (next == null) return;
+    if (_prohibitionBlocked(next.kind, snapped)) return;
     final near = m <= 100;
     final phrase = signCalloutPhrase(next.kind, m, near: near);
     if (next.kind == RoadSignKind.populated ||
@@ -450,6 +446,81 @@ extension _NavSigns on _NavigationPageState {
     if (mounted) setNavState(() {});
   }
 
+  /// True when this no-overtaking plate must stay silent.
+  ///
+  /// CẤM VƯỢT (P.125) is a long ban and the packs are noisy about it: `noPassing`
+  /// rows sit 1 m from their `noPassingEnd` at the same post, and the plate is
+  /// repeated every couple of kilometres along one ban. Measured 2026-10-25, km
+  /// 40,6 / 41,5 / 42,2 were three sentences in 2 s; measured 2026-10-29, the
+  /// remaining noise was two identical "hết cấm vượt" 540 m apart.
+  ///
+  /// So the ban is read as a STATE, not as a stream of plates — the policy itself
+  /// lives in [prohibitionSuppressed] so it can be tested.
+  bool _prohibitionBlocked(RoadSignKind kind, LatLng at) {
+    final startsBan = kind == RoadSignKind.noPassing;
+    if (!startsBan && kind != RoadSignKind.noPassingEnd) return false;
+    final lastKind = _lastProhibitionKind;
+    final lastAt = _lastProhibitionAt;
+    final zoneAt = _lastZoneAt;
+    final suppressed = prohibitionSuppressed(
+      startsBan: startsBan,
+      bannedNow: _noPassing,
+      oppositeNear:
+          lastKind != null &&
+          lastAt != null &&
+          lastKind != kind &&
+          distanceMeters(lastAt, at) < kProhibitionFlipM,
+      zoneNear:
+          zoneAt != null && distanceMeters(zoneAt, at) < kZoneProhibitionGapM,
+    );
+    if (suppressed) return true;
+    _noPassing = startsBan;
+    _lastProhibitionKind = kind;
+    _lastProhibitionAt = at;
+    return false;
+  }
+
+  /// Speak a khu dân cư transition ONCE per state change, whatever moved it.
+  ///
+  /// Both sources move `_inTown` — a reached plate and the posted-layer step.
+  /// The sentence used to hang off a third path (the call-out loop), so a plate
+  /// could move the state silently and the next layer step then announced a
+  /// transition the driver never heard begin: measured 2026-10-28 on the 176 km
+  /// drive, "Hết khu dân cư" at km 110,7 and again at 120,6 with nothing said
+  /// in between, because a plate had set "inside" at ~114,9 without a word.
+  void _announceZone(bool entering, LatLng at) {
+    if (_announcedInTown == entering) return;
+    // ⭐ TWO SENTENCES MUST NOT SHARE ONE CORNER. The state follows the road —
+    // the statutory limit and the chip change immediately — but a change that
+    // lands within [kZoneMinGapM] of the last sentence is heard as one noise
+    // burst, and it was measured as a real defect: QL1/QL20 at 110 km/h logged
+    // "Hết" and "Bắt đầu" 1 ms apart (two lookups disagreeing on the same fix)
+    // and 180 m apart on the CT01 approach, while lane changes on Mai Chí Thọ
+    // flipped the zone 8 times in 8 minutes.
+    final lastAt = _lastZoneAt;
+    if (lastAt != null && distanceMeters(lastAt, at) < kZoneMinGapM) {
+      _announcedInTown = entering;
+      debugPrint(
+        'TOWN: ${entering ? 'vào' : 'ra'} — giữ im lặng '
+        '(${distanceMeters(lastAt, at).round()} m < ${kZoneMinGapM.round()} m)',
+      );
+      return;
+    }
+    _announcedInTown = entering;
+    _lastZoneKind = entering
+        ? RoadSignKind.populated
+        : RoadSignKind.populatedEnd;
+    _lastZoneAt = at;
+    _lastZoneLayerKmh = _lastLayerKmh;
+    final phrase = entering ? 'Bắt đầu khu dân cư' : 'Hết khu dân cư';
+    debugPrint(
+      'TOWN: ${entering ? 'vào' : 'ra'} khu dân cư (lớp Waze '
+      '$_lastLayerKmh km/h)',
+    );
+    _logAnnouncement(phrase, kind: 'sign');
+    _voice.speak(phrase, priority: VoiceGuide.priorityHigh);
+  }
+
   /// Would announcing [kind] flip the zone we just announced, without the
   /// posted LAYER agreeing?
   ///
@@ -474,6 +545,27 @@ extension _NavSigns on _NavigationPageState {
   void _setSignsAhead(List<SignAhead> ahead) {
     final sorted = [...ahead]
       ..sort((a, b) => a.routeMeters.compareTo(b.routeMeters));
+    // ONE hazard per junction: a no-overtaking plate standing at a built-up
+    // boundary (45–69 m measured, 2026-10-29) is the same event, and the bar
+    // showed both — the boundary wins, exactly as it does in the voice.
+    final boundaries = sorted
+        .where(
+          (a) =>
+              a.sign.kind == RoadSignKind.populated ||
+              a.sign.kind == RoadSignKind.populatedEnd,
+        )
+        .map((a) => a.routeMeters)
+        .toList();
+    if (boundaries.isNotEmpty) {
+      sorted.removeWhere(
+        (a) =>
+            (a.sign.kind == RoadSignKind.noPassing ||
+                a.sign.kind == RoadSignKind.noPassingEnd) &&
+            boundaries.any(
+              (z) => (z - a.routeMeters).abs() < kZoneProhibitionGapM,
+            ),
+      );
+    }
     final unchanged =
         sorted.length == _aheadSigns.length &&
         List.generate(sorted.length, (i) => i).every(

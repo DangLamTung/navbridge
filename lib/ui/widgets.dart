@@ -109,16 +109,26 @@ class CurrentMarker extends StatelessWidget {
   }
 }
 
-/// Tiny OSM attribution (required by the tile usage policy).
+/// Tiny basemap attribution (required by the tile usage policies).
+///
+/// The text follows the ACTIVE layer: the Google basemap is Google's map and
+/// carries Google's attribution, everything else is the OSM/CARTO stack. It
+/// used to be a hard-coded "© OpenStreetMap", which was simply wrong (and a
+/// licence problem) the moment another provider was selected.
 class OsmAttribution extends StatelessWidget {
-  const OsmAttribution({super.key});
+  const OsmAttribution({super.key, this.source});
+
+  /// Active basemap layer id (`google`, `osm`, `esri` …); null = the offline /
+  /// vector map, which is OSM-derived.
+  final String? source;
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
+    final g = source == 'google';
+    return Padding(
       padding: EdgeInsets.only(bottom: 2),
       child: Text(
-        '© OpenStreetMap',
+        g ? '© Google' : '© OpenStreetMap',
         style: TextStyle(
           fontSize: 11,
           color: Colors.black54,

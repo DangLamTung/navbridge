@@ -12,8 +12,13 @@ import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter_tts/flutter_tts.dart';
 
 import 'package:navbridge/core/settings.dart'
-    show ttsVoiceName, ttsVoiceLocale, voiceBoostMax, ttsSpeechRate, voicePackRate,
-    ttsPitch;
+    show
+        ttsVoiceName,
+        ttsVoiceLocale,
+        voiceBoostMax,
+        ttsSpeechRate,
+        voicePackRate,
+        ttsPitch;
 import 'package:navbridge/services/offline_tiles.dart' show voiceVolume;
 import 'package:navbridge/services/sound_alerts.dart' show SoundAlerts;
 
@@ -167,8 +172,10 @@ class VoiceGuide {
     try {
       await _tts.setLanguage('vi-VN');
       await _tts.setSpeechRate(effectiveSpeechRate());
-      debugPrint('VOICE: speech rate ${effectiveSpeechRate()} '
-          '(pref ${ttsSpeechRate.toStringAsFixed(2)}, web=$kIsWeb)');
+      debugPrint(
+        'VOICE: speech rate ${effectiveSpeechRate()} '
+        '(pref ${ttsSpeechRate.toStringAsFixed(2)}, web=$kIsWeb)',
+      );
       await _tts.setPitch(ttsPitch.clamp(0.5, 2.0));
       await _applyVolume();
       // Prefer the user-picked voice ("Giọng đọc") if one is selected;
@@ -273,6 +280,18 @@ class VoiceGuide {
     } catch (_) {}
   }
 
+  /// Rough spoken length of [text], used only to keep the queue honest when the
+  /// engine does not tell us when it finished (see `_play`).
+  ///
+  /// Vietnamese TTS at rate 1.0 reads at roughly 16 characters per second;
+  /// clamped to [300 ms, 8 s] so a short "Rẽ trái." never stalls the queue and a
+  /// runaway sentence cannot wedge the voice.
+  Duration _estimatedSpeech(String text) {
+    final cps = 16.0 * effectiveSpeechRate().clamp(0.5, 2.0);
+    final ms = (text.length * 1000 / cps).round();
+    return Duration(milliseconds: ms.clamp(300, 8000));
+  }
+
   /// Play queued announcements one at a time, each to completion.
   Future<void> _drain() async {
     if (_draining) return;
@@ -312,9 +331,11 @@ class VoiceGuide {
         // no pack at all (the channel is Android-only) and the caller falls back
         // to TTS.
         final clipRate = voicePackRate.clamp(0.6, 1.6);
-        debugPrint('VOICE: clip "${a.asset}" (p${a.priority}) '
-            'rate=${clipRate.toStringAsFixed(2)} '
-            '(tts=${effectiveSpeechRate().toStringAsFixed(2)})');
+        debugPrint(
+          'VOICE: clip "${a.asset}" (p${a.priority}) '
+          'rate=${clipRate.toStringAsFixed(2)} '
+          '(tts=${effectiveSpeechRate().toStringAsFixed(2)})',
+        );
         // `wait: true` resolves when the clip actually ends, so the queue
         // cannot start the next announcement on top of this one.
         await _audioChannel
@@ -326,9 +347,32 @@ class VoiceGuide {
             .timeout(_itemTimeout, onTimeout: () => null);
       } else {
         debugPrint('VOICE: speak "${a.text}" (p${a.priority})');
-        await _tts.speak(a.text!).timeout(_itemTimeout, onTimeout: () {
-          return null;
-        });
+        final at = DateTime.now();
+        await _tts
+            .speak(a.text!)
+            .timeout(
+              _itemTimeout,
+              onTimeout: () {
+                return null;
+              },
+            );
+        // ⭐ HOLD THE QUEUE FOR THE SENTENCE'S OWN LENGTH when the engine
+        // returns early. On Android `awaitSpeakCompletion(true)` resolves when
+        // the utterance ends, but the WEB engine resolves `speak()` as soon as
+        // it starts, so the queue marched on and every sentence was emitted
+        // 150–250 ms after the previous one — two callouts at once, "khu dân cư"
+        // and "cấm vượt" fighting each other (measured 2026-10-29 in the web
+        // sim: consecutive VOICE lines 150 ms apart). Where completion IS
+        // awaited this wait is already satisfied and costs nothing.
+        // …and only on the WEB: Android honours `awaitSpeakCompletion(true)`,
+        // so there the sentence already finished and this would just add dead
+        // time (and it would break the queue tests, whose fake engine resolves
+        // instantly).
+        if (kIsWeb) {
+          final spoken = DateTime.now().difference(at);
+          final minDur = _estimatedSpeech(a.text!);
+          if (spoken < minDur) await Future<void>.delayed(minDur - spoken);
+        }
       }
     } catch (e) {
       debugPrint('VOICE: play failed for "${a.label}": $e');
@@ -411,10 +455,8 @@ class VoiceGuide {
       if (voices.isNotEmpty) {
         final vi = voices
             .where(
-              (v) => (v['locale'] ?? '')
-                  .toString()
-                  .toLowerCase()
-                  .startsWith('vi'),
+              (v) =>
+                  (v['locale'] ?? '').toString().toLowerCase().startsWith('vi'),
             )
             .toList();
         if (vi.isEmpty) {

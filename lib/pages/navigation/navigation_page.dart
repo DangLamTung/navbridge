@@ -58,6 +58,8 @@ import 'package:navbridge/services/offline_router.dart';
 import 'package:navbridge/services/offline_tiles.dart';
 import 'package:navbridge/services/poi_search.dart';
 import 'package:navbridge/services/google_places.dart';
+import 'package:navbridge/services/google_router.dart'
+    show fetchGoogleRouteTraffic;
 import 'package:navbridge/core/gps_noise_simulator.dart';
 import 'package:navbridge/core/heading_filter.dart';
 import 'package:navbridge/core/location_kalman.dart';
@@ -74,6 +76,7 @@ import 'package:navbridge/services/osrm.dart';
 import 'package:navbridge/services/overpass.dart';
 import 'package:navbridge/services/overlay_visibility.dart';
 import 'package:navbridge/ui/limit_source.dart';
+import 'package:navbridge/ui/traffic_overlay.dart';
 import 'package:navbridge/services/overlay_widget.dart' show startOverlay;
 import 'package:navbridge/services/radar.dart';
 import 'package:navbridge/services/route_export.dart';
@@ -87,6 +90,9 @@ import 'package:navbridge/ui/camera_icon.dart';
 import 'package:navbridge/ui/vector_nav_map.dart';
 import 'package:navbridge/services/vietmap_api.dart';
 import 'package:navbridge/services/vietmap_config.dart';
+import 'package:navbridge/services/google_tiles.dart';
+import 'package:navbridge/services/traffic_history.dart';
+import 'package:navbridge/services/route_traffic.dart';
 import 'package:navbridge/pages/vietmap_nav_screen.dart';
 import 'package:navbridge/services/ai_assistant.dart';
 import 'package:navbridge/services/api_notice.dart';
@@ -757,6 +763,26 @@ class _NavigationPageState extends State<NavigationPage>
   LatLng? _lastZoneAt;
   int _lastZoneLayerKmh = 0;
 
+  /// The last CẤM VƯỢT / HẾT CẤM VƯỢT announced and where — a no-overtaking ban
+  /// is kilometres long, so the opposite kind a few hundred metres later is the
+  /// OTHER carriageway's plate, not a real change (see `_prohibitionBlocked`).
+  RoadSignKind? _lastProhibitionKind;
+  LatLng? _lastProhibitionAt;
+
+  /// A no-overtaking ban is in force for the driver: true once P.125 was
+  /// announced, false once HẾT CẤM VƯỢT was. The packs repeat the plate along
+  /// one ban and post ban + end at the same point, so the STATE — not the plate
+  /// — decides whether there is anything new to say.
+  bool _noPassing = false;
+
+  /// The zone side the DRIVER has actually been told about: true = inside a
+  /// khu dân cư, false = outside, null = nothing said yet. A transition is
+  /// announced only when it differs from this — the sentence used to live on a
+  /// path of its own, so a plate could move the state silently and the next
+  /// layer step then announced a transition whose beginning was never spoken
+  /// ("Hết khu dân cư" at km 110,7 and again at 120,6 — measured 2026-10-28).
+  bool? _announcedInTown;
+
   /// Band of the posted layer under the car: -1 = ≤60 (in a built-up area),
   /// +1 = ≥70 (outside), 0 = nothing read yet. A change of band is a town
   /// boundary once [kZoneStepConfirmM] metres back it up.
@@ -814,6 +840,11 @@ class _NavigationPageState extends State<NavigationPage>
   /// first drive with no signal still shows a map instead of a blank one. The
   /// online layers (OSM / ESRI / topo) are opt-in from the layer picker.
   String _tileSource = 'offline';
+
+  /// `?basemap=google` — a session-only layer choice from the served page.
+  /// Persisted settings are applied after initState and would otherwise undo
+  /// it, exactly like `?vehicle=car` (see [_loadSettings]).
+  String? _basemapOverride;
   OfflineTileProvider _tileProvider = OfflineTileProvider(source: 'osm');
 
   bool _offline = false;
@@ -851,6 +882,10 @@ class _NavigationPageState extends State<NavigationPage>
     // menu only lists them when real keys were compiled in (see below).
     'vietmap': VietmapConfig.mapTiles,
     'vietmapsat': VietmapConfig.satelliteTiles,
+    // Google's roadmap tiles come from the Map Tiles API, which needs a SESSION
+    // token created at runtime — so there is no static template here; the
+    // getter below fills it in once the token exists (see GoogleTileConfig).
+    // Billed: 100k tile requests/month free, then $0.60/1,000.
     'vector':
         'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
   };
@@ -870,14 +905,40 @@ class _NavigationPageState extends State<NavigationPage>
   ///
   /// On web there is no disk store at all, so the online template is the only
   /// thing that can draw a basemap.
-  String get _basemapRasterUrl =>
-      _tileLayers[_tileSource] ?? _tileLayers['osm']!;
+  String get _basemapRasterUrl {
+    if (_tileSource == 'google') {
+      // A session token is required before a single tile can be addressed; the
+      // OSM template keeps the map drawing (rather than blanking) for the
+      // fraction of a second the token takes, and if Google is unreachable.
+      return GoogleTileConfig.tileUrl() ?? _tileLayers['osm']!;
+    }
+    return _tileLayers[_tileSource] ?? _tileLayers['osm']!;
+  }
+
+  /// Fetch the Map Tiles session for the Google layer, then rebuild so
+  /// [_basemapRasterUrl] picks up the real template. Called when the layer is
+  /// chosen and on start-up when it was the saved choice.
+  Future<void> _ensureGoogleSession() async {
+    if (!GoogleTileConfig.hasKey || GoogleTileConfig.session != null) return;
+    final token = await GoogleTileConfig.ensureSession();
+    // One line of diagnostics: the Map Tiles API fails silently (403 on every
+    // tile) when the API is not enabled, billing is off, or the key is
+    // restricted to a different app/referrer — all of which look identical
+    // from the map (it just stays on the fallback layer).
+    debugPrint(
+      'GOOGLE TILES: session '
+      '${token == null ? 'FAILED — enable Map Tiles API + billing, or the key is restricted' : 'ready'}',
+    );
+    if (!mounted || token == null) return;
+    setNavState(() {});
+  }
 
   /// Set the active online basemap layer directly (from the "Lớp bản đồ"
   /// menu). The local tile server sends a proper User-Agent and re-encodes
   /// every tile to PNG, so OSM/CARTO/ESRI all load even on MapLibre builds
   /// that reject the provider's raw HTTP tiles.
   void _setTileSource(String next, {bool persist = true}) {
+    if (next == 'google') unawaited(_ensureGoogleSession());
     if (_tileSource == next) return;
     setNavState(() {
       _tileSource = next;
@@ -954,6 +1015,11 @@ class _NavigationPageState extends State<NavigationPage>
   bool _spokenFinal = false;
   bool _arrivedSpoken = false;
   String? _lastManeuverSig; // icon+road of the maneuver we last announced
+
+  /// Where that maneuver stood. The snapped car can flip between two adjacent
+  /// steps of ONE junction, so the step that re-arms the callouts is the one
+  /// that moves the maneuver point out of [kManeuverSameJunctionM].
+  LatLng? _lastManeuverAt;
   bool _speedingSpoken = false; // overspeed alert already announced (episode)
   DateTime? _lastOverspeedAt; // last overspeed voice alert (60 s cooldown)
   int? _signSpeedLimit; // effective limit from the last speed-limit sign passed
@@ -1393,6 +1459,10 @@ class _NavigationPageState extends State<NavigationPage>
     _zoneBand = 0;
     _pendingLayerKmh = 0;
     _pendingValueAt = null;
+    _announcedInTown = null;
+    _lastProhibitionKind = null;
+    _lastProhibitionAt = null;
+    _noPassing = false;
     _aheadSigns = const [];
     _alertBarCollapsed = false;
     _limitAnnouncer.reset();
@@ -1713,6 +1783,15 @@ class _NavigationPageState extends State<NavigationPage>
         }
         unawaited(_ensureDebugLayers());
       }
+      // ?basemap=google runs the same build on a given basemap layer. The
+      // layer menu writes local storage, and a fresh headless profile has
+      // none — so the harness needs a URL to pick a layer, exactly like
+      // `vehicle` / `heading` / `voice`. Session-only (persist: false).
+      final bm = Uri.base.queryParameters['basemap']?.trim();
+      if (bm != null && kBasemapLayers.contains(bm)) {
+        _basemapOverride = bm;
+        _setTileSource(bm, persist: false);
+      }
     }
     if (simConsoleEnabled || TripReplay.armedAtBoot) {
       simAnnouncementSink ??= (a) => debugPrint('ANNOUNCE: $a');
@@ -1825,12 +1904,14 @@ class _NavigationPageState extends State<NavigationPage>
       if (vehUrl != null && vehUrl.isNotEmpty) vehicleType = vehUrl;
       _routeProfile = switch (vehicleType) {
         'motorbike' => RouteProfile.motorbike,
+        'truck' => RouteProfile.truck,
         _ => RouteProfile.car,
       };
       geocodingProvider = s.geocodingProvider;
       // The basemap layer the layer menu last chose (persisted — see
-      // [_setTileSource]); 'offline' on a fresh install.
-      _setTileSource(s.basemapLayer, persist: false);
+      // [_setTileSource]); 'offline' on a fresh install. `?basemap=` wins: the
+      // persisted value lands AFTER initState and would otherwise undo it.
+      _setTileSource(_basemapOverride ?? s.basemapLayer, persist: false);
       routingEngine = s.routingEngine;
       smoothCamera = s.smoothCamera;
       simpleMode = s.simpleMode;
@@ -1974,7 +2055,11 @@ class _NavigationPageState extends State<NavigationPage>
     // If a trip is still recording when the page is closed, save it.
     final t = _trip;
     if (t != null && t.hasEnoughData) {
-      unawaited(saveTrip(t).then((_) {}, onError: (Object _) {}));
+      unawaited(
+        saveTrip(t)
+            .then((_) => TrafficHistory.recordTrip(t), onError: (Object _) {})
+            .then((_) {}, onError: (Object _) {}),
+      );
     }
     _mapClockSub?.cancel();
     _mapGpsSub?.cancel();

@@ -145,11 +145,7 @@ extension _NavBars on _NavigationPageState {
                 onTap: () => setNavState(() => _alertBarCollapsed = false),
                 child: const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 2),
-                  child: Icon(
-                    Icons.expand_more,
-                    size: 20,
-                    color: kAppBlue,
-                  ),
+                  child: Icon(Icons.expand_more, size: 20, color: kAppBlue),
                 ),
               )
             : Row(
@@ -574,7 +570,7 @@ extension _NavBars on _NavigationPageState {
               onDismiss: () => setNavState(() => _resumeTrip = null),
             ),
           ),
-        const OsmAttribution(),
+        OsmAttribution(source: _tileSource),
         if (card != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
@@ -589,6 +585,8 @@ extension _NavBars on _NavigationPageState {
           NavStatusBar(
             remainingMeters: (nav?.meter ?? route?.distance ?? 0).toDouble(),
             etaMinutes: _etaMinutes(),
+            trafficDelayMinutes: _trafficDelayMinutes(),
+            trafficTimeLabel: _route?.traffic?.timeLabel ?? '',
             progress: nav?.progress ?? 0,
             weather: _weather,
             elevation: _elevationChart(nav),
@@ -706,6 +704,20 @@ extension _NavBars on _NavigationPageState {
     final remain =
         route.duration * (1 - (nav?.progress ?? 0)) * kEtaRealismFactor;
     return (remain / 60).round().clamp(0, 9999);
+  }
+
+  /// Minutes the live-traffic model loses against free flow, for the "+18′"
+  /// chip. 0 when this route has no traffic reading (another router, offline,
+  /// or a stretch with nothing to report) — the chip is then simply absent.
+  int _trafficDelayMinutes() {
+    final route = _route;
+    final t = route?.traffic;
+    if (route == null || t == null || !t.delayed) return 0;
+    // The delay belongs to the whole route; scale it by what is left so the
+    // chip shrinks as the jam is passed (same rule as [_etaMinutes]).
+    final frac = 1 - (_progress?.progress ?? 0);
+    final mins = (t.delaySeconds / 60 * frac).round();
+    return mins.clamp(1, 999);
   }
 
   void _onScrubProgress(double p) => setNavState(() => _scrubProgress = p);

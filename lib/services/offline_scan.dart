@@ -46,6 +46,13 @@ List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
   /// [signedLateralOffsetMeters]) — that is the side whose signs govern this
   /// traffic.
   bool Function(T item)? rightSideFor,
+
+  /// Per-item override of [kLeftSideToleranceM] — how far left of the
+  /// centreline the item may sit and still be ours. A kind whose rows are POSTS
+  /// with surveyed coordinates gets [kProhibitionSideM]: the 6 m default is
+  /// meant for rows stored at the road centreline, and on a plate that stands
+  /// on a verge it reads the opposite carriageway's.
+  double Function(T item)? leftToleranceFor,
 }) {
   final (current, geometry, items, maxAheadMeters, lateralMeters) = args;
   if (geometry.length < 2 || items.isEmpty) return const [];
@@ -67,10 +74,11 @@ List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
       if (off == null) continue;
       if (limit > 0 && off.abs() > limit) continue;
       // LEFT of the centreline ⇒ the opposite direction's sign. A stored
-      // coordinate worth less than [kLeftSideToleranceM] is not evidence of a
+      // coordinate worth less than the kind's tolerance is not evidence of a
       // side (most speed-sign rows carry the road segment itself), so those are
       // kept.
-      if (requiresRight && off < -kLeftSideToleranceM) continue;
+      final slack = leftToleranceFor?.call(items[i]) ?? kLeftSideToleranceM;
+      if (requiresRight && off < -slack) continue;
     }
     final m = routeMetersAhead(current, p, window);
     if (m == null || m < 0 || m > maxAheadMeters) continue;
@@ -97,6 +105,26 @@ List<(int, double)> pointsAheadOnRoute<T extends OfflinePoint>(
 /// so 6 m separates the two classes with room to spare, and it also keeps a
 /// plate on an undivided road whose surveyed centreline is a metre or two off.
 const double kLeftSideToleranceM = 6.0;
+
+/// How far LEFT of the centreline a no-overtaking plate may sit, metres — see
+/// the `leftToleranceFor` argument of [pointsAheadOnRoute].
+///
+/// P.125 / P.127 "cấm vượt" rows are POSTS stored where the post stands, not
+/// rows snapped onto the road centreline, so the 6 m default is the wrong
+/// question to ask of them. Measured 2026-10-29 on the 176 km Bảo Lộc → Sài Gòn
+/// drive: six of the fourteen "cấm vượt" sentences came from plates 1,9–4,9 m
+/// LEFT of the direction of travel — the opposite carriageway's. One metre
+/// keeps a centreline-snapped row and drops those.
+const double kProhibitionSideM = 1.0;
+
+/// Corridor a no-overtaking plate must stand in to be read at all, metres.
+///
+/// These rows ship with the E-DOG zone dump, so they inherited the wide
+/// 150 m zone corridor meant for area vertices. A P.125 is a plate on the
+/// verge: on the same drive two of the fourteen callouts came from plates
+/// 128,6 m and 138,8 m off the line — another street's sign — while every
+/// genuine plate sat within 18 m.
+const double kProhibitionLateralMeters = 40.0;
 
 /// The slice of [geometry] that can hold a point within [maxAheadMeters] AHEAD
 /// of [current]: a short lead-in behind the car (a fix that lands just past a

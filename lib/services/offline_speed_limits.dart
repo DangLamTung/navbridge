@@ -495,6 +495,40 @@ String? lastWazeStreetName() {
 
 int lastWazeSegmentId() => _lastSegS;
 
+/// WME road class of the segment behind the most recent [speedLimitAt] hit, and
+/// its street name — 0/null when nothing matched.
+///
+/// The class is what tells an EXPRESSWAY from a town street: WME uses
+/// `3 = freeway` and `4 = ramp`, and a 60 km/h stretch on either is a toll
+/// plaza, roadworks or an interchange — never a khu dân cư. Measured 2026-10-30
+/// on a car drive down CT HCM–Long Thành–Dầu Giây: the toll plaza posted 60 on a
+/// class-3 segment and the app announced "Bắt đầu khu dân cư" at the barrier.
+(int, String?) lastWazeSegmentInfo() {
+  final idx = _segs;
+  final s = _lastSegS;
+  if (idx == null || s < 0) return (0, null);
+  final (rt, _) = idx.segClassOf(s);
+  return (rt, idx.streetName(s));
+}
+
+/// True when the segment behind the last [speedLimitAt] hit is a road where a
+/// low posted value must never be read as "inside a built-up area".
+///
+/// WME `roadType` 3 (freeway) and 4 (ramp) are limited-access by construction,
+/// and a lorry/car limit of 60 there is the barrier, the ramp or roadworks. The
+/// name check catches the crawl's Vietnamese naming for the same thing (a
+/// toll plaza carries its own street name, e.g. "Trạm thu phí Dầu Giây").
+bool lastWazeIsLimitedAccess() {
+  final (rt, name) = lastWazeSegmentInfo();
+  if (rt == 3 || rt == 4) return true;
+  final n = (name ?? '').toLowerCase();
+  if (n.isEmpty) return false;
+  return n.startsWith('ct') ||
+      n.contains('cao tốc') ||
+      n.contains('thu phí') ||
+      n.contains('expressway');
+}
+
 class WazeSegment {
   const WazeSegment({
     required this.id,

@@ -9,7 +9,8 @@
 ///
 /// Free caps and prices match the printed price list (retrieved 2026-10-20):
 ///   Directions Advanced   5,000 free   $10 / 1,000
-///   Compute Routes Pro    5,000 free   $10 / 1,000
+///   Compute Routes Pro    5,000 free   $10 / 1,000   (DRIVE)
+///   Compute Routes Ent.   1,000 free   $15 / 1,000   (TWO_WHEELER, TRUCK)
 ///   Geocoding            10,000 free    $5 / 1,000
 ///   Autocomplete         10,000 free  $2.83 / 1,000
 ///   Text Search           5,000 free   $32 / 1,000
@@ -43,7 +44,13 @@ class GoogleSku {
 
 const googleSkus = <GoogleSku>[
   GoogleSku('directions', 'Chỉ đường ô tô (Directions)', 5000, 10),
-  GoogleSku('routes_pro', 'Chỉ đường xe máy (Routes Pro)', 5000, 10),
+  GoogleSku('routes_pro', 'Chỉ đường ô tô (Routes Pro)', 5000, 10),
+  GoogleSku(
+    'routes_ent',
+    'Chỉ đường xe máy / xe tải (Routes Enterprise)',
+    1000,
+    15,
+  ),
   GoogleSku('geocode', 'Geocode địa chỉ', 10000, 5),
   GoogleSku('autocomplete', 'Gợi ý địa điểm', 10000, 2.83),
   GoogleSku('place_details', 'Chi tiết địa điểm (Basic — free)', 0, 0),

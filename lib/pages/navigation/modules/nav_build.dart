@@ -8,7 +8,8 @@ extension _NavBuild on _NavigationPageState {
   /// card then float as narrow pills over the map instead of spanning the
   /// full width, so the short landscape screen keeps most of its height.
   bool get _landscapeNav =>
-      _navigating && MediaQuery.of(context).orientation == Orientation.landscape;
+      _navigating &&
+      MediaQuery.of(context).orientation == Orientation.landscape;
 
   /// Top offset for the suggestions / stops / offline-POI overlays. These sit
   /// just BELOW the top bar so they never overlap it. The directions bar is
@@ -538,6 +539,13 @@ extension _NavBuild on _NavigationPageState {
                                               'Địa hình (Topo)',
                                               _tileSource == 'topo',
                                             ),
+                                            if (GoogleTileConfig.hasKey)
+                                              _layerItem(
+                                                'type:google',
+                                                Icons.map_outlined,
+                                                'Google Maps',
+                                                _tileSource == 'google',
+                                              ),
                                             _layerItem(
                                               'type:carto',
                                               Icons.explore,

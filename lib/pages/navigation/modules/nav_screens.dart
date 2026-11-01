@@ -17,6 +17,7 @@ extension _NavScreens on _NavigationPageState {
     vehicleType = s.vehicleType;
     _routeProfile = switch (s.vehicleType) {
       'motorbike' => RouteProfile.motorbike,
+      'truck' => RouteProfile.truck,
       _ => RouteProfile.car,
     };
     // The basemap layer is persisted too, so a change made in Settings (or on an
