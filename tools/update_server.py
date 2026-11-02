@@ -293,6 +293,40 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _tag_exists(url: str) -> bool:
+    """True when [url] answers 200 to a HEAD request (no body downloaded)."""
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return 200 <= r.status < 300
+    except Exception:
+        return False
+
+
+def newest_vietmap_url(url: str) -> str:
+    """The product page links the month IT advertises, not the newest on the
+    host: on 2026-11-01 it still served 2026T10 while 2026T11 had been up since
+    2026-10-30. Probe the following months directly and take the latest that
+    exists, so a lagging page cannot pin the pipeline a release behind."""
+    import re
+    m = re.search(r"^(.*?)(\d{4})T(\d{1,2})\.zip$", url)
+    if not m:
+        return url
+    prefix, year, month = m.group(1), int(m.group(2)), int(m.group(3))
+    newest = url
+    for step in (1, 2):
+        y, mo = year + (month + step - 1) // 12, (month + step - 1) % 12 + 1
+        cand = f"{prefix}{y}T{mo}.zip"
+        if _tag_exists(cand):
+            newest = cand
+        else:
+            break
+    if newest != url:
+        print(f"[vietmap] page advertises {url.rsplit('/', 1)[-1]}; "
+              f"using newer {newest.rsplit('/', 1)[-1]}")
+    return newest
+
+
 def find_first_zip_href(page: str) -> str:
     """Fetch a VietMap product page and return the first `.zip` download href."""
     try:
@@ -311,7 +345,7 @@ def find_first_zip_href(page: str) -> str:
             url = "https:" + url
         elif url.startswith("/"):
             url = "https://vietmap.vn" + url
-        return url
+        return newest_vietmap_url(url)
     # fallback: known stable host pattern
     return "https://download.vietmap.vn/dvr/VietMap_KC01_G40_TS-2K_2026T9.zip"
 
@@ -1070,7 +1104,7 @@ class Handler(SimpleHTTPRequestHandler):
 <div class="container">
   <h1>🚀 NavBridge Offline Data Server</h1>
   <p>Máy chủ lưu trữ, cập nhật tự động và tải lên dữ liệu biển báo, tốc độ, camera cho ứng dụng NavBridge.</p>
-  
+
   <div class="link-box">
     <div class="link-title">🔗 Auto Update Link (DATA_URL)</div>
     <div class="link-url" id="autoLink">{auto_update_link}</div>

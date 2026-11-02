@@ -133,8 +133,11 @@ month. It carries speed limits (type 1), residential (2/3), no-passing (5/6),
 slow-down (7), toll (8), tunnel (9), and cameras (4/10).
 
 - **Product page:** <https://vietmap.vn/cap-nhat-ban-do-vietmap-kc01>
-- **ZIP:** `https://download.vietmap.vn/dvr/VietMap_KC01_G40_TS-2K_2026T9.zip`
-  (the tag `2026T9` changes each release).
+- **ZIP:** `https://download.vietmap.vn/dvr/VietMap_KC01_G40_TS-2K_2026T11.zip`
+  (the tag `2026T11` changes each release). `update_server.py` reads the link off
+  the product page and then probes the following months on the download host,
+  because the page has lagged the host before (2026-11-01: page still served
+  `T10` while `T11` had been up since 2026-10-30).
 - **Inside:** `edog_data.txt` (tab-separated `POINT_X POINT_Y TYPE Speed DirType Direction`,
   coords × 1e6).
 
@@ -231,3 +234,9 @@ python3 tools/update_server.py --publish --rebuild
 - Back up `*.json` assets before every rebuild (the scripts overwrite them).
 - The Waze Mod's `mapComments` are **the** source for traffic signs / speed limits —
   `signTypes` is only a catalog.
+- **GitHub Actions cannot rebuild the Waze packs.** The decode needs the logged-in
+  WME session and this repo checked out next to `Decode_Waze`, and
+  `waze_speed_limits.json` is a `skip-worktree` stub in git (26 B). The monthly
+  workflow restores the published copy from the `offline-data-latest` release
+  before it builds — otherwise the pre-publish gate blocks the run (it did on
+  2026-11-01). Refreshing Waze itself stays a local run of §6.

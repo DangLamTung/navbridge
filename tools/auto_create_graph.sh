@@ -43,19 +43,30 @@ for arg in "$@"; do
   esac
 done
 
-# Resolve PBF URL and filename
+# Resolve PBF URL and filename.
+#
+# The city extracts come from the bbbike mirror, which intermittently answers
+# 404 for a city (it did for HoChiMinhCity on 2026-11-01, which killed the
+# monthly offline-data job). PBF_FALLBACK_* is the country extract we drop to
+# when the city mirror is unavailable, so the build still produces a graph.
+COUNTRY_PBF_URL="https://download.geofabrik.de/asia/vietnam-latest.osm.pbf"
+COUNTRY_PBF_FILE="$DATA_DIR/vietnam-latest.osm.pbf"
 if [[ "$REGION" == "vietnam" ]]; then
-  PBF_URL="https://download.geofabrik.de/asia/vietnam-latest.osm.pbf"
-  PBF_FILE="$DATA_DIR/vietnam-latest.osm.pbf"
+  PBF_URL="$COUNTRY_PBF_URL"
+  PBF_FILE="$COUNTRY_PBF_FILE"
   GRAPH_NAME="routing_graph"
 elif [[ "$REGION" == "saigon" ]]; then
   PBF_URL="https://download.bbbike.org/osm/bbbike/HoChiMinhCity/HoChiMinhCity.osm.pbf"
   PBF_FILE="$DATA_DIR/saigon-latest.osm.pbf"
   GRAPH_NAME="routing_graph"
+  PBF_FALLBACK_URL="$COUNTRY_PBF_URL"
+  PBF_FALLBACK_FILE="$COUNTRY_PBF_FILE"
 elif [[ "$REGION" == "hanoi" ]]; then
   PBF_URL="https://download.bbbike.org/osm/bbbike/Hanoi/Hanoi.osm.pbf"
   PBF_FILE="$DATA_DIR/hanoi-latest.osm.pbf"
   GRAPH_NAME="routing_graph"
+  PBF_FALLBACK_URL="$COUNTRY_PBF_URL"
+  PBF_FALLBACK_FILE="$COUNTRY_PBF_FILE"
 elif [[ "$REGION" =~ ^https?:// ]]; then
   PBF_URL="$REGION"
   PBF_FILE="$DATA_DIR/custom-latest.osm.pbf"
@@ -77,11 +88,39 @@ echo " Output Graph:  $DATA_DIR/${GRAPH_NAME}.ghz"
 echo "========================================================"
 
 # Step 1: Download PBF if missing or URL given
+#
+# A devolved 404 leaves a partial/HTML file behind, so the failed attempt is
+# removed before falling back — `curl -C -` would otherwise resume from it.
+fetch_pbf() {
+  local url="$1" out="$2"
+  echo "    $url"
+  if curl -C - -L --fail --retry 2 --retry-delay 5 --progress-bar \
+      -o "$out" "$url"; then
+    return 0
+  fi
+  rm -f "$out"
+  return 1
+}
+
 if [[ -n "${PBF_URL:-}" ]]; then
   echo ""
   echo "==> [1/3] Downloading OpenStreetMap extract from:"
-  echo "    $PBF_URL"
-  curl -C - -L --fail --progress-bar -o "$PBF_FILE" "$PBF_URL"
+  if ! fetch_pbf "$PBF_URL" "$PBF_FILE"; then
+    if [[ -n "${PBF_FALLBACK_URL:-}" ]]; then
+      echo ""
+      echo "!! The city extract is unavailable (mirror moved or 404)."
+      echo "!! Falling back to the country extract:"
+      PBF_URL="$PBF_FALLBACK_URL"
+      PBF_FILE="$PBF_FALLBACK_FILE"
+      if ! fetch_pbf "$PBF_URL" "$PBF_FILE"; then
+        echo "Error: every extract source failed (last: $PBF_URL)" >&2
+        exit 1
+      fi
+    else
+      echo "Error: download failed: $PBF_URL" >&2
+      exit 1
+    fi
+  fi
 else
   echo "==> [1/3] Using local PBF file: $PBF_FILE"
 fi

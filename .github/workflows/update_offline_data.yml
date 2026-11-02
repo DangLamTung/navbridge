@@ -56,6 +56,35 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # ⛔ Two Waze assets cannot be rebuilt on a runner: the decode needs the
+      # logged-in WME crawl plus the local Decode_Waze repo. `skip-worktree`
+      # keeps the 26-byte `waze_speed_limits.json` stub in git, so the build
+      # here produced a stub and the pre-publish gate then blocked the entire
+      # monthly run (2026-11-01). Restore the last published bytes instead —
+      # a local `--all-sources` run publishes fresher ones, and the next run of
+      # this job carries them forward.
+      - name: Restore Waze packs that only exist over the air
+        run: |
+          BASE="https://github.com/${{ github.repository }}/releases/download/offline-data-latest"
+          restore() {
+            name="$1"; floor="$2"
+            size=$(stat -c%s "assets/offline_map/$name" 2>/dev/null || echo 0)
+            if [ "$size" -ge "$floor" ]; then
+              echo "$name: present (${size} B) — kept"
+              return 0
+            fi
+            echo "$name: stub (${size} B) — restoring the published copy"
+            if curl -fsSL --retry 3 --retry-delay 5 "$BASE/$name" \
+                 -o "assets/offline_map/$name.tmp"; then
+              mv "assets/offline_map/$name.tmp" "assets/offline_map/$name"
+            else
+              rm -f "assets/offline_map/$name.tmp"
+              echo "::warning::$name: no published copy to restore — the publish gate will decide"
+            fi
+          }
+          restore waze_speed_limits.json 10000
+          restore waze_segments.bin 10485760
+
       - name: Step 1 - Crawl & build offline datasets (KC01, WME, Police CSGT)
         env:
           VIETMAP_API_KEY: ${{ secrets.VIETMAP_API_KEY }}
@@ -81,7 +110,12 @@ jobs:
 
       - name: Step 3 - Publish local release package & generate version.json
         run: |
-          python3 tools/update_server.py --publish --force
+          # NO --force here: this is the last gate before the bundle is pushed to
+          # every device. Step 1's `|| true` hides its own failures, so a build
+          # whose counts collapsed must stop the job here instead of shipping
+          # (on 2026-11-01 this step would have published a 26-byte
+          # waze_speed_limits.json if Step 2 had not failed first).
+          python3 tools/update_server.py --publish
           ls -la update/latest/
 
       - name: Step 4 - Push to GitHub Releases (Free Direct CDN Host)
