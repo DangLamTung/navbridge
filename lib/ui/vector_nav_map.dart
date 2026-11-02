@@ -217,12 +217,16 @@ class VectorNavMap extends StatefulWidget {
 
   /// Smoothed route-ahead bearing (0=N) from the nav engine
   /// (`TurnByTurnEngine.routeBearing`) — the direction of the road ahead of
-  /// the car, low-pass filtered. Drives both the heading-up camera and the
-  /// arrow in north-up mode, replacing the phone compass and the raw
-  /// nearest-segment scan (both caused the arrow/camera to flicker).
+  /// the car, low-pass filtered. Drives the heading-up camera, replacing the
+  /// phone compass and the raw nearest-segment scan (both caused the
+  /// arrow/camera to flicker).
   final double? bearing;
 
-  /// Heading (degrees, 0=N) from the phone's compass sensor.
+  /// Filtered heading the car is actually facing (degrees, 0=N) — the
+  /// `StrictHeading` output: direction of travel, or the receiver's own bearing
+  /// when Settings → "Nguồn hướng" prefers it. Drives the arrow's screen
+  /// rotation against the live camera bearing; falls back to [bearing] until
+  /// the first fix.
   final double? heading;
 
   /// Rotate the map so the travel direction points up (Google-style).
@@ -2039,14 +2043,19 @@ class _VectorNavMapState extends State<VectorNavMap>
     return _routeBearing();
   }
 
-  /// On-screen puck rotation (viewport-aligned, MapLibre's default). In
-  /// heading-up mode the camera bearing already equals the route bearing, so
-  /// the puck needs no extra rotation and points straight up (Vietmap). In
-  /// north-up mode it rotates to the route bearing to show travel direction.
-  /// The phone compass is never used to orient the arrow.
+  /// On-screen puck rotation relative to the current map bearing. Use the
+  /// filtered car heading rather than the route-ahead bearing so the arrow
+  /// shows the direction the car is actually facing, including on bends.
+  ///
+  /// [_camBearingDeg] is the bearing the map was last moved to; it is also
+  /// re-read from the platform when a paused (panned) map is rotated by hand,
+  /// so a two-finger rotate does not leave the arrow wrong by that angle.
   double _puckRotate() {
-    if (!widget.headingUp) return _routeBearing();
-    return 0;
+    final mapBearing = _camBearingDeg ?? (widget.headingUp ? _bearing() : 0.0);
+    return carPuckRotationDeg(
+      carHeadingDeg: widget.heading ?? _routeBearing(),
+      cameraBearingDeg: mapBearing,
+    );
   }
 
   /// Ease the drawn arrow angle toward [_puckTargetDeg] each tick (shortest
@@ -2248,6 +2257,7 @@ class _VectorNavMapState extends State<VectorNavMap>
     } else {
       _camBearingDeg = easeBearingDeg(curBearing, wantBearing, dtS);
     }
+    _setPuckTarget(_puckRotate());
     // Diagnostic: heading-up rotation cannot be judged by eye (a 15° error
     // looks like a crooked street), so the numbers that drive it can be logged.
     // OPT-IN via `--dart-define=DEBUG_BEARING=true`: it fires every 2 s while
@@ -2299,13 +2309,20 @@ class _VectorNavMapState extends State<VectorNavMap>
   void _onCamIdle() {
     final ctrl = _controller;
     if (ctrl == null) return;
+    final cam = ctrl.cameraPosition;
     if (!_followEnabled) {
+      // Follow is paused: nothing else writes the camera bearing, so adopt
+      // whatever the platform settled on (the user may have rotated the map)
+      // before re-projecting the arrow.
+      if (cam != null) {
+        _camBearingDeg = cam.bearing % 360;
+        _setPuckTarget(_puckRotate());
+      }
       unawaited(_updateCarScreen());
       return;
     }
     final last = _lastFollowCam;
     if (last == null || !_hasPosition) return;
-    final cam = ctrl.cameraPosition;
     if (cam == null) return;
     // Report the settled zoom (incl. a user pinch while follow is paused).
     widget.controller?.setZoom(cam.zoom.clamp(3.0, 19.0));
@@ -2759,7 +2776,7 @@ class _VectorNavMapState extends State<VectorNavMap>
         // position on every camera move / GPS fix, so it advances smoothly
         // along the road and never vanishes (falls back to screen center if
         // the projection is momentarily unavailable). Rotation comes from
-        // [_puckRotate] and refreshes on every parent rebuild (GPS fix).
+        // [_puckRotate] and refreshes with the GPS fix and camera rotation.
         if (widget.current != null)
           if (_carScreen != null)
             Positioned(

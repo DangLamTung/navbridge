@@ -19,6 +19,13 @@ double easeBearingDeg(
   return (current + d * k + 360) % 360;
 }
 
+/// Screen-space rotation for a car arrow pointing at [carHeadingDeg] while the
+/// map is rotated to [cameraBearingDeg] (both compass bearings, 0 = north).
+double carPuckRotationDeg({
+  required double carHeadingDeg,
+  required double cameraBearingDeg,
+}) => (carHeadingDeg - cameraBearingDeg + 540) % 360 - 180;
+
 /// Screen-space unit vector to the RIGHT of the direction of travel, for a
 /// camera facing [cameraBearingDeg] (0 = north-up). Screen +y is DOWN, so
 /// heading-up gives (1, 0); north-up rotates it with the map.
@@ -26,9 +33,7 @@ Offset rightOfTravel({
   required double roadBearingDeg,
   required double cameraBearingDeg,
 }) {
-  if (roadBearingDeg <= 0 ||
-      roadBearingDeg.isNaN ||
-      !roadBearingDeg.isFinite) {
+  if (roadBearingDeg <= 0 || roadBearingDeg.isNaN || !roadBearingDeg.isFinite) {
     return const Offset(1, 0); // unknown heading: fall back to screen-right
   }
   final a = (roadBearingDeg - cameraBearingDeg) * math.pi / 180.0;
