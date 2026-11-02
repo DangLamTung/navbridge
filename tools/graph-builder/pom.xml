@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Dependency-only POM (no sources): resolves the exact GraphHopper line the app
+  ships (android/app/build.gradle.kts -> com.graphhopper:graphhopper-core:7.0)
+  so tools/build_graph.sh has a classpath on a machine that never ran a Gradle
+  build. Locally the Gradle cache already holds these jars; in CI run:
+
+    mvn -q -B -f tools/graph-builder/pom.xml dependency:copy-dependencies \
+      -DoutputDirectory="$PWD/tools/data/gh-jars" -DincludeScope=runtime
+
+  and point GH_CP_DIR at that directory.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>vn.navbridge</groupId>
+  <artifactId>graph-builder</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+
+  <properties>
+    <maven.compiler.source>17</maven.compiler.source>
+    <maven.compiler.target>17</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.graphhopper</groupId>
+      <artifactId>graphhopper-core</artifactId>
+      <version>7.0</version>
+    </dependency>
+  </dependencies>
+</project>

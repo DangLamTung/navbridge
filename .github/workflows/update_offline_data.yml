@@ -101,8 +101,28 @@ jobs:
           # Run pipeline: KC01 + WME + deduplication
           ./tools/auto_update.sh $FORCE_FLAG $POLICE_FLAG || true
 
+      # GraphHopper is a Gradle dependency of the APP, so its jars only exist in
+      # ~/.gradle after an APK build. A runner starts with none, which left
+      # tools/build_graph.sh without a classpath (it exited 1 with no message).
+      # Resolve the same 7.0 line through Maven instead.
+      - name: Step 2a - Resolve the GraphHopper builder classpath
+        if: "${{ github.event.inputs.region != 'skip' }}"
+        run: |
+          command -v mvn >/dev/null || {
+            sudo apt-get update -qq && sudo apt-get install -y -qq maven
+          }
+          mvn -q -B -f tools/graph-builder/pom.xml dependency:copy-dependencies \
+            -DoutputDirectory="$PWD/tools/data/gh-jars" -DincludeScope=runtime
+          ls tools/data/gh-jars | wc -l
+
+      # continue-on-error: a graph that cannot be built must not cost the whole
+      # monthly refresh. Only files present in update/latest are uploaded, so
+      # the release keeps its previous routing_graph.ghz untouched.
       - name: Step 2 - Build GraphHopper offline routing graph (.ghz)
         if: "${{ github.event.inputs.region != 'skip' }}"
+        continue-on-error: true
+        env:
+          GH_CP_DIR: ${{ github.workspace }}/tools/data/gh-jars
         run: |
           REGION="${{ github.event.inputs.region || 'saigon' }}"
           echo "Building GraphHopper graph for region: $REGION"

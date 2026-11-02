@@ -23,10 +23,34 @@ else
   exit 1
 fi
 
-# Classpath: every non-sources jar already fetched by Gradle, excluding
-# GraphHopper 8.x/9.x/10.x (we build/run with 7.0 — the Android-compatible line).
-CP="$(find "$HOME/.gradle/caches/modules-2" -name '*.jar' ! -name '*-sources.jar' \
-      ! -name '*-javadoc.jar' 2>/dev/null | grep -vE 'graphhopper.*/(8\.|9\.|10\.)' | tr '\n' ':')"
+# Classpath: jars resolved for this build when GH_CP_DIR is set (CI, see
+# tools/graph-builder/pom.xml), else every non-sources jar already fetched by
+# Gradle, excluding GraphHopper 8.x/9.x/10.x (we build/run with 7.0 — the
+# Android-compatible line).
+#
+# `grep` exits 1 on an empty match and `set -o pipefail` would then kill the
+# script with NO message — which is exactly how this step died on CI (a fresh
+# runner has no ~/.gradle). Collect into a variable and check it instead.
+CP=""
+if [[ -n "${GH_CP_DIR:-}" && -d "${GH_CP_DIR}" ]]; then
+  CP="$(find "${GH_CP_DIR}" -name '*.jar' 2>/dev/null | tr '\n' ':')"
+  echo "Classpath: ${GH_CP_DIR} (GH_CP_DIR)"
+fi
+if [[ -z "$CP" ]]; then
+  CP="$(find "$HOME/.gradle/caches/modules-2" -name '*.jar' \
+        ! -name '*-sources.jar' ! -name '*-javadoc.jar' 2>/dev/null \
+        | { grep -vE 'graphhopper.*/(8\.|9\.|10\.)' || true; } | tr '\n' ':')"
+  [[ -n "$CP" ]] && echo "Classpath: ~/.gradle/caches (local Gradle build)"
+fi
+if [[ -z "$CP" ]]; then
+  echo "Error: no GraphHopper jars found — cannot compile tools/BuildGraph.java." >&2
+  echo "  Locally: any APK build populates ~/.gradle/caches/modules-2." >&2
+  echo "  Elsewhere: mvn -q -B -f tools/graph-builder/pom.xml \\" >&2
+  echo "               dependency:copy-dependencies -DincludeScope=runtime \\" >&2
+  echo "               -DoutputDirectory=\$PWD/tools/data/gh-jars" >&2
+  echo "             then set GH_CP_DIR=\$PWD/tools/data/gh-jars." >&2
+  exit 1
+fi
 
 echo "Compiling + importing $PBF -> $OUT  (can take a while for large regions)..."
 "$JAVA" -Xmx${GRAPH_MEM:-12g} -cp "$CP" --source 17 "$DIR/BuildGraph.java" "$PBF" "$OUT"
