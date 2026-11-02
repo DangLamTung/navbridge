@@ -132,32 +132,63 @@ jobs:
       # ⭐ Prove the shipped binary carries nothing. `strings` on libapp.so is
       # how the leak was found; this makes it impossible to ship one again,
       # because the build fails here instead of on a public release page.
+      #
+      # ⚠ The secrets are listed ONE BY ONE — deliberately. `toJSON(secrets)`
+      # hands every secret in the repository (keystore passwords, tokens) to an
+      # inline script, which is the exact shape GitHub's workflow-abuse
+      # detection flags, and it is a real exfiltration risk: one injected line
+      # in the script would ship the whole set to a third party. Only the
+      # provider keys this check needs are passed.
       - name: Verify the APK contains no secret
         env:
-          ALL_SECRETS: ${{ toJSON(secrets) }}
+          S_VIETMAP_API_KEY: ${{ secrets.VIETMAP_API_KEY }}
+          S_VIETMAP_TILE_KEY: ${{ secrets.VIETMAP_TILE_KEY }}
+          S_GOOGLEMAPS_API_KEY: ${{ secrets.GOOGLEMAPS_API_KEY }}
+          S_DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          S_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          S_TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          S_WINDY_API_KEY: ${{ secrets.WINDY_API_KEY }}
+          S_ACCUWEATHER_API_KEY: ${{ secrets.ACCUWEATHER_API_KEY }}
+          S_CARTO_API_KEY: ${{ secrets.CARTO_API_KEY }}
         run: |
           set +e
           APK=build/app/outputs/flutter-apk/app-release.apk
           rm -rf /tmp/apkchk && mkdir -p /tmp/apkchk
           unzip -q -o "$APK" -d /tmp/apkchk
           python3 - <<'PYEOF'
-          import json, os, pathlib, sys
-          secrets = json.loads(os.environ.get('ALL_SECRETS', '{}'))
+          import os, pathlib, re, sys
+
           root = pathlib.Path('/tmp/apkchk')
+          blobs = [f for f in root.rglob('*') if f.is_file() and f.stat().st_size > 0]
+
           bad = []
-          for name, value in secrets.items():
-              if not isinstance(value, str) or len(value) < 12:
-                  continue  # too short to be a key; avoid false positives
+          # 1. The values this build could ever have carried.
+          for name, value in sorted(os.environ.items()):
+              if not name.startswith('S_') or not value or len(value) < 12:
+                  continue
               needle = value.encode()
-              for f in root.rglob('*'):
-                  if f.is_file() and needle in f.read_bytes():
-                      bad.append((name, str(f.relative_to(root))))
+              for f in blobs:
+                  if needle in f.read_bytes():
+                      bad.append((name[2:], str(f.relative_to(root))))
                       break
+
+          # 2. Shapes no keyless build should contain at all — catches a key
+          #    this list does not know about.
+          shapes = {
+              'Google API key': re.compile(rb'AIza[0-9A-Za-z_\-]{35}'),
+              'Stripe-like secret': re.compile(rb'sk-[0-9A-Za-z]{20,}'),
+          }
+          for label, pattern in shapes.items():
+              for f in blobs:
+                  if pattern.search(f.read_bytes()):
+                      bad.append((label, str(f.relative_to(root))))
+                      break
+
           if bad:
               for name, where in bad:
-                  print(f'::error::secret {name} found in {where}')
+                  print(f'::error::{name} found in {where}')
               sys.exit(1)
-          print('APK contains none of the repository secrets.')
+          print('APK carries no provider key.')
           PYEOF
           code=$?
           rm -rf /tmp/apkchk
