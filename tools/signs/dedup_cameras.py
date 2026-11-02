@@ -23,6 +23,7 @@ Run from the repo root (navbridge/):
 """
 import json
 import math
+import re
 import os
 import sys
 from collections import defaultdict
@@ -38,6 +39,9 @@ R = 6371000
 
 # source priority (lower wins)
 SRC_PRIORITY = {"vietmap": 0, "waze": 1, "police": 2, "osm": 3, "none": 4}
+
+# "… Km01+610", "… Km57+390": the official km-post naming from the police lists.
+KM_POST = re.compile(r"\bKm\s*\d", re.I)
 
 
 def hav(a, b, c, dd):
@@ -61,8 +65,16 @@ def main():
 
     # Sort by (source priority, then keep original order) so we always keep the
     # highest-priority source first.
+    #
+    # An OFFICIAL km-post camera (công an, "… QL28B Km16+900") outranks a
+    # generic Waze "Camera" on the same post: the km label is what the callout
+    # announces, and the 2026-11-02 crawl added Waze cameras 9 m from the
+    # Lâm Đồng km posts, which would otherwise delete the named police rows.
     def prio(c):
-        return SRC_PRIORITY.get(str(c.get("source")), 99)
+        p = SRC_PRIORITY.get(str(c.get("source")), 99)
+        if p == SRC_PRIORITY["police"] and KM_POST.search(str(c.get("name") or "")):
+            return 0.5
+        return p
 
     cams.sort(key=prio)
 
@@ -101,7 +113,13 @@ def main():
     bak = ASSET + ".bak_pre_dedup100"
     if not os.path.exists(bak):
         json.dump(json.load(open(ASSET)), open(bak, "w"), ensure_ascii=False)
-    json.dump(doc, open(ASSET, "w"), ensure_ascii=False, separators=(",", ":"))
+    with open(ASSET, "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
+        # A trailing newline keeps the file byte-identical to what the
+        # pre-commit `end-of-file-fixer` would rewrite it to — otherwise every
+        # refresh shows up as "hook modified the file" and the published
+        # bundle hash stops matching the committed one.
+        f.write("\n")
 
     from collections import Counter
     print("after dedup @100m (per focus):", len(keep))
