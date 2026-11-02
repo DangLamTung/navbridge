@@ -439,6 +439,17 @@ class _VectorNavMapState extends State<VectorNavMap>
   late double _zoom = widget.defaultZoom;
   String? _lastRouteSig;
 
+  /// Shape of the route the line/dot layers were drawn for (geometry length +
+  /// destination). Unchanged while the car advances, which is what lets the
+  /// line be *slid* instead of removed and re-added (that gap was the flicker).
+  String? _drawnShapeSig;
+
+  /// Spatial index over [VectorNavMap.routeGeometry]: the puck re-snaps ~30×/s
+  /// and the camera corridor test runs per camera per GPS fix, so scanning the
+  /// whole polyline each time was the long-route jank.
+  RouteSnapIndex? _snapIdxCache;
+  List<ll.LatLng>? _snapIdxSource;
+
   /// True when the car is OUTSIDE the bundled HCMC vector-tile coverage — no
   /// vector tiles exist there, so the map renders an online raster basemap
   /// (the user's chosen tileSource) instead of a blank gray map.
@@ -1463,27 +1474,59 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// the decimated display list has different indices — and clamped to
   /// [routeStartIndex] so a jam already behind the car is not painted ahead of
   /// it.
-  Future<void> _addTrafficLines(MapLibreMapController ctrl, int gen) async {
+  /// Geometry of every non-clear traffic span that is still ahead of the car.
+  List<({String color, List<LatLng> pts})> _trafficSpanGeometry() {
     final t = widget.routeTraffic;
     final geo = widget.routeGeometry;
-    if (t == null || geo.length < 2) return;
+    if (t == null || geo.length < 2) return const [];
     final from = widget.routeStartIndex.clamp(0, geo.length - 1);
+    final out = <({String color, List<LatLng> pts})>[];
     for (final span in t.spans) {
       if (span.level == TrafficLevel.normal) continue;
       final a = span.start.clamp(from, geo.length - 1);
       final b = span.end.clamp(a + 1, geo.length);
       if (b - a < 2) continue;
-      final pts = geo
-          .sublist(a, b)
-          .map((p) => LatLng(p.latitude, p.longitude))
-          .toList();
+      out.add((
+        color: span.level == TrafficLevel.jam ? '#D32F2F' : '#F9A825',
+        pts: geo
+            .sublist(a, b)
+            .map((p) => LatLng(p.latitude, p.longitude))
+            .toList(),
+      ));
+    }
+    return out;
+  }
+
+  /// Slide the traffic overlays with the route. Same count → update in place
+  /// (no flicker); otherwise rebuild (a jam appeared/cleared).
+  Future<void> _slideTrafficLines(MapLibreMapController ctrl, int gen) async {
+    final spans = _trafficSpanGeometry();
+    if (spans.length != _trafficLines.length) {
+      for (final l in _trafficLines) {
+        ctrl.removeLine(l);
+      }
+      _trafficLines.clear();
+      await _addTrafficLines(ctrl, gen);
+      return;
+    }
+    for (var i = 0; i < spans.length; i++) {
+      if (!mounted || gen != _routeGen) return;
+      await ctrl.updateLine(
+        _trafficLines[i],
+        LineOptions(
+          geometry: spans[i].pts,
+          lineColor: spans[i].color,
+          lineWidth: 10,
+        ),
+      );
+    }
+  }
+
+  Future<void> _addTrafficLines(MapLibreMapController ctrl, int gen) async {
+    for (final span in _trafficSpanGeometry()) {
       try {
         final line = await ctrl.addLine(
-          LineOptions(
-            geometry: pts,
-            lineColor: span.level == TrafficLevel.jam ? '#D32F2F' : '#F9A825',
-            lineWidth: 10,
-          ),
+          LineOptions(geometry: span.pts, lineColor: span.color, lineWidth: 10),
         );
         if (!mounted || gen != _routeGen) {
           ctrl.removeLine(line);
@@ -1733,9 +1776,14 @@ class _VectorNavMapState extends State<VectorNavMap>
     for (final c in all) {
       if (c.focus == 'sign') continue; // rendered as an icon, not a dot
       if (route.length >= 2) {
-        final p = ll.LatLng(c.lat, c.lng);
-        final snapped = snapToRoutePolyline(p, route);
-        if (_distMeters(p, snapped) > _cameraRouteMaxM) continue;
+        // The index reports the TRUE distance to the route. The old
+        // snap-then-measure pair clamped at 40 m, came back untouched beyond
+        // that and measured 0 — so every camera farther than 40 m counted as
+        // "on the route" and stayed on screen, reprojected 4×/s.
+        final d = _snapIndex()
+            .nearest(ll.LatLng(c.lat, c.lng), maxDistanceM: _cameraRouteMaxM)
+            .distanceM;
+        if (d > _cameraRouteMaxM) continue;
       }
       onRoute.add(c);
     }
@@ -2008,6 +2056,18 @@ class _VectorNavMapState extends State<VectorNavMap>
     if (ctrl == null) return;
 
     if (_lastRouteSig != _routeSignature()) {
+      final sig = _routeSignature();
+      final shape = _routeShapeSig();
+      _lastRouteSig = sig;
+      // Same route, the car just moved: SLIDE the line instead of removing and
+      // re-adding it. remove+add left at least one rendered frame with no
+      // route at all — the "route flickers while driving" on a long trip,
+      // once per ~11 m of travel.
+      if (shape == _drawnShapeSig && _routeLine != null && _casing != null) {
+        unawaited(_slideRoute(ctrl, _routeGen));
+        return;
+      }
+      _drawnShapeSig = shape;
       // Drop the old overlays and rebuild (route change = new geometry).
       // Bump the generation first so any in-flight _addRoute can't orphan a
       // stale line (see [_addRoute]).
@@ -2029,7 +2089,50 @@ class _VectorNavMapState extends State<VectorNavMap>
         _routeLine = null;
       }
       unawaited(_addRoute(_routeGen));
-      _lastRouteSig = _routeSignature();
+    }
+  }
+
+  /// Identity of the ROUTE ITSELF (not of the car's progress): a new geometry,
+  /// destination or traffic layer must rebuild the lines; the car advancing
+  /// along the same route only slides them.
+  String _routeShapeSig() {
+    final g = widget.routeGeometry;
+    if (g.isEmpty) return '';
+    final last = g.last;
+    final t = widget.routeTraffic;
+    return '${g.length}|${last.latitude.toStringAsFixed(5)},'
+        '${last.longitude.toStringAsFixed(5)}|'
+        '${t == null ? '-' : '${t.spans.length}:${t.spans.fold<int>(0, (a, s) => a + s.start + s.end + s.level.index)}'}';
+  }
+
+  /// Re-target the existing route + casing lines at the shortened geometry,
+  /// in place. No removal, so nothing is ever missing from a frame.
+  Future<void> _slideRoute(MapLibreMapController ctrl, int gen) async {
+    final casing = _casing;
+    final line = _routeLine;
+    if (casing == null || line == null) return;
+    final pts = decimatePolyline(
+      _drawnRoute(),
+    ).map((p) => LatLng(p.latitude, p.longitude)).toList();
+    if (pts.length < 2) return;
+    try {
+      if (!mounted || gen != _routeGen) return;
+      await ctrl.updateLine(
+        casing,
+        LineOptions(geometry: pts, lineColor: '#ffffff', lineWidth: 14),
+      );
+      if (!mounted || gen != _routeGen) return;
+      await ctrl.updateLine(
+        line,
+        LineOptions(geometry: pts, lineColor: '#1A73E8', lineWidth: 10),
+      );
+      await _slideTrafficLines(ctrl, gen);
+    } catch (e) {
+      // The annotations are gone (style swap / platform reset): fall back to a
+      // full rebuild on the next update.
+      debugPrint('VECTORMAP: route slide skipped ($e) — rebuilding');
+      _drawnShapeSig = null;
+      _lastRouteSig = null;
     }
   }
 
@@ -2489,8 +2592,17 @@ class _VectorNavMapState extends State<VectorNavMap>
   /// RIDE the road (Google-Maps style). Only snaps when the point is near
   /// the route (≤40 m) — a genuine off-route deviation stays free so the
   /// puck shows the real position.
-  ll.LatLng _snapToRoute(ll.LatLng p) =>
-      snapToRoutePolyline(p, widget.routeGeometry);
+  ll.LatLng _snapToRoute(ll.LatLng p) => _snapIndex().nearest(p).point;
+
+  /// Index over the full route, rebuilt only when the geometry object changes.
+  RouteSnapIndex _snapIndex() {
+    final g = widget.routeGeometry;
+    if (!identical(_snapIdxSource, g) || _snapIdxCache == null) {
+      _snapIdxSource = g;
+      _snapIdxCache = RouteSnapIndex(g);
+    }
+    return _snapIdxCache!;
+  }
 
   @override
   void didUpdateWidget(VectorNavMap old) {
@@ -2608,6 +2720,8 @@ class _VectorNavMapState extends State<VectorNavMap>
   }
 
   void _resetAnnotations() {
+    _drawnShapeSig = null; // style swap drops the line handles
+
     // Invalidate any in-flight _addRoute before the style is swapped so it
     // can't add lines to the new style and orphan them.
     _routeGen++;
