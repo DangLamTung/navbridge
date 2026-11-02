@@ -1850,6 +1850,8 @@ class _VectorNavMapState extends State<VectorNavMap>
       return;
     }
     if (list.isEmpty) return;
+    _cullOffscreenAndDoubled(list, (o) => o.pos);
+    if (list.isEmpty) return;
     setState(() {
       _cameraOverlays
         ..clear()
@@ -2044,6 +2046,43 @@ class _VectorNavMapState extends State<VectorNavMap>
     );
     for (var i = 0; i < list.length; i++) {
       list[i] = (sign: list[i].sign, pos: placed[i]);
+    }
+    // Spreading pushes icons sideways, and a cluster beside the screen edge
+    // pushed them OFF it — the screenshot showed plates cut in half at the
+    // right border. Drop anything that would not fit whole, and anything that
+    // still lands on top of a neighbour (7+ plates in one cluster): a sign you
+    // cannot read is worse than no sign.
+    _cullOffscreenAndDoubled(list, (o) => o.pos);
+  }
+
+  /// Remove overlays whose centre is outside the viewport (minus half an icon)
+  /// and overlays that collide with an already-kept one. Generic over the two
+  /// overlay record types, which only share `pos`.
+  void _cullOffscreenAndDoubled<T>(
+    List<T> list,
+    Offset Function(T) posOf, {
+    double minGapPx = 26,
+  }) {
+    final size = MediaQuery.of(context).size;
+    const margin = 24.0;
+    final kept = <T>[];
+    final points = <Offset>[];
+    for (final item in list) {
+      final p = posOf(item);
+      if (p.dx < margin ||
+          p.dy < margin ||
+          p.dx > size.width - margin ||
+          p.dy > size.height - margin) {
+        continue;
+      }
+      if (points.any((q) => (q - p).distance < minGapPx)) continue;
+      kept.add(item);
+      points.add(p);
+    }
+    if (kept.length != list.length) {
+      list
+        ..clear()
+        ..addAll(kept);
     }
   }
 

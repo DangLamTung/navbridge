@@ -110,12 +110,12 @@ class _NavigationCardState extends State<NavigationCard> {
       shadowColor: Colors.black26,
       borderRadius: widget.compact
           ? BorderRadius.circular(16)
-          : const BorderRadius.vertical(top: Radius.circular(15)),
+          : const BorderRadius.vertical(top: Radius.circular(18)),
       color: Colors.white,
       child: Padding(
         padding: EdgeInsets.symmetric(
-          horizontal: widget.compact ? 9 : 14,
-          vertical: widget.compact ? 7 : 12,
+          horizontal: widget.compact ? 9 : 12,
+          vertical: widget.compact ? 7 : 8,
         ),
         child: Row(
           children: [
@@ -124,8 +124,8 @@ class _NavigationCardState extends State<NavigationCard> {
               icon: Icons.close,
               onTap: widget.onStop,
               tooltip: 'Kết thúc chỉ đường',
-              size: widget.compact ? 36 : 50,
-              iconSize: widget.compact ? 22 : 30,
+              size: widget.compact ? 36 : 44,
+              iconSize: widget.compact ? 22 : 26,
             ),
             SizedBox(width: widget.compact ? 8 : 14),
             // Big amber live ETA + distance • arrival.
@@ -143,9 +143,12 @@ class _NavigationCardState extends State<NavigationCard> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: widget.compact ? 18 : 25,
-                      fontWeight: FontWeight.w600,
-                      color: const Color(0xFFFF6F00), // amber[900], Vietmap-style
+                      fontSize: widget.compact ? 18 : 22,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                      color: const Color(
+                        0xFFFF6F00,
+                      ), // amber[900], Vietmap-style
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -162,8 +165,9 @@ class _NavigationCardState extends State<NavigationCard> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: widget.compact ? 13 : 18,
-                      color: Colors.black45,
+                      fontSize: widget.compact ? 13 : 15,
+                      fontWeight: FontWeight.w500,
+                      color: const Color(0xFF6B7280),
                     ),
                   ),
                 ],

@@ -22,6 +22,139 @@ extension _NavBuild on _NavigationPageState {
     return 100;
   }
 
+  /// The seven actions that used to be seven more round buttons in the nav
+  /// rail (night, status bar, PiP, voice, mic, Vietmap, Google Maps). A sheet
+  /// keeps them one tap away without covering the road with chrome.
+  void _openNavMoreSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFFF7F8FA),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD0D5DD),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const Text(
+                'Tuỳ chọn',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _sheetAction(
+                    sheetCtx,
+                    icon: _nightMode ? Icons.dark_mode : Icons.light_mode,
+                    label: _nightMode ? 'Chế độ ngày' : 'Chế độ đêm',
+                    onTap: _toggleNight,
+                  ),
+                  _sheetAction(
+                    sheetCtx,
+                    icon: _showStatusBar
+                        ? Icons.bar_chart
+                        : Icons.bar_chart_outlined,
+                    label: 'Bảng trạng thái',
+                    onTap: _toggleStatusBar,
+                  ),
+                  _sheetAction(
+                    sheetCtx,
+                    icon: Icons.picture_in_picture_alt,
+                    label: 'Cửa sổ nổi',
+                    color: const Color(0xFF1A73E8),
+                    onTap: () => _enterPip(),
+                  ),
+                  _sheetAction(
+                    sheetCtx,
+                    icon: _voiceOn ? Icons.volume_up : Icons.volume_off,
+                    label: _voiceOn ? 'Tiếng: bật' : 'Tiếng: tắt',
+                    color: _voiceOn
+                        ? const Color(0xFF34A853)
+                        : const Color(0xFF5F6368),
+                    onTap: () => setNavState(() => _voiceOn = !_voiceOn),
+                  ),
+                  _sheetAction(
+                    sheetCtx,
+                    icon: Icons.mic,
+                    label: 'Giọng nói',
+                    onTap: _toggleListening,
+                  ),
+                  _sheetAction(
+                    sheetCtx,
+                    icon: Icons.directions_car,
+                    label: 'Vietmap',
+                    color: const Color(0xFF1A73E8),
+                    onTap: _openVietmapNav,
+                  ),
+                  _sheetAction(
+                    sheetCtx,
+                    icon: Icons.navigation,
+                    label: 'Google Maps',
+                    color: const Color(0xFFEA4335),
+                    onTap: _openGoogleMapsNav,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sheetAction(
+    BuildContext sheetCtx, {
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    Color color = const Color(0xFF5F6368),
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: () {
+        Navigator.of(sheetCtx).pop();
+        onTap();
+      },
+      child: Container(
+        width: 104,
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFE3E7ED)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Picture-in-Picture layout: ONLY the map + a slim maneuver bar — no
   /// search, no controls, no cards. The tiny OS floating window can't fit
   /// the full nav UI.
@@ -647,62 +780,18 @@ extension _NavBuild on _NavigationPageState {
                                           ),
                                         ),
                                         const SizedBox(height: 8),
+                                        // Everything else lives behind this
+                                        // one button. Eleven round icons down
+                                        // the right edge put the bottom half
+                                        // out of thumb reach (and the column
+                                        // had to scroll), so only the four
+                                        // actions a driver needs mid-trip stay
+                                        // on the map: AI, heading lock, camera
+                                        // alerts, layers.
                                         RoundActionButton(
-                                          icon: _nightMode
-                                              ? Icons.dark_mode
-                                              : Icons.light_mode,
-                                          color: _nightMode
-                                              ? kAppBlue
-                                              : const Color(0xFF5F6368),
-                                          onTap: _toggleNight,
-                                        ),
-                                        const SizedBox(height: 8),
-                                        RoundActionButton(
-                                          icon: _showStatusBar
-                                              ? Icons.bar_chart
-                                              : Icons.bar_chart_outlined,
-                                          color: _showStatusBar
-                                              ? kAppBlue
-                                              : const Color(0xFF5F6368),
-                                          onTap: _toggleStatusBar,
-                                        ),
-                                        const SizedBox(height: 8),
-                                        // Picture-in-Picture (Part C): shrink the
-                                        // nav into a floating window (Google-Maps
-                                        // style). Only shown on capable devices.
-                                        RoundActionButton(
-                                          icon: Icons.picture_in_picture_alt,
-                                          color: const Color(0xFF1A73E8),
-                                          onTap: () => _enterPip(),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        RoundActionButton(
-                                          icon: _voiceOn
-                                              ? Icons.volume_up
-                                              : Icons.volume_off,
-                                          color: _voiceOn
-                                              ? const Color(0xFF34A853)
-                                              : const Color(0xFF5F6368),
-                                          onTap: () => setNavState(
-                                            () => _voiceOn = !_voiceOn,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        _micButton(),
-                                        const SizedBox(height: 8),
-                                        RoundActionButton(
-                                          icon: Icons.directions_car,
-                                          color: const Color(0xFF1A73E8),
-                                          onTap: _openVietmapNav,
-                                        ),
-                                        const SizedBox(height: 8),
-                                        // "Điều hướng bằng Google Maps" —
-                                        // hands off to Google Maps (Google's
-                                        // roads + live traffic).
-                                        RoundActionButton(
-                                          icon: Icons.navigation,
-                                          color: const Color(0xFFEA4335),
-                                          onTap: _openGoogleMapsNav,
+                                          icon: Icons.more_horiz,
+                                          color: const Color(0xFF5F6368),
+                                          onTap: _openNavMoreSheet,
                                         ),
                                       ],
                                     ),
