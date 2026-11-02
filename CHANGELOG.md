@@ -4,6 +4,34 @@ All notable changes to NavBridge. Versions follow `X.Y.Z+build` in `pubspec.yaml
 each release is committed on `main` as `release: X.Y.Z (build NNNN)` and tagged
 `vX.Y.Z`.
 
+## 1.3.1 — 2026-11-02 (build 4023)
+
+**The car arrow points where the car is actually facing, and the monthly data
+refresh can publish again.**
+
+- **The arrow follows the car, not the road ahead.** Heading-up mode drew the
+  puck at a fixed 0° (Vietmap-style "viewport-aligned"), so on every bend the
+  arrow showed the route-ahead bearing while the car was already pointing
+  somewhere else; north-up used the same look-ahead bearing. The puck is now
+  rotated by `carHeading − cameraBearing`, using the `StrictHeading` value the
+  nav engine already filters (travel bearing, or the receiver's own heading when
+  Settings → "Nguồn hướng" prefers it), and it is re-targeted on the camera tick
+  as the bearing eases through a turn. A map rotated by hand while follow is
+  paused now also feeds its real bearing back, so a two-finger rotate no longer
+  leaves the arrow out by that angle.
+- **VietMap KC01 2026T11.** Cameras, signs and VietMap speed limits rebuilt from
+  the 2026-10-30 release (cameras 35 151 after dedup, signs 59 636). The
+  product page still advertises `2026T10`, so the updater now probes the next
+  months on the download host and takes the newest that exists.
+- **The monthly offline-data job can publish again.** The 2026-11-01 scheduled
+  run failed twice: the pre-publish gate blocked on a 26-byte
+  `waze_speed_limits.json` (a `skip-worktree` stub — a runner cannot rebuild the
+  Waze packs), and the GraphHopper step died on a 404 from the bbbike city
+  extract. CI now restores the published Waze packs before building, the final
+  publish no longer passes `--force` (that bypassed the gate and would have
+  shipped the stub), and the city extract falls back to the Geofabrik country
+  extract when the mirror is unavailable.
+
 ## 1.3.0 — 2026-11-01 (build 4022)
 
 **Live traffic on the route, a Google basemap you can switch to, ô tô and xe tải
